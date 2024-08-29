@@ -1,6 +1,10 @@
-import { DLLMId, findLLMOrThrow } from '~/modules/llms/store-llms';
+import { suggestUIMixin } from '~/modules/aifn/autosuggestions/autoSuggestions';
 
+import type { DLLMId } from '~/common/stores/llms/llms.types';
 import { browserLangOrUS } from '~/common/util/pwaUtils';
+import { findLLMOrThrow } from '~/common/stores/llms/store-llms';
+
+import { getChatAutoAI } from '../../../apps/chat/store-app-chat';
 
 /*type Variables =
   | '{{Today}}'
@@ -43,6 +47,13 @@ export function bareBonesPromptMixer(_template: string, assistantLlmId: DLLMId |
 
   let mixed = _template;
 
+  // If Auto-Follow-Ups are enabled, forcefully add text
+  const { autoSuggestHTMLUI, autoSuggestDiagrams, autoVndAntBreakpoints } = getChatAutoAI();
+  if (autoSuggestHTMLUI)
+    mixed += (mixed.endsWith('\n') ? '' : '\n') + '{{AutoSuggestHTMLUI}}';
+  // if (autoSuggestDiagrams)
+  //   mixed += (mixed.endsWith('\n') ? '' : '\n') + '{{AutoSuggestDiagrams}}';
+
   // {{Today}} - yyyy-mm-dd but in user's local time, not UTC
   const today = new Date();
   const varToday = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
@@ -58,7 +69,8 @@ export function bareBonesPromptMixer(_template: string, assistantLlmId: DLLMId |
       month: 'short', // Full name of the month
       day: 'numeric', // Numeric day of the month
       hour: '2-digit', // 2-digit hour
-      minute: '2-digit', // 2-digit minute
+      // NOTE: disable the minutes if we are using auto-breakpoints, as this will invalidate all every minute...
+      minute: autoVndAntBreakpoints ? undefined : '2-digit', // 2-digit minute
       timeZoneName: 'short', // Short timezone name (e.g., GMT, CST)
       hour12: true, // Use 12-hour time format; set to false for 24-hour format if preferred
     });
@@ -76,6 +88,9 @@ export function bareBonesPromptMixer(_template: string, assistantLlmId: DLLMId |
   // {{Input...}} / {{Tool...}} - TBA
   mixed = mixed.replace('{{InputImage0}}', 'Image input capabilities: Disabled');
   mixed = mixed.replace('{{ToolBrowser0}}', 'Web browsing capabilities: Disabled');
+  // {{AutoSuggest...}}
+  mixed = mixed.replace('{{AutoSuggestHTMLUI}}', suggestUIMixin);
+  // mixed = mixed.replace('{{AutoSuggestDiagrams}}', suggestDiagramMixin);
 
   // {{Cutoff}} or remove the line
   let varCutoff: string | undefined;

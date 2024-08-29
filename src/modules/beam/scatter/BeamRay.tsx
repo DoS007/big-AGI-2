@@ -12,12 +12,12 @@ import TelegramIcon from '@mui/icons-material/Telegram';
 
 import { ChatMessageMemo } from '../../../apps/chat/components/message/ChatMessage';
 
-import type { DLLMId } from '~/modules/llms/store-llms';
-
+import type { DLLMId } from '~/common/stores/llms/llms.types';
 import { GoodTooltip } from '~/common/components/GoodTooltip';
 import { InlineError } from '~/common/components/InlineError';
 import { animationEnterBelow } from '~/common/util/animUtils';
 import { copyToClipboard } from '~/common/util/clipboardUtils';
+import { messageFragmentsReduceText } from '~/common/stores/chat/chat.message';
 import { useLLMSelect } from '~/common/components/forms/useLLMSelect';
 
 import { BeamCard, beamCardClasses, beamCardMessageScrollingSx, beamCardMessageSx, beamCardMessageWrapperSx } from '../BeamCard';
@@ -110,7 +110,8 @@ function RayControls(props: {
 
 export function BeamRay(props: {
   beamStore: BeamStoreApi,
-  hadImportedRays: boolean
+  hadImportedRays: boolean,
+  isMobile: boolean,
   isRemovable: boolean,
   rayId: string,
   rayIndexWeak: number,
@@ -145,20 +146,20 @@ export function BeamRay(props: {
 
   // handlers
 
-  const handleRayCopy = React.useCallback(() => {
+  const handleRayCopyToClipboard = React.useCallback(() => {
     const { rays } = props.beamStore.getState();
     const ray = rays.find(ray => ray.rayId === props.rayId);
-    if (ray?.message?.text)
-      copyToClipboard(ray.message.text, 'Beam');
+    if (ray?.message.fragments.length)
+      copyToClipboard(messageFragmentsReduceText(ray.message.fragments), 'Response');
   }, [props.beamStore, props.rayId]);
 
   const handleRayUse = React.useCallback(() => {
     // get snapshot values, so we don't have to react to the hook
     const { rays, onSuccessCallback } = props.beamStore.getState();
     const ray = rays.find(ray => ray.rayId === props.rayId);
-    if (ray?.message?.text && onSuccessCallback)
-      onSuccessCallback(ray.message.text, llmId || '');
-  }, [llmId, props.beamStore, props.rayId]);
+    if (ray && ray.message.fragments.length && onSuccessCallback)
+      onSuccessCallback(ray.message);
+  }, [props.beamStore, props.rayId]);
 
   const handleRayRemove = React.useCallback(() => {
     removeRay(props.rayId);
@@ -200,13 +201,14 @@ export function BeamRay(props: {
       {!!ray?.scatterIssue && <InlineError error={ray.scatterIssue} />}
 
       {/* Ray Message */}
-      {(!!ray?.message?.text || ray?.status === 'scattering') && (
+      {(!!ray?.message?.fragments.length || ray?.status === 'scattering') && (
         <Box sx={beamCardMessageWrapperSx}>
           {!!ray.message && (
             <ChatMessageMemo
               message={ray.message}
               fitScreen={true}
-              showAvatar={false}
+              isMobile={props.isMobile}
+              hideAvatar
               showUnsafeHtml={true}
               adjustContentScaling={-1}
               sx={!cardScrolling ? beamCardMessageSx : beamCardMessageScrollingSx}
@@ -231,7 +233,7 @@ export function BeamRay(props: {
               <GoodTooltip title='Copy'>
                 <IconButton
                   size='sm'
-                  onClick={handleRayCopy}
+                  onClick={handleRayCopyToClipboard}
                 >
                   <ContentCopyIcon sx={{ fontSize: 'md' }} />
                 </IconButton>

@@ -1,9 +1,12 @@
-import { LLM_IF_OAI_Chat, LLM_IF_OAI_Complete, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Vision } from '../../store-llms';
+import type { OpenAIWire_API_Models_List } from '~/modules/aix/server/dispatch/wiretypes/openai.wiretypes';
+
+import { LLM_IF_OAI_Chat, LLM_IF_OAI_Complete, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Vision } from '~/common/stores/llms/llms.types';
 
 import type { ModelDescriptionSchema } from '../llm.server.types';
-import type { OpenAIWire } from './openai.wiretypes';
+
 import { wireGroqModelsListOutputSchema } from './groq.wiretypes';
 import { wireMistralModelsListOutputSchema } from './mistral.wiretypes';
+import { wireOpenPipeModelOutputSchema } from './openpipe.wiretypes';
 import { wireOpenrouterModelsListOutputSchema } from './openrouter.wiretypes';
 import { wireTogetherAIListOutputSchema } from './togetherai.wiretypes';
 
@@ -21,7 +24,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 16384,
     trainingDataCutoff: 'Oct 2023',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json],
-    pricing: { chatIn: 0.15, chatOut: 0.60 },
+    chatPrice: { input: 0.15, output: 0.60 },
     benchmark: { cbaElo: 1277, cbaMmlu: 82.0 },
   },
   {
@@ -35,7 +38,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 16384,
     trainingDataCutoff: 'Oct 2023',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json],
-    pricing: { chatIn: 0.15, chatOut: 0.60 },
+    chatPrice: { input: 0.15, output: 0.60 },
     benchmark: { cbaElo: 1277, cbaMmlu: 82.0 },
   },
 
@@ -51,7 +54,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 4096,
     trainingDataCutoff: 'Oct 2023',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json],
-    pricing: { chatIn: 5, chatOut: 15 },
+    chatPrice: { input: 5, output: 15 },
     benchmark: { cbaElo: 1286 },
   },
   {
@@ -63,18 +66,18 @@ const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 16384,
     trainingDataCutoff: 'Oct 2023',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json],
-    pricing: { chatIn: 2.5, chatOut: 10 },
+    chatPrice: { input: 2.5, output: 10 },
     benchmark: { cbaElo: 1286 + 1 },
   },
   {
     idPrefix: 'gpt-4o-2024-05-13',
     label: 'GPT-4o (2024-05-13)',
-    description: 'Advanced, multimodal flagship model that’s cheaper and faster than GPT-4 Turbo.',
+    description: 'Advanced, multimodal flagship model that\'s cheaper and faster than GPT-4 Turbo.',
     contextWindow: 128000,
     maxCompletionTokens: 4096,
     trainingDataCutoff: 'Oct 2023',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json],
-    pricing: { chatIn: 5, chatOut: 15 },
+    chatPrice: { input: 5, output: 15 },
     benchmark: { cbaElo: 1286 },
     hidden: true,
   },
@@ -91,7 +94,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 4096,
     trainingDataCutoff: 'Dec 2023',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json],
-    pricing: { chatIn: 10, chatOut: 30 },
+    chatPrice: { input: 10, output: 30 },
     benchmark: { cbaElo: 1257 },
   },
   {
@@ -102,7 +105,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 4096,
     trainingDataCutoff: 'Dec 2023',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json],
-    pricing: { chatIn: 10, chatOut: 30 },
+    chatPrice: { input: 10, output: 30 },
     benchmark: { cbaElo: 1257 },
   },
 
@@ -119,7 +122,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 4096,
     trainingDataCutoff: 'Dec 2023',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json],
-    pricing: { chatIn: 10, chatOut: 30 },
+    chatPrice: { input: 10, output: 30 },
     benchmark: { cbaElo: 1245 },
   },
   {
@@ -130,7 +133,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 4096,
     trainingDataCutoff: 'Dec 2023',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json],
-    pricing: { chatIn: 10, chatOut: 30 },
+    chatPrice: { input: 10, output: 30 },
     benchmark: { cbaElo: 1245 },
     hidden: true,
   },
@@ -142,7 +145,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 4096,
     trainingDataCutoff: 'Apr 2023',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json],
-    pricing: { chatIn: 10, chatOut: 30 },
+    chatPrice: { input: 10, output: 30 },
     benchmark: { cbaElo: 1251 },
     hidden: true,
   },
@@ -159,7 +162,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 4096,
     trainingDataCutoff: 'Apr 2023',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn],
-    pricing: { chatIn: 10, chatOut: 30 },
+    chatPrice: { input: 10, output: 30 },
     hidden: true, // Deprecated in favor of gpt-4-turbo
   },
   {
@@ -171,7 +174,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 4096,
     trainingDataCutoff: 'Apr 2023',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn],
-    pricing: { chatIn: 10, chatOut: 30 },
+    chatPrice: { input: 10, output: 30 },
     hidden: true, // Deprecated in favor of gpt-4-turbo
   },
 
@@ -186,7 +189,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     contextWindow: 32768,
     trainingDataCutoff: 'Sep 2021',
     interfaces: [LLM_IF_OAI_Chat],
-    pricing: { chatIn: 60, chatOut: 120 },
+    chatPrice: { input: 60, output: 120 },
     hidden: true,
   },
   {
@@ -196,7 +199,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     contextWindow: 32768,
     trainingDataCutoff: 'Sep 2021',
     interfaces: [LLM_IF_OAI_Chat],
-    pricing: { chatIn: 60, chatOut: 120 },
+    chatPrice: { input: 60, output: 120 },
     hidden: true,
   },
   {
@@ -206,7 +209,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     contextWindow: 32768,
     trainingDataCutoff: 'Sep 2021',
     interfaces: [LLM_IF_OAI_Chat],
-    pricing: { chatIn: 60, chatOut: 120 },
+    chatPrice: { input: 60, output: 120 },
     hidden: true,
   },
 
@@ -219,7 +222,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     contextWindow: 8192,
     trainingDataCutoff: 'Sep 2021',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
-    pricing: { chatIn: 30, chatOut: 60 },
+    chatPrice: { input: 30, output: 60 },
     benchmark: { cbaElo: 1161 },
   },
   {
@@ -229,7 +232,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     contextWindow: 8192,
     trainingDataCutoff: 'Sep 2021',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
-    pricing: { chatIn: 30, chatOut: 60 },
+    chatPrice: { input: 30, output: 60 },
     benchmark: { cbaElo: 1186 },
     hidden: true,
   },
@@ -243,7 +246,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     contextWindow: 8192,
     trainingDataCutoff: 'Sep 2021',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
-    pricing: { chatIn: 30, chatOut: 60 },
+    chatPrice: { input: 30, output: 60 },
     benchmark: { cbaElo: 1161 },
     isLegacy: true,
   },
@@ -257,7 +260,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     contextWindow: 4097,
     trainingDataCutoff: 'Sep 2021',
     interfaces: [/* NO: LLM_IF_OAI_Chat,*/ LLM_IF_OAI_Complete],
-    pricing: { chatIn: 1.5, chatOut: 2 },
+    chatPrice: { input: 1.5, output: 2 },
     hidden: true,
   },
 
@@ -270,7 +273,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 4096,
     trainingDataCutoff: 'Sep 2021',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
-    pricing: { chatIn: 0.5, chatOut: 1.5 },
+    chatPrice: { input: 0.5, output: 1.5 },
     benchmark: { cbaElo: 1105 },
   },
   {
@@ -281,7 +284,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 4096,
     trainingDataCutoff: 'Sep 2021',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
-    pricing: { chatIn: 1, chatOut: 2 },
+    chatPrice: { input: 1, output: 2 },
     benchmark: { cbaElo: 1072 },
     hidden: true,
   },
@@ -296,7 +299,7 @@ const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 4096,
     trainingDataCutoff: 'Sep 2021',
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
-    pricing: { chatIn: 0.5, chatOut: 1.5 },
+    chatPrice: { input: 0.5, output: 1.5 },
     benchmark: { cbaElo: 1105 },
   },
 
@@ -344,18 +347,18 @@ const openAIModelsDenyList: string[] = [
   'gpt-3.5-turbo-16k-0613', 'gpt-3.5-turbo-0613', 'gpt-3.5-turbo-0301', 'gpt-3.5-turbo-16k',
 ];
 
-export function openAIModelFilter(model: OpenAIWire.Models.ModelDescription) {
+export function openAIModelFilter(model: OpenAIWire_API_Models_List.Model) {
   return !openAIModelsDenyList.some(deny => model.id.includes(deny));
 }
 
-export function openAIModelToModelDescription(modelId: string, modelCreated: number, modelUpdated?: number): ModelDescriptionSchema {
+export function openAIModelToModelDescription(modelId: string, modelCreated: number | undefined, modelUpdated?: number): ModelDescriptionSchema {
   return fromManualMapping(_knownOpenAIChatModels, modelId, modelCreated, modelUpdated);
 }
 
 export function azureModelToModelDescription(azureDeploymentRef: string, openAIModelIdBase: string, modelCreated: number, modelUpdated?: number): ModelDescriptionSchema {
   // if the deployment name mataches an OpenAI model prefix, use that
   const known = _knownOpenAIChatModels.find(base => azureDeploymentRef == base.idPrefix);
-  return fromManualMapping(_knownOpenAIChatModels, known ? azureDeploymentRef : openAIModelIdBase, modelCreated, modelUpdated);
+  return fromManualMapping(_knownOpenAIChatModels, known ? azureDeploymentRef : openAIModelIdBase, modelCreated, modelUpdated, undefined, true);
 }
 
 
@@ -370,10 +373,7 @@ const _knownDeepseekChatModels: ManualMappings = [
     contextWindow: 128000,
     interfaces: [LLM_IF_OAI_Chat],
     maxCompletionTokens: 4096,
-    pricing: {
-      chatIn: 0.14,
-      chatOut: 0.28,
-    },
+    chatPrice: { input: 0.14, output: 0.28 },
   },
   {
     idPrefix: 'deepseek-coder',
@@ -382,10 +382,7 @@ const _knownDeepseekChatModels: ManualMappings = [
     contextWindow: 128000,
     interfaces: [LLM_IF_OAI_Chat],
     maxCompletionTokens: 4096,
-    pricing: {
-      chatIn: 0.14,
-      chatOut: 0.28,
-    },
+    chatPrice: { input: 0.14, output: 0.28 },
   },
 ];
 
@@ -461,14 +458,24 @@ export function localAIModelToModelDescription(modelId: string): ModelDescriptio
 // and the pricing available on: https://mistral.ai/technology/#pricing
 
 const _knownMistralChatModels: ManualMappings = [
+  // Mistral Nemo
+  {
+    idPrefix: 'open-mistral-nemo-2407',
+    label: 'Mistral Nemo (2407)',
+    description: 'Mistral Nemo is a state-of-the-art 12B model developed with NVIDIA.',
+    contextWindow: 131072, // 128K tokens
+    interfaces: [LLM_IF_OAI_Chat],
+    chatPrice: { input: 0.3, output: 0.3 },
+  },
+
   // Codestral
   {
     idPrefix: 'codestral-2405',
     label: 'Codestral (2405)',
-    description: 'Designed and optimized for code generation tasks.',
+    description: 'State-of-the-art Mistral model trained specifically for code tasks.',
     contextWindow: 32768,
     interfaces: [LLM_IF_OAI_Chat],
-    pricing: { chatIn: 1, chatOut: 3 },
+    chatPrice: { input: 1, output: 3 },
   },
   {
     idPrefix: 'codestral-latest',
@@ -476,32 +483,40 @@ const _knownMistralChatModels: ManualMappings = [
     symLink: 'mistral-codestral-2405',
     hidden: true,
     // copied
-    description: 'Designed and optimized for code generation tasks.',
+    description: 'State-of-the-art Mistral model trained specifically for code tasks.',
     contextWindow: 32768,
     interfaces: [LLM_IF_OAI_Chat],
-    pricing: { chatIn: 1, chatOut: 3 },
+    chatPrice: { input: 1, output: 3 },
   },
 
   // Large
+  {
+    idPrefix: 'mistral-large-2407',
+    label: 'Mistral Large 2 (2407)',
+    description: 'Top-tier reasoning for high-complexity tasks, for your most sophisticated needs.',
+    contextWindow: 131072, // 128K tokens
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
+    chatPrice: { input: 3, output: 9 },
+  },
   {
     idPrefix: 'mistral-large-2402',
     label: 'Mistral Large (2402)',
     description: 'Top-tier reasoning for high-complexity tasks.',
     contextWindow: 32768,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
-    pricing: { chatIn: 4, chatOut: 12 },
+    chatPrice: { input: 4, output: 12 },
     benchmark: { cbaElo: 1159 },
   },
   {
     idPrefix: 'mistral-large-latest',
     label: 'Mistral Large (latest)',
-    symLink: 'mistral-large-2402',
+    symLink: 'mistral-large-2407',
     hidden: true,
     // copied
-    description: 'Top-tier reasoning for high-complexity tasks.',
-    contextWindow: 32768,
+    description: 'Top-tier reasoning for high-complexity tasks, for your most sophisticated needs.',
+    contextWindow: 131072, // 128K tokens
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
-    pricing: { chatIn: 4, chatOut: 12 },
+    chatPrice: { input: 3, output: 9 },
     benchmark: { cbaElo: 1159 },
   },
 
@@ -512,7 +527,7 @@ const _knownMistralChatModels: ManualMappings = [
     description: 'Mixtral 8x22B model',
     contextWindow: 65536,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
-    pricing: { chatIn: 2, chatOut: 6 },
+    chatPrice: { input: 2, output: 6 },
   },
   {
     idPrefix: 'open-mixtral-8x22b',
@@ -523,7 +538,7 @@ const _knownMistralChatModels: ManualMappings = [
     description: 'Mixtral 8x22B model',
     contextWindow: 65536,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
-    pricing: { chatIn: 2, chatOut: 6 },
+    chatPrice: { input: 2, output: 6 },
   },
   // Medium (Deprecated)
   {
@@ -532,7 +547,7 @@ const _knownMistralChatModels: ManualMappings = [
     description: 'Ideal for intermediate tasks that require moderate reasoning (Data extraction, Summarizing a Document, Writing emails, Writing a Job Description, or Writing Product Descriptions)',
     contextWindow: 32768,
     interfaces: [LLM_IF_OAI_Chat],
-    pricing: { chatIn: 2.7, chatOut: 8.1 },
+    chatPrice: { input: 2.7, output: 8.1 },
     benchmark: { cbaElo: 1148 },
     isLegacy: true,
     hidden: true,
@@ -545,7 +560,7 @@ const _knownMistralChatModels: ManualMappings = [
     description: 'Ideal for intermediate tasks that require moderate reasoning (Data extraction, Summarizing a Document, Writing emails, Writing a Job Description, or Writing Product Descriptions)',
     contextWindow: 32768,
     interfaces: [LLM_IF_OAI_Chat],
-    pricing: { chatIn: 2.7, chatOut: 8.1 },
+    chatPrice: { input: 2.7, output: 8.1 },
     benchmark: { cbaElo: 1148 },
     isLegacy: true,
     hidden: true,
@@ -558,7 +573,7 @@ const _knownMistralChatModels: ManualMappings = [
     description: 'Ideal for intermediate tasks that require moderate reasoning (Data extraction, Summarizing a Document, Writing emails, Writing a Job Description, or Writing Product Descriptions)',
     contextWindow: 32768,
     interfaces: [LLM_IF_OAI_Chat],
-    pricing: { chatIn: 2.7, chatOut: 8.1 },
+    chatPrice: { input: 2.7, output: 8.1 },
     benchmark: { cbaElo: 1148 },
     isLegacy: true,
     hidden: true,
@@ -571,7 +586,7 @@ const _knownMistralChatModels: ManualMappings = [
     description: 'A sparse mixture of experts model. As such, it leverages up to 45B parameters but only uses about 12B during inference, leading to better inference throughput at the cost of more vRAM.',
     contextWindow: 32768,
     interfaces: [LLM_IF_OAI_Chat],
-    pricing: { chatIn: 0.7, chatOut: 0.7 },
+    chatPrice: { input: 0.7, output: 0.7 },
   },
   // Small (deprecated)
   {
@@ -580,7 +595,7 @@ const _knownMistralChatModels: ManualMappings = [
     description: 'Suitable for simple tasks that one can do in bulk (Classification, Customer Support, or Text Generation)',
     contextWindow: 32768,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
-    pricing: { chatIn: 1, chatOut: 3 },
+    chatPrice: { input: 1, output: 3 },
     hidden: true,
     isLegacy: true,
   },
@@ -592,7 +607,7 @@ const _knownMistralChatModels: ManualMappings = [
     description: 'Suitable for simple tasks that one can do in bulk (Classification, Customer Support, or Text Generation)',
     contextWindow: 32768,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
-    pricing: { chatIn: 1, chatOut: 3 },
+    chatPrice: { input: 1, output: 3 },
     hidden: true,
     isLegacy: true,
   },
@@ -602,7 +617,7 @@ const _knownMistralChatModels: ManualMappings = [
     description: 'Aka open-mixtral-8x7b. Suitable for simple tasks that one can do in bulk (Classification, Customer Support, or Text Generation)',
     contextWindow: 32768,
     interfaces: [LLM_IF_OAI_Chat],
-    pricing: { chatIn: 1, chatOut: 3 },
+    chatPrice: { input: 1, output: 3 },
     hidden: true,
     isLegacy: true,
   },
@@ -614,7 +629,7 @@ const _knownMistralChatModels: ManualMappings = [
     description: 'Aka open-mixtral-8x7b. Suitable for simple tasks that one can do in bulk (Classification, Customer Support, or Text Generation)',
     contextWindow: 32768,
     interfaces: [LLM_IF_OAI_Chat],
-    pricing: { chatIn: 1, chatOut: 3 },
+    chatPrice: { input: 1, output: 3 },
     hidden: true,
     isLegacy: true,
   },
@@ -627,7 +642,7 @@ const _knownMistralChatModels: ManualMappings = [
     description: 'The first dense model released by Mistral AI, perfect for experimentation, customization, and quick iteration. At the time of the release, it matched the capabilities of models up to 30B parameters.',
     contextWindow: 32768,
     interfaces: [LLM_IF_OAI_Chat],
-    pricing: { chatIn: 0.25, chatOut: 0.25 },
+    chatPrice: { input: 0.25, output: 0.25 },
   },
   // Tiny (deprecated)
   {
@@ -658,7 +673,7 @@ const _knownMistralChatModels: ManualMappings = [
     maxCompletionTokens: 1024, // HACK - it's 1024 dimensions, but those are not 'completion tokens'
     contextWindow: 8192, // Updated context window
     interfaces: [],
-    pricing: { chatIn: 0.1, chatOut: 0.1 },
+    chatPrice: { input: 0.1, output: 0.1 },
     hidden: true,
   },
 ];
@@ -693,31 +708,188 @@ export function mistralModelsSort(a: ModelDescriptionSchema, b: ModelDescription
 }
 
 
-// [Oobabooga]
-const _knownOobaboogaChatModels: ManualMappings = [];
+// [OpenPipe]
 
-const _knownOobaboogaNonChatModels: string[] = [
-  'None', 'text-curie-001', 'text-davinci-002', 'all-mpnet-base-v2', 'text-embedding-ada-002',
-  /* 'gpt-3.5-turbo' // used to be here, but now it's the way to select the activly loaded ooababooga model */
+const _knownOpenPipeChatModels: ModelDescriptionSchema[] = [
+
+  /* OpenPipe models - by default it's OpenAI models, through the proxy service. */
+
+  // OpenAI models: these work
+  {
+    id: 'gpt-4o-mini-2024-07-18',
+    label: '💾➜ GPT-4o Mini (2024-07-18)',
+    description: 'Affordable model for fast, lightweight tasks. GPT-4o mini is cheaper and more capable than GPT-3.5 Turbo.',
+    contextWindow: 128000,
+    maxCompletionTokens: 16384,
+    trainingDataCutoff: 'Oct 2023',
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json],
+    chatPrice: _knownOpenAIChatModels.find(m => m.idPrefix === 'gpt-4o-mini-2024-07-18')?.chatPrice,
+    benchmark: { cbaMmlu: 82.0 },
+  },
+  {
+    id: 'gpt-4o-2024-05-13',
+    label: '💾➜ GPT-4o (2024-05-13)',
+    description: 'Advanced, multimodal flagship model that\'s cheaper and faster than GPT-4 Turbo.',
+    contextWindow: 128000,
+    maxCompletionTokens: 4096,
+    trainingDataCutoff: 'Oct 2023',
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json],
+    chatPrice: _knownOpenAIChatModels.find(m => m.idPrefix === 'gpt-4o-2024-05-13')?.chatPrice,
+    benchmark: { cbaElo: 1287 },
+  },
+  {
+    id: 'gpt-3.5-turbo-1106',
+    label: '💾➜ GPT-3.5 Turbo (1106)',
+    description: 'GPT-3.5 Turbo model from November 2023',
+    contextWindow: 16385,
+    maxCompletionTokens: 4096,
+    trainingDataCutoff: 'Sep 2021',
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
+    chatPrice: _knownOpenAIChatModels.find(m => m.idPrefix === 'gpt-3.5-turbo-1106')?.chatPrice,
+    benchmark: { cbaElo: 1072 },
+  },
+  {
+    id: 'gpt-3.5-turbo-0125',
+    label: '💾➜ GPT-3.5 Turbo (0125)',
+    description: 'The latest GPT-3.5 Turbo model with higher accuracy at responding in requested formats',
+    contextWindow: 16385,
+    maxCompletionTokens: 4096,
+    trainingDataCutoff: 'Sep 2021',
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
+    chatPrice: _knownOpenAIChatModels.find(m => m.idPrefix === 'gpt-3.5-turbo-0125')?.chatPrice,
+    benchmark: { cbaElo: 1105 },
+  },
+
+  // Not supported yet "We don't support streaming responses for chat completions with Anthropic yet. Please email us at support@openpipe.ai if this is a feature you need!"
+  // {
+  //   id: 'claude-3-5-sonnet-20240620',
+  //   label: '💾➜ Claude 3.5 Sonnet',
+  //   description: 'The most intelligent Claude model',
+  //   contextWindow: 200000, // Characters
+  //   maxCompletionTokens: 8192,
+  //   trainingDataCutoff: 'Apr 2024',
+  //   interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision],
+  //   pricing: { input: 3, output: 15 },
+  // },
+
+  // Default finetune, not available at the onset
+  // {
+  //   id: 'mistral-ft-optimized-1227',
+  //   label: 'OpenPipe · Mistral FT Optimized',
+  //   description: 'OpenPipe optimized Mistral fine-tuned model',
+  //   contextWindow: 32768, // Assuming similar to Mixtral, as it's Mistral-based
+  //   interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn], // Assuming similar to Mixtral
+  // },
+
+  // Finetune-able models, but not present
+  // {
+  //   id: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+  //   label: 'Meta-Llama 3.1 · 8B Instruct',
+  //   description: 'Meta-Llama 3.1 8B Instruct model',
+  //   contextWindow: 128000, // Inferred from Llama 3 models in the original code
+  //   maxCompletionTokens: 4096, // Inferred from Llama 3 models in the original code
+  //   interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json], // Inferred from Llama 3 models
+  // },
+  // {
+  //   id: 'meta-llama/Meta-Llama-3.1-70B-Instruct',
+  //   label: 'Meta-Llama 3.1 · 70B Instruct',
+  //   description: 'Meta-Llama 3.1 70B Instruct model',
+  //   contextWindow: 128000, // Inferred from Llama 3 models in the original code
+  //   maxCompletionTokens: 4096, // Inferred from Llama 3 models in the original code
+  //   interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json], // Inferred from Llama 3 models
+  // },
+  // {
+  //   id: 'mistralai/Mixtral-8x7B-Instruct-v0.1',
+  //   label: 'Mixtral · 8x7B Instruct v0.1',
+  //   description: 'Mixtral 8x7B Instruct v0.1 model',
+  //   contextWindow: 32768, // Inferred from Mixtral model in the original code
+  //   interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn], // Inferred from Mixtral model
+  // },
+
 ];
 
-export function oobaboogaModelToModelDescription(modelId: string, created: number): ModelDescriptionSchema {
-  let label = modelId.replaceAll(/[_-]/g, ' ').split(' ').map(word => word[0].toUpperCase() + word.slice(1)).join(' ');
-  if (label.endsWith('.bin'))
-    label = label.slice(0, -4);
+const openPipeModelFamilyOrder = [
+  'gpt-4o', 'gpt-3.5-turbo', 'mistral-ft', 'meta-llama', 'mistralai', '',
+];
 
-  // special case for the default (and only 'chat') model
-  if (modelId === 'gpt-3.5-turbo')
-    label = 'Oobabooga Model';
+export function openPipeModelDescriptions() {
+  return _knownOpenPipeChatModels;
+}
 
-  return fromManualMapping(_knownOobaboogaChatModels, modelId, created, undefined, {
-    idPrefix: modelId,
-    label: label,
-    description: 'Oobabooga model',
-    contextWindow: 4096, // FIXME: figure out how to the context window size from Oobabooga
-    interfaces: [LLM_IF_OAI_Chat], // assume..
-    hidden: _knownOobaboogaNonChatModels.includes(modelId),
-  });
+export function openPipeModelSort(a: ModelDescriptionSchema, b: ModelDescriptionSchema): number {
+  const aPrefixIndex = openPipeModelFamilyOrder.findIndex(prefix => a.id.startsWith(prefix));
+  const bPrefixIndex = openPipeModelFamilyOrder.findIndex(prefix => b.id.startsWith(prefix));
+  // Sort by family
+  if (aPrefixIndex !== bPrefixIndex)
+    return aPrefixIndex - bPrefixIndex;
+  // Then by reverse label (newer versions first)
+  return b.label.localeCompare(a.label);
+}
+
+export function openPipeModelToModelDescriptions(wireModel: object): ModelDescriptionSchema {
+  // parse the model
+  const model = wireOpenPipeModelOutputSchema.parse(wireModel);
+
+  // note: model.id is a UUID, but when making the requests, this is the id we use
+  const namedId = `openpipe:${model.name}`;
+
+  // parse the ISO strings
+  let created: number | undefined;
+  let updated: number | undefined;
+  try {
+    created = Date.parse(model.created) || undefined;
+    updated = Date.parse(model.updated) || undefined;
+  } catch (e) {
+    // .. prevent issues
+  }
+
+  // patch label and description based on the `.openpipe` field
+  let label = 'OpenPipe · ' + model.name;
+  let description = model.description || 'Fine-tuned model.';
+  switch (model.openpipe?.status) {
+    case 'PENDING':
+      label = `🟦 ${label} (PENDING)`;
+      break;
+    case 'TRAINING':
+      label = `🟦 ${label} (TRAINING)`;
+      break;
+    case 'DEPLOYED':
+      label = `🟩 ${label}`;
+      break;
+    case 'ERROR':
+      label = `🟥 ${label} (ERROR)`;
+      break;
+    case 'DEPRECATED':
+      label = `🟨 ${label} (DEPRECATED)`;
+      break;
+  }
+
+  if (model.openpipe?.baseModel)
+    description += `\n\nBased on: ${model.openpipe.baseModel}`;
+  if (model.openpipe?.datasetId)
+    description += `\nDataset Id: ${model.openpipe.datasetId}`;
+  if (model.openpipe?.errorMessage)
+    description += `\n\nError: ${model.openpipe.errorMessage}\n`;
+  description += `\n\nUUID: ${model.id}`;
+
+
+  const manualMapping: ManualMapping = {
+    idPrefix: namedId,
+    label,
+    description,
+    contextWindow: model.contextWindow,
+    maxCompletionTokens: model.maxCompletionTokens,
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json],
+  };
+
+  if (model.pricing) {
+    manualMapping.chatPrice = {
+      input: model.pricing.chatIn,
+      output: model.pricing.chatOut,
+    };
+  }
+
+  return fromManualMapping([], namedId, created, updated, manualMapping);
 }
 
 
@@ -754,13 +926,15 @@ export function openRouterModelToModelDescription(wireModel: object): ModelDescr
   const model = wireOpenrouterModelsListOutputSchema.parse(wireModel);
 
   // parse pricing
-  const pricing: ModelDescriptionSchema['pricing'] = {
-    chatIn: parseFloat(model.pricing.prompt) * 1000 * 1000,
-    chatOut: parseFloat(model.pricing.completion) * 1000 * 1000,
+  const inputPrice = parseFloat(model.pricing.prompt);
+  const outputPrice = parseFloat(model.pricing.completion);
+  const chatPrice: ModelDescriptionSchema['chatPrice'] = {
+    input: inputPrice ? inputPrice * 1000 * 1000 : 'free',
+    output: outputPrice ? outputPrice * 1000 * 1000 : 'free',
     // image...
     // request...
   };
-  const seemsFree = pricing.chatIn === 0 && pricing.chatOut === 0;
+  const seemsFree = chatPrice.input === 'free' && chatPrice.output === 'free';
 
   // openrouter provides the fields we need as part of the model object
   let label = model.name || model.id.replace('/', ' · ');
@@ -782,7 +956,7 @@ export function openRouterModelToModelDescription(wireModel: object): ModelDescr
     // trainingDataCutoff: ...
     interfaces: [LLM_IF_OAI_Chat],
     // benchmark: ...
-    pricing,
+    chatPrice,
     hidden,
   });
 }
@@ -860,7 +1034,7 @@ export function togetherAIModelsToModelDescriptions(wireModels: unknown): ModelD
 // Perplexity
 
 const _knownPerplexityChatModels: ModelDescriptionSchema[] = [
-  // perplexity models
+  // Perplexity models
   {
     id: 'llama-3-sonar-small-32k-chat',
     label: 'Sonar Small Chat',
@@ -890,7 +1064,7 @@ const _knownPerplexityChatModels: ModelDescriptionSchema[] = [
     interfaces: [LLM_IF_OAI_Chat],
   },
 
-  // opensource models
+  // Open models
   {
     id: 'llama-3-8b-instruct',
     label: 'Llama 3 8B Instruct',
@@ -1057,9 +1231,10 @@ type ManualMapping = ({
   isLegacy?: boolean,
   symLink?: string
 } & Omit<ModelDescriptionSchema, 'id' | 'created' | 'updated'>);
+
 type ManualMappings = ManualMapping[];
 
-function fromManualMapping(mappings: ManualMappings, id: string, created?: number, updated?: number, fallback?: ManualMapping): ModelDescriptionSchema {
+function fromManualMapping(mappings: ManualMappings, id: string, created?: number, updated?: number, fallback?: ManualMapping, disableSymLink?: boolean): ModelDescriptionSchema {
 
   // find the closest known model, or fall back, or take the last
   const known = mappings.find(base => id === base.idPrefix)
@@ -1069,14 +1244,14 @@ function fromManualMapping(mappings: ManualMappings, id: string, created?: numbe
 
   // label for symlinks
   let label = known.label;
-  if (known.symLink && id === known.idPrefix)
+  if (!disableSymLink && known.symLink && id === known.idPrefix)
     label = `🔗 ${known.label} → ${known.symLink/*.replace(known.idPrefix, '')*/}`;
 
   // check whether this is a partial map, which indicates an unknown/new variant
   const suffix = id.slice(known.idPrefix.length).trim();
 
-  // return the model description sheet
-  return {
+  // create the model description
+  const md: ModelDescriptionSchema = {
     id,
     label: label
       + (suffix ? ` [${suffix.replaceAll('-', ' ').trim()}]` : '')
@@ -1086,11 +1261,20 @@ function fromManualMapping(mappings: ManualMappings, id: string, created?: numbe
     updated: updated || created || 0,
     description: known.description,
     contextWindow: known.contextWindow,
-    ...(!!known.maxCompletionTokens && { maxCompletionTokens: known.maxCompletionTokens }),
-    ...(!!known.trainingDataCutoff && { trainingDataCutoff: known.trainingDataCutoff }),
     interfaces: known.interfaces,
-    ...(!!known.benchmark && { benchmark: known.benchmark }),
-    ...(!!known.pricing && { pricing: known.pricing }),
-    ...(!!known.hidden && { hidden: known.hidden }),
   };
+
+  // apply optional fields
+  if (known.maxCompletionTokens)
+    md.maxCompletionTokens = known.maxCompletionTokens;
+  if (known.trainingDataCutoff)
+    md.trainingDataCutoff = known.trainingDataCutoff;
+  if (known.benchmark)
+    md.benchmark = known.benchmark;
+  if (known.chatPrice)
+    md.chatPrice = known.chatPrice;
+  if (known.hidden)
+    md.hidden = true;
+
+  return md;
 }

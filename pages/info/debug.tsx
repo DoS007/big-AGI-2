@@ -7,9 +7,9 @@ import DownloadIcon from '@mui/icons-material/Download';
 import { AppPlaceholder } from '../../src/apps/AppPlaceholder';
 
 import { getBackendCapabilities } from '~/modules/backend/store-backend-capabilities';
-import { getPlantUmlServerUrl } from '~/modules/blocks/code/RenderCode';
+import { getPlantUmlServerUrl } from '~/modules/blocks/code/code-renderers/RenderCodePlantUML';
 
-import { withLayout } from '~/common/layout/withLayout';
+import { withNextJSPerPageLayout } from '~/common/layout/withLayout';
 
 
 // app config
@@ -23,9 +23,9 @@ import { incrementalNewsVersion, useAppNewsStateStore } from '../../src/apps/new
 import { useCapabilityBrowserSpeechRecognition, useCapabilityElevenLabs, useCapabilityTextToImage } from '~/common/components/useCapabilities';
 
 // stores access
-import { getLLMsDebugInfo } from '~/modules/llms/store-llms';
+import { getLLMsDebugInfo } from '~/common/stores/llms/store-llms';
 import { useAppStateStore } from '~/common/state/store-appstate';
-import { useChatStore } from '~/common/state/store-chats';
+import { useChatStore } from '~/common/stores/chat/store-chats';
 import { useFolderStore } from '~/common/state/store-folders';
 import { useUXLabsStore } from '~/common/state/store-ux-labs';
 
@@ -164,6 +164,4 @@ function AppDebug() {
 }
 
 
-export default function DebugPage() {
-  return withLayout({ type: 'plain' }, <AppDebug />);
-};
+export default withNextJSPerPageLayout({ type: 'plain' }, () => <AppDebug />);

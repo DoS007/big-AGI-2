@@ -3,6 +3,10 @@
 # Frontend Build: ignore API files disabled for this build
 /app/**/*.backup
 
+# Supabase - ignored for now
+/supabase/
+/*.sql
+
 # dependencies
 /node_modules
 /.pnp

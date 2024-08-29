@@ -2,12 +2,14 @@ import { Brand } from '../app.config';
 
 // assume these won't change during the application lifetime
 export const isBrowser = typeof window !== 'undefined';
+export const isDevModeLocalhost = clientHostName().includes('localhost:300');
 
 // this sort of detection is brittle, but we use it for very optional features
 const safeUA = isBrowser ? window.navigator?.userAgent || '' : '';
 export const isIPhoneUser = /iPhone|iPod/.test(safeUA);
 export const isMacUser = /Macintosh|MacIntel|MacPPC|Mac68K|iPad/.test(safeUA);
 export const isChromeDesktop = safeUA.includes('Chrome') && !safeUA.includes('Mobile');
+export const isAndroid = safeUA.includes('Android');
 export const isFirefox = safeUA.includes('Firefox');
 
 // frontend language
@@ -26,6 +28,9 @@ export function isPwa(): boolean {
   return isBrowser ? window.matchMedia('(display-mode: standalone)').matches : false;
 }
 
+
+/// Web Share ///
+
 export function webSharePresent(): boolean {
   return isBrowser && !!navigator.share;
 }
@@ -40,6 +45,9 @@ export function webShare(title: string, text: string, url: string, onShared?: ()
       });
 }
 
+
+/// Client Host Names ///
+
 export function clientHostName(): string {
   return isBrowser ? window.location.host : '';
 }
@@ -51,6 +59,8 @@ export function clientUtmSource(campaign?: string): string {
   return '?utm_source=' + host + '&utm_medium=' + Brand.Title.Base.toLowerCase() + (campaign ? `&utm_campaign=${campaign}` : '');
 }
 
+
+/// Delayed Idle Runner ///
 
 /**
  * Schedules a callback to be executed during the browser's idle periods or after a specified timeout.

@@ -6,8 +6,10 @@ import TelegramIcon from '@mui/icons-material/Telegram';
 
 import { ChatMessageMemo } from '../../../apps/chat/components/message/ChatMessage';
 
-import { findLLMOrThrow } from '~/modules/llms/store-llms';
-import { findVendorById } from '~/modules/llms/vendors/vendors.registry';
+import { findModelVendor } from '~/modules/llms/vendors/vendors.registry';
+
+import { findLLMOrThrow } from '~/common/stores/llms/store-llms';
+import { messageFragmentsReduceText } from '~/common/stores/chat/chat.message';
 
 import { GoodTooltip } from '~/common/components/GoodTooltip';
 import { InlineError } from '~/common/components/InlineError';
@@ -27,6 +29,7 @@ import { useBeamCardScrolling } from '../store-module-beam';
 export function Fusion(props: {
   beamStore: BeamStoreApi,
   fusionId: string,
+  isMobile: boolean,
 }) {
 
   // external state
@@ -55,7 +58,7 @@ export function Fusion(props: {
         const llm = findLLMOrThrow(llmId);
         return {
           llmLabel: llm.label,
-          llmVendorIcon: findVendorById(llm._source?.vId)?.Icon,
+          llmVendorIcon: findModelVendor(llm.vId)?.Icon,
         };
       } catch (e) {
       }
@@ -65,19 +68,19 @@ export function Fusion(props: {
 
 
   // handlers
-  const handleFusionCopy = React.useCallback(() => {
+  const handleFusionCopyToClipboard = React.useCallback(() => {
     const { fusions } = props.beamStore.getState();
     const fusion = fusions.find(fusion => fusion.fusionId === props.fusionId);
-    if (fusion?.outputDMessage?.text)
-      copyToClipboard(fusion.outputDMessage.text, 'Merge');
+    if (fusion?.outputDMessage?.fragments.length)
+      copyToClipboard(messageFragmentsReduceText(fusion.outputDMessage.fragments), 'Merge');
   }, [props.beamStore, props.fusionId]);
 
   const handleFusionUse = React.useCallback(() => {
     // get snapshot values, so we don't have to react to the hook
     const { fusions, onSuccessCallback } = props.beamStore.getState();
     const fusion = fusions.find(fusion => fusion.fusionId === props.fusionId);
-    if (fusion?.outputDMessage?.text && onSuccessCallback)
-      onSuccessCallback(fusion.outputDMessage.text, fusion.llmId || '');
+    if (fusion?.outputDMessage?.fragments.length && onSuccessCallback)
+      onSuccessCallback(fusion.outputDMessage);
   }, [props.beamStore, props.fusionId]);
 
 
@@ -137,13 +140,14 @@ export function Fusion(props: {
       {!!fusion?.fusingInstructionComponent && fusion.fusingInstructionComponent}
 
       {/* Output Message */}
-      {(!!fusion?.outputDMessage?.text || fusion?.stage === 'fusing') && (
+      {(!!fusion?.outputDMessage?.fragments.length || fusion?.stage === 'fusing') && (
         <Box sx={beamCardMessageWrapperSx}>
           {!!fusion.outputDMessage && (
             <ChatMessageMemo
               message={fusion.outputDMessage}
               fitScreen={true}
-              showAvatar={false}
+              isMobile={props.isMobile}
+              hideAvatar
               showUnsafeHtml={true}
               adjustContentScaling={-1}
               sx={!cardScrolling ? beamCardMessageSx : beamCardMessageScrollingSx}
@@ -160,7 +164,7 @@ export function Fusion(props: {
           {/* Copy */}
           <GoodTooltip title='Copy'>
             <IconButton
-              onClick={handleFusionCopy}
+              onClick={handleFusionCopyToClipboard}
             >
               <ContentCopyIcon sx={{ fontSize: 'md' }} />
             </IconButton>

@@ -7,9 +7,12 @@ import ReplayIcon from '@mui/icons-material/Replay';
 import { useStreamChatText } from '~/modules/aifn/useStreamChatText';
 
 import { ConfirmationModal } from '~/common/components/ConfirmationModal';
+import { ConversationsManager } from '~/common/chat-overlay/ConversationsManager';
+import { DConversationId } from '~/common/stores/chat/chat.conversation';
 import { GoodModal } from '~/common/components/GoodModal';
 import { InlineTextarea } from '~/common/components/InlineTextarea';
-import { createDMessage, DConversationId, DMessage, getConversation, useChatStore } from '~/common/state/store-chats';
+import { createDMessageTextContent, DMessage, messageFragmentsReduceText } from '~/common/stores/chat/chat.message';
+import { getConversation } from '~/common/stores/chat/store-chats';
 import { useFormRadioLlmType } from '~/common/components/forms/useFormRadioLlmType';
 
 import { FLATTEN_PROFILES, FlattenStyleType } from './flatten.data';
@@ -68,7 +71,8 @@ function encodeConversationAsUserMessage(userPrompt: string, messages: DMessage[
   for (const message of messages) {
     if (message.role === 'system') continue;
     const author = message.role === 'user' ? 'User' : 'Assistant';
-    const text = message.text.replace(/\n/g, '\n\n');
+    const messageText = messageFragmentsReduceText(message.fragments);
+    const text = messageText.replace(/\n/g, '\n\n');
     encodedMessages += `---${author}---\n${text}\n\n`;
   }
 
@@ -135,8 +139,10 @@ export function FlattenerModal(props: {
     if (branch)
       newConversationId = props.onConversationBranch(props.conversationId, null);
     if (newConversationId) {
-      const newRootMessage = createDMessage('user', flattenedText);
-      useChatStore.getState().setMessages(newConversationId, [newRootMessage]);
+      const ncHandler = ConversationsManager.getHandler(newConversationId);
+      const newRootMessage = createDMessageTextContent('user', flattenedText);// [new chat] user:former chat summary
+      ncHandler.historyClear();
+      ncHandler.messageAppend(newRootMessage);
     }
     props.onClose();
   };

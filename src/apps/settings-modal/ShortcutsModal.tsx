@@ -1,10 +1,11 @@
 import * as React from 'react';
 
-import { BlocksRenderer } from '~/modules/blocks/BlocksRenderer';
+import { AutoBlocksRenderer } from '~/modules/blocks/AutoBlocksRenderer';
 
 import { GoodModal } from '~/common/components/GoodModal';
 import { platformAwareKeystrokes } from '~/common/components/KeyStroke';
 import { useIsMobile } from '~/common/components/useMatchMedia';
+import { useUIContentScaling } from '~/common/state/store-ui';
 
 
 const shortcutsMd = platformAwareKeystrokes(`
@@ -15,7 +16,7 @@ const shortcutsMd = platformAwareKeystrokes(`
 | Shift + Enter    | Newline                                 |
 | Alt + Enter      | Append (no response)                    |
 | Ctrl + Shift + B | **Beam** last message                   |
-| Ctrl + Shift + G | Re**generate** last message             |
+| Ctrl + Shift + Z | **REgenerate** last message             |
 | Ctrl + Shift + V | Attach clipboard (better than Ctrl + V) |
 | Ctrl + M         | Microphone (voice typing)               |
 | **Chats**        |                                         |
@@ -40,17 +41,18 @@ const shortcutsMd = platformAwareKeystrokes(`
 export function ShortcutsModal(props: { onClose: () => void }) {
 
   // external state
-  const isMobile
-    = useIsMobile();
+  const isMobile = useIsMobile();
+  const contentScaling = useUIContentScaling();
 
   return (
     <GoodModal open title='Desktop Shortcuts' onClose={props.onClose}>
-      <BlocksRenderer
+      <AutoBlocksRenderer
         text={shortcutsMd}
         fromRole='assistant'
-        contentScaling='sm'
+        contentScaling={contentScaling}
         fitScreen={isMobile}
-        renderTextAsMarkdown
+        isMobile={isMobile}
+        textRenderVariant='markdown'
       />
     </GoodModal>
   );
