@@ -16,7 +16,7 @@ import { useChatStore } from '~/common/stores/chat/store-chats';
 import { useFormRadio } from '~/common/components/forms/useFormRadio';
 
 import type { ChatGptSharedChatSchema } from './server/chatgpt';
-import { openAndLoadConversations } from './trade.client';
+import { importConversationsFromFilesAtRest, openConversationsAtRestPicker } from './trade.client';
 
 import { ImportedOutcome, ImportOutcomeModal } from './ImportOutcomeModal';
 
@@ -50,7 +50,7 @@ export function ImportChats(props: { onConversationActivate: (conversationId: DC
 
 
   const handleImportFromFiles = async () => {
-    const outcome = await openAndLoadConversations(true);
+    const outcome = await openConversationsAtRestPicker().then(importConversationsFromFilesAtRest);
 
     // activate the last (most recent) imported conversation
     if (outcome?.activateConversationId)
@@ -130,7 +130,7 @@ export function ImportChats(props: { onConversationActivate: (conversationId: DC
         Select where to <strong>import from</strong>:
       </Typography>
 
-      <GoodTooltip title={<KeyStroke dark combo='Ctrl + O' />}>
+      <GoodTooltip title={<KeyStroke variant='solid' combo='Ctrl + O' />}>
         <Button
           variant='soft' endDecorator={<FileUploadIcon />} sx={{ minWidth: 240, justifyContent: 'space-between' }}
           onClick={handleImportFromFiles}

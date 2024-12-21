@@ -1,5 +1,6 @@
 import * as React from 'react';
 
+import type { SxProps } from '@mui/joy/styles/types';
 import { Box, IconButton, SvgIconProps, Typography } from '@mui/joy';
 import CheckCircleOutlineRoundedIcon from '@mui/icons-material/CheckCircleOutlineRounded';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
@@ -23,8 +24,10 @@ import { useLLMSelect } from '~/common/components/forms/useLLMSelect';
 import { BeamCard, beamCardClasses, beamCardMessageScrollingSx, beamCardMessageSx, beamCardMessageWrapperSx } from '../BeamCard';
 import { BeamStoreApi, useBeamStore } from '../store-beam.hooks';
 import { GATHER_COLOR, SCATTER_COLOR, SCATTER_RAY_SHOW_DRAG_HANDLE } from '../beam.config';
+import { TooltipOutlined } from '~/common/components/TooltipOutlined';
 import { rayIsError, rayIsImported, rayIsScattering, rayIsSelectable, rayIsUserSelected } from './beam.scatter';
 import { useBeamCardScrolling, useBeamScatterShowLettering } from '../store-module-beam';
+import { useMessageAvatarLabel } from '~/common/util/dMessageUtils';
 
 
 /*const letterSx: SxProps = {
@@ -38,11 +41,31 @@ import { useBeamCardScrolling, useBeamScatterShowLettering } from '../store-modu
   textAlign: 'center',
 };*/
 
+const rayControlsSx: SxProps = {
+  // layout
+  display: 'flex', alignItems: 'center', gap: 1,
+};
+
+const rayControlsMobileSx: SxProps = {
+  ...rayControlsSx,
+
+  // anchor top
+  position: 'sticky', top: 0, bottom: 64,
+
+  // looks (absorb parent padding, and overwrite with color and zIndex to stay on top)
+  zIndex: 1,
+  backgroundColor: 'inherit',
+  mx: 'calc(-1 * var(--Card-padding))',
+  px: 'var(--Card-padding)',
+  my: -1,
+  py: 1,
+};
 
 const RayControlsMemo = React.memo(RayControls);
 
 function RayControls(props: {
   isEmpty: boolean,
+  isMobile: boolean,
   isRemovable: boolean,
   isScattering: boolean,
   llmComponent: React.ReactNode,
@@ -50,10 +73,11 @@ function RayControls(props: {
   onRemove: () => void,
   onToggleGenerate: () => void,
   rayLetter?: string,
+  rayAvatarTooltip: React.ReactNode,
   // isLlmLinked: boolean,
   // onLink: () => void,
 }) {
-  return <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+  return <Box sx={props.isMobile ? rayControlsMobileSx : rayControlsSx}>
 
     {/* Drag Handle */}
     {SCATTER_RAY_SHOW_DRAG_HANDLE && (
@@ -63,13 +87,18 @@ function RayControls(props: {
     )}
 
     {/* Letter / LLM Icon (default) */}
-    {props.rayLetter ? (
-      <Typography level='title-sm' color={SCATTER_COLOR !== 'neutral' ? SCATTER_COLOR : undefined}>
-        {props.rayLetter}
-      </Typography>
-    ) : props.llmVendorIcon && (
-      <props.llmVendorIcon sx={{ fontSize: 'lg', my: 'auto' }} />
-    )}
+    <TooltipOutlined asLargePane enableInteractive title={props.rayAvatarTooltip} placement='top-start'>
+      <Box sx={{ display: 'flex' }}>
+        {props.rayLetter ? (
+          <Typography level='title-sm' color={SCATTER_COLOR !== 'neutral' ? SCATTER_COLOR : undefined}>
+            {props.rayLetter}
+          </Typography>
+        ) : props.llmVendorIcon ? <props.llmVendorIcon sx={{ fontSize: 'lg' }} />
+          : null
+          // : <TextureIcon sx={{ fontSize: 'lg' }} />
+        }
+      </Box>
+    </TooltipOutlined>
 
     <Box sx={{ flex: 1 }}>
       {props.llmComponent}
@@ -131,6 +160,7 @@ export function BeamRay(props: {
   const isImported = rayIsImported(ray);
   const showUseButtons = isSelectable && !isScattering;
   const { removeRay, rayToggleScattering, raySetLlmId } = props.beamStore.getState();
+  const { tooltip: rayAvatarTooltip } = useMessageAvatarLabel(ray?.message, 'pro');
 
   // This old code used the Gather LLM as Ray fallback - but now we use the last Scatter LLM as fallback
   // const isLlmLinked = !!props.linkedLlmId && !ray?.rayLlmId;
@@ -176,6 +206,8 @@ export function BeamRay(props: {
 
   return (
     <BeamCard
+      role='beam-card'
+      tabIndex={-1}
       // onClick={isSelectable ? handleRayToggleSelect : undefined}
       className={
         (isError ? beamCardClasses.errored : '')
@@ -186,6 +218,7 @@ export function BeamRay(props: {
       {/* Controls Row */}
       <RayControlsMemo
         isEmpty={!isSelectable}
+        isMobile={props.isMobile}
         isRemovable={props.isRemovable}
         isScattering={isScattering}
         llmComponent={llmComponent}
@@ -193,6 +226,7 @@ export function BeamRay(props: {
         onRemove={handleRayRemove}
         onToggleGenerate={handleRayToggleGenerate}
         rayLetter={showLettering ? 'R' + (1 + props.rayIndexWeak) : undefined}
+        rayAvatarTooltip={rayAvatarTooltip}
         // isLlmLinked={isLlmLinked}
         // onLink={handleLlmLink}
       />
@@ -209,7 +243,7 @@ export function BeamRay(props: {
               fitScreen={true}
               isMobile={props.isMobile}
               hideAvatar
-              showUnsafeHtml={true}
+              showUnsafeHtmlCode={true}
               adjustContentScaling={-1}
               sx={!cardScrolling ? beamCardMessageSx : beamCardMessageScrollingSx}
             />
@@ -257,7 +291,7 @@ export function BeamRay(props: {
                   whiteSpace: 'nowrap',
                 }}
               >
-                {isImported ? 'From Chat' : /*props.hadImportedRays ? 'Replace' : 'Use'*/ <TelegramIcon />}
+                {isImported ? 'From Chat (copied)' : /*props.hadImportedRays ? 'Replace' : 'Use'*/ <TelegramIcon />}
               </IconButton>
             </GoodTooltip>
 

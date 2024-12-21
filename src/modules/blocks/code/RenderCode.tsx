@@ -2,26 +2,29 @@ import * as React from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import type { SxProps } from '@mui/joy/styles/types';
-import { Box, ButtonGroup, Sheet, Typography } from '@mui/joy';
+import { Box, ButtonGroup, Dropdown, ListItem, Menu, MenuButton, Sheet, Tooltip, Typography } from '@mui/joy';
 import ChangeHistoryTwoToneIcon from '@mui/icons-material/ChangeHistoryTwoTone';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import EditRoundedIcon from '@mui/icons-material/EditRounded';
 import FitScreenIcon from '@mui/icons-material/FitScreen';
+import FullscreenRoundedIcon from '@mui/icons-material/FullscreenRounded';
 import HtmlIcon from '@mui/icons-material/Html';
 import NumbersRoundedIcon from '@mui/icons-material/NumbersRounded';
 import SquareTwoToneIcon from '@mui/icons-material/SquareTwoTone';
 import WrapTextIcon from '@mui/icons-material/WrapText';
 
 import { copyToClipboard } from '~/common/util/clipboardUtils';
+import { useFullscreenElement } from '~/common/components/useFullscreenElement';
 import { useUIPreferencesStore } from '~/common/state/store-ui';
 
-import { BUTTON_RADIUS, OverlayButton, overlayButtonsActiveSx, overlayButtonsClassName, overlayButtonsTopRightSx, overlayGroupWithShadowSx } from '../OverlayButton';
+import { OVERLAY_BUTTON_RADIUS, OverlayButton, overlayButtonsActiveSx, overlayButtonsClassName, overlayButtonsTopRightSx, overlayGroupWithShadowSx, StyledOverlayButton } from '../OverlayButton';
 import { RenderCodeHtmlIFrame } from './code-renderers/RenderCodeHtmlIFrame';
 import { RenderCodeMermaid } from './code-renderers/RenderCodeMermaid';
-import { RenderCodeSVG } from './code-renderers/RenderCodeSVG';
+import { heuristicIsSVGCode, RenderCodeSVG } from './code-renderers/RenderCodeSVG';
 import { RenderCodeSyntax } from './code-renderers/RenderCodeSyntax';
 import { heuristicIsBlockPureHTML } from '../danger-html/RenderDangerousHtml';
 import { heuristicIsCodePlantUML, RenderCodePlantUML, usePlantUmlSvg } from './code-renderers/RenderCodePlantUML';
-import { useOpenInExternalButtons } from '~/modules/blocks/code/code-buttons/useOpenInExternalButtons';
+import { useOpenInWebEditors } from './code-buttons/useOpenInWebEditors';
 
 // style for line-numbers
 import './RenderCode.css';
@@ -46,6 +49,7 @@ interface RenderCodeBaseProps {
   initialShowHTML?: boolean,
   noCopyButton?: boolean,
   optimizeLightweight?: boolean,
+  onReplaceInCode?: (search: string, replace: string) => boolean;
   sx?: SxProps,
 }
 
@@ -77,7 +81,7 @@ const renderCodecontainerSx: SxProps = {
   position: 'relative',
 
   // style
-  '--IconButton-radius': BUTTON_RADIUS,
+  '--IconButton-radius': OVERLAY_BUTTON_RADIUS,
 
   // fade in children buttons
   [`&:hover > .${overlayButtonsClassName}`]: overlayButtonsActiveSx,
@@ -108,7 +112,12 @@ function RenderCodeImpl(props: RenderCodeBaseProps & {
   const [showMermaid, setShowMermaid] = React.useState(true);
   const [showPlantUML, setShowPlantUML] = React.useState(true);
   const [showSVG, setShowSVG] = React.useState(true);
-  const { showLineNumbers, showSoftWrap, setShowLineNumbers, setShowSoftWrap } = useUIPreferencesStore(useShallow(state => ({
+  const fullScreenElementRef = React.useRef<HTMLDivElement>(null);
+
+  // external state
+  const { isFullscreen, enterFullscreen, exitFullscreen } = useFullscreenElement(fullScreenElementRef);
+  const { uiComplexityMode, showLineNumbers, showSoftWrap, setShowLineNumbers, setShowSoftWrap } = useUIPreferencesStore(useShallow(state => ({
+    uiComplexityMode: state.complexityMode,
     showLineNumbers: state.renderCodeLineNumbers,
     showSoftWrap: state.renderCodeSoftWrap,
     setShowLineNumbers: state.setRenderCodeLineNumbers,
@@ -141,26 +150,26 @@ function RenderCodeImpl(props: RenderCodeBaseProps & {
 
   // heuristics for specialized rendering
 
+  const lcBlockTitle = blockTitle.trim().toLowerCase();
+
   const isHTMLCode = heuristicIsBlockPureHTML(code);
   const renderHTML = isHTMLCode && showHTML;
 
-  const isMermaidCode = blockTitle === 'mermaid' && !blockIsPartial;
+  const isMermaidCode = lcBlockTitle === 'mermaid' && !blockIsPartial;
   const renderMermaid = isMermaidCode && showMermaid;
 
-  const isPlantUMLCode = heuristicIsCodePlantUML(code);
+  const isPlantUMLCode = heuristicIsCodePlantUML(code.trim());
   let renderPlantUML = isPlantUMLCode && showPlantUML;
   const { data: plantUmlSvgData, error: plantUmlError } = usePlantUmlSvg(renderPlantUML, code);
   renderPlantUML = renderPlantUML && (!!plantUmlSvgData || !!plantUmlError);
 
-  const isSVGCode = (code.startsWith('<svg') || code.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n<svg')) && code.endsWith('</svg>');
+  const isSVGCode = heuristicIsSVGCode(code);
   const renderSVG = isSVGCode && showSVG;
   const canScaleSVG = renderSVG && code.includes('viewBox="');
 
   const renderSyntaxHighlight = !renderHTML && !renderMermaid && !renderPlantUML && !renderSVG;
-
-
   const cannotRenderLineNumbers = !renderSyntaxHighlight || showSoftWrap;
-  const renderLineNumbers = showLineNumbers && !cannotRenderLineNumbers;
+  const renderLineNumbers = !cannotRenderLineNumbers && ((showLineNumbers && uiComplexityMode !== 'minimal') || isFullscreen);
 
 
   // Language & Highlight
@@ -183,12 +192,12 @@ function RenderCodeImpl(props: RenderCodeBaseProps & {
 
 
   // External Buttons
-  const openExternallyButtons = useOpenInExternalButtons(code, blockTitle, blockIsPartial, inferredCodeLanguage, isSVGCode, noTooltips === true);
+  const openExternallyItems = useOpenInWebEditors(code, blockTitle, blockIsPartial, inferredCodeLanguage, isSVGCode);
 
   // style
 
   const isRenderingDiagram = renderMermaid || renderPlantUML;
-  const hasExternalButtons = openExternallyButtons.length > 0;
+  const hasExternalButtons = openExternallyItems.length > 0;
 
   const codeSx: SxProps = React.useMemo(() => ({
 
@@ -209,9 +218,9 @@ function RenderCodeImpl(props: RenderCodeBaseProps & {
     ...props.sx,
 
     // patch the min height if we have the second row
-    ...(hasExternalButtons ? { minHeight: '5.25rem' } : {}),
+    // ...(hasExternalButtons ? { minHeight: '5.25rem' } : {}),
 
-  }), [hasExternalButtons, isBorderless, isRenderingDiagram, props.sx, showSoftWrap]);
+  }), [isBorderless, isRenderingDiagram, props.sx, showSoftWrap]);
 
 
   return (
@@ -222,9 +231,10 @@ function RenderCodeImpl(props: RenderCodeBaseProps & {
     >
 
       <Box
+        ref={fullScreenElementRef}
         component='code'
         className={`language-${inferredCodeLanguage || 'unknown'}${renderLineNumbers ? ' line-numbers' : ''}`}
-        sx={codeSx}
+        sx={!isFullscreen ? codeSx : { ...codeSx, backgroundColor: 'background.surface' }}
       >
 
         {/* Markdown Title (File/Type) */}
@@ -237,13 +247,17 @@ function RenderCodeImpl(props: RenderCodeBaseProps & {
           </Sheet>
         )}
 
-        {/* Renders HTML, or inline SVG, inline plantUML rendered, or highlighted code */}
-        {renderHTML ? <RenderCodeHtmlIFrame htmlCode={code} />
-          : renderMermaid ? <RenderCodeMermaid mermaidCode={code} fitScreen={fitScreen} />
-            : renderSVG ? <RenderCodeSVG svgCode={code} fitScreen={fitScreen} />
-              : (renderPlantUML && (plantUmlSvgData || plantUmlError)) ? <RenderCodePlantUML svgCode={plantUmlSvgData ?? null} error={plantUmlError} fitScreen={fitScreen} />
-                : <RenderCodeSyntax highlightedSyntaxAsHtml={highlightedCode} />}
-
+        {/* NOTE: this 'div' is only here to avoid some sort of collapse of the RenderCodeSyntax,
+            which box disappears for some reason and the parent flex layout ends up lining up
+            chars in a non-proper way */}
+        <Box>
+          {/* Renders HTML, or inline SVG, inline plantUML rendered, or highlighted code */}
+          {renderHTML ? <RenderCodeHtmlIFrame htmlCode={code} />
+            : renderMermaid ? <RenderCodeMermaid mermaidCode={code} fitScreen={fitScreen} />
+              : renderSVG ? <RenderCodeSVG svgCode={code} fitScreen={fitScreen} />
+                : (renderPlantUML && (plantUmlSvgData || plantUmlError)) ? <RenderCodePlantUML svgCode={plantUmlSvgData ?? null} error={plantUmlError} fitScreen={fitScreen} />
+                  : <RenderCodeSyntax highlightedSyntaxAsHtml={highlightedCode} presenterMode={isFullscreen} />}
+        </Box>
 
       </Box>
 
@@ -261,27 +275,30 @@ function RenderCodeImpl(props: RenderCodeBaseProps & {
               </OverlayButton>
             )}
 
-            {/* Show SVG */}
-            {isSVGCode && (
-              <OverlayButton tooltip={noTooltips ? null : renderSVG ? 'Show Code' : 'Render SVG'} variant={renderSVG ? 'solid' : 'outlined'} color='warning' smShadow onClick={() => setShowSVG(!showSVG)}>
-                <ChangeHistoryTwoToneIcon />
-              </OverlayButton>
-            )}
-
-            {/* Show Diagrams */}
-            {(isMermaidCode || isPlantUMLCode) && (
+            {/* SVG, Mermaid, PlantUML -- including a max-out button */}
+            {(isSVGCode || isMermaidCode || isPlantUMLCode) && (
               <ButtonGroup aria-label='Diagram' sx={overlayGroupWithShadowSx}>
                 {/* Toggle rendering */}
-                <OverlayButton tooltip={noTooltips ? null : (renderMermaid || renderPlantUML) ? 'Show Code' : isMermaidCode ? 'Mermaid Diagram' : 'PlantUML Diagram'} variant={(renderMermaid || renderPlantUML) ? 'solid' : 'outlined'} onClick={() => {
-                  if (isMermaidCode) setShowMermaid(on => !on);
-                  if (isPlantUMLCode) setShowPlantUML(on => !on);
-                }}>
-                  <SquareTwoToneIcon />
+                <OverlayButton
+                  tooltip={noTooltips ? null
+                    : (renderSVG || renderMermaid || renderPlantUML) ? 'Show Code'
+                      : isSVGCode ? 'Render SVG'
+                        : isMermaidCode ? 'Mermaid Diagram'
+                          : 'PlantUML Diagram'
+                  }
+                  variant={(renderMermaid || renderPlantUML) ? 'solid' : 'outlined'}
+                  color={isSVGCode ? 'warning' : undefined}
+                  onClick={() => {
+                    if (isSVGCode) setShowSVG(on => !on);
+                    if (isMermaidCode) setShowMermaid(on => !on);
+                    if (isPlantUMLCode) setShowPlantUML(on => !on);
+                  }}>
+                  {isSVGCode ? <ChangeHistoryTwoToneIcon /> : <SquareTwoToneIcon />}
                 </OverlayButton>
 
-                {/* Fit-To-Screen */}
+                {/* Fit-Content */}
                 {((isMermaidCode && showMermaid) || (isPlantUMLCode && showPlantUML && !plantUmlError) || (isSVGCode && showSVG && canScaleSVG)) && (
-                  <OverlayButton tooltip={noTooltips ? null : fitScreen ? 'Original Size' : 'Fit Screen'} variant={fitScreen ? 'solid' : 'outlined'} onClick={() => setFitScreen(on => !on)}>
+                  <OverlayButton tooltip={noTooltips ? null : fitScreen ? 'Original Size' : 'Fit Content'} variant={fitScreen ? 'solid' : 'outlined'} onClick={() => setFitScreen(on => !on)}>
                     <FitScreenIcon />
                   </OverlayButton>
                 )}
@@ -290,18 +307,44 @@ function RenderCodeImpl(props: RenderCodeBaseProps & {
 
             {/* Group: Text Options */}
             <ButtonGroup aria-label='Text and code options' sx={overlayGroupWithShadowSx}>
+
+              {/* Fullscreen */}
+              <OverlayButton tooltip={noTooltips ? null : isFullscreen ? 'Exit Fullscreen' : !renderSyntaxHighlight ? 'Fullscreen' : 'Present'} variant={isFullscreen ? 'solid' : 'outlined'} onClick={isFullscreen ? exitFullscreen : enterFullscreen}>
+                <FullscreenRoundedIcon />
+              </OverlayButton>
+
               {/* Soft Wrap toggle */}
               {renderSyntaxHighlight && (
-                <OverlayButton tooltip={noTooltips ? null : 'Soft Wrap'} disabled={!renderSyntaxHighlight} variant={(showSoftWrap && renderSyntaxHighlight) ? 'solid' : 'outlined'} onClick={() => setShowSoftWrap(!showSoftWrap)}>
+                <OverlayButton tooltip={noTooltips ? null : 'Wrap Lines'} disabled={!renderSyntaxHighlight} variant={(showSoftWrap && renderSyntaxHighlight) ? 'solid' : 'outlined'} onClick={() => setShowSoftWrap(!showSoftWrap)}>
                   <WrapTextIcon />
                 </OverlayButton>
               )}
 
               {/* Line Numbers toggle */}
-              {renderSyntaxHighlight && (
+              {renderSyntaxHighlight && uiComplexityMode !== 'minimal' && (
                 <OverlayButton tooltip={noTooltips ? null : 'Line Numbers'} disabled={cannotRenderLineNumbers} variant={(renderLineNumbers && renderSyntaxHighlight) ? 'solid' : 'outlined'} onClick={() => setShowLineNumbers(!showLineNumbers)}>
                   <NumbersRoundedIcon />
                 </OverlayButton>
+              )}
+
+              {/* Open In Web Editors */}
+              {hasExternalButtons && (
+                <Dropdown>
+                  <Tooltip disableInteractive arrow placement='top' title='Web Editors'>
+                    <MenuButton
+                      slots={{ root: StyledOverlayButton }}
+                      slotProps={{ root: { variant: 'outlined' } }}
+                    >
+                      <EditRoundedIcon />
+                    </MenuButton>
+                  </Tooltip>
+                  <Menu sx={{ minWidth: 160 }} placement='bottom-end'>
+                    <ListItem>
+                      <Typography level='body-sm'>Edit with:</Typography>
+                    </ListItem>
+                    {openExternallyItems}
+                  </Menu>
+                </Dropdown>
               )}
 
               {/* Copy */}
@@ -311,14 +354,16 @@ function RenderCodeImpl(props: RenderCodeBaseProps & {
                 </OverlayButton>
               )}
             </ButtonGroup>
+
           </Box>
 
+          {/* DISABLED: Converted to a Dropdown */}
           {/* [row 2, optional] Group: Open Externally */}
-          {!!openExternallyButtons.length && (
-            <ButtonGroup aria-label='Open code in external editors' sx={overlayGroupWithShadowSx}>
-              {openExternallyButtons}
-            </ButtonGroup>
-          )}
+          {/*{!!openExternallyButtons.length && (*/}
+          {/*  <ButtonGroup aria-label='Open code in external editors' sx={overlayGroupWithShadowSx}>*/}
+          {/*    {openExternallyButtons}*/}
+          {/*  </ButtonGroup>*/}
+          {/*)}*/}
 
         </Box>
       )}

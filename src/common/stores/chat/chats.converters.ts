@@ -1,14 +1,18 @@
 import type { SystemPurposeId } from '../../../data';
 
-import type { DFolder } from '~/common/state/store-folders';
+import type { DFolder } from '~/common/stores/folders/store-chat-folders';
 import type { LiveFileId } from '~/common/livefile/liveFile.types';
 import { liveFileGetAllValidIDs } from '~/common/livefile/store-live-file';
 
 import type { DModelsService } from '~/common/stores/llms/modelsservice.types';
 
 import { createDConversation, DConversation, type DConversationId } from './chat.conversation';
-import { createDMessageTextContent, DMessage } from './chat.message';
-import { createErrorContentFragment, isAttachmentFragment, isContentFragment, isContentOrAttachmentFragment, isDocPart } from './chat.fragments';
+import { createDMessageTextContent, DMessage, MESSAGE_FLAG_NOTIFY_COMPLETE, messageSetUserFlag } from './chat.message';
+import { createErrorContentFragment, isAttachmentFragment, isContentFragment, isContentOrAttachmentFragment, isDocPart, isPlaceholderPart, isTextContentFragment, isVoidFragment } from './chat.fragments';
+
+
+// configuration
+const EMERGENCY_CLEANUP_PARTS = false;
 
 
 export namespace V4ToHeadConverters {
@@ -46,15 +50,42 @@ export namespace V4ToHeadConverters {
     for (let i = 0; i < m.fragments.length; i++) {
       const fragment = m.fragments[i];
 
+      // [SANITIZE] If the fragment is damaged (e.g. null or missing the 'ft' property), remove it
+      if (!fragment || !fragment.ft) {
+        m.fragments.splice(i, 1);
+        i--; // Adjust index since we modified the array
+        continue;
+      }
+
       // [GC][LiveFile] remove LiveFile references to invalid objects (also done in store-client-workspace)
       if (isAttachmentFragment(fragment) && fragment.liveFileId)
         if (!validLiveFileIDs.includes(fragment.liveFileId))
           delete fragment.liveFileId;
 
       // show the aborted ops: convert a Placeholder fragment [part.pt='ph'] to an Error fragment
-      if (isContentFragment(fragment) && fragment.part.pt === 'ph')
-        m.fragments[i] = createErrorContentFragment(`${fragment.part.pText} (did not complete)`);
+      if ((isVoidFragment(fragment) && isPlaceholderPart(fragment.part))
+        || (isContentFragment(fragment) && (fragment.part as any)?.pt === 'ph') /* NOTE: REMOVE FOR 2.0: helper during the 'void' fragment transition */)
+        m.fragments[i] = createErrorContentFragment(`${(fragment.part as any).pText} (did not complete)`);
+
+      // [Emergency] validate part types, can mess up in development
+      if (EMERGENCY_CLEANUP_PARTS) {
+        // If a text part has 'object' in place of 'string' for pText: remove the part altogether
+        if (isTextContentFragment(fragment)) {
+          // noinspection SuspiciousTypeOfGuard
+          if (typeof fragment.part.text !== 'string') {
+            // Remove this fragment
+            m.fragments.splice(i, 1);
+            i--; // Adjust index since we modified the array
+            // noinspection UnnecessaryContinueJS
+            continue;
+          }
+        }
+      }
+
     }
+
+    // remove notification flags
+    m.userFlags = messageSetUserFlag(m, MESSAGE_FLAG_NOTIFY_COMPLETE, false);
 
     // run dev upgrades
     dev_inMemHeadUpgradeDMessage(m);
@@ -91,112 +122,6 @@ export namespace V4ToHeadConverters {
       m.generator = { 'mgt': 'named', name: m.originLLM as string };
       delete m.originLLM;
     }
-  }
-
-}
-
-
-export namespace DataAtRestV1 {
-
-
-  /// Rest V1 -> Head ///
-
-  /** Used by: AppLinkChat.fetchStoredChatV1, trade_client.loadSingleChatFromAtRestV1 */
-  export function recreateConversation(chatJV1: RestChatJsonV1 & { tokenCount?: number }): DConversation | null {
-
-    // sanity check
-    if (!chatJV1 || !chatJV1.id || !chatJV1.messages) {
-      console.warn('createDConversationFromJsonV1: invalid conversation json', chatJV1);
-      return null;
-    }
-
-    // RestChatJsonV1 could be EITHER a V3 or V4/Head message - uncomment below to see little difference
-    // const sentinel1: RestChatJsonV1 = {} as DConversation;
-    // const sentinel1: DConversation = {} as RestChatJsonV1;
-    // TODO: probably better to fork off the saving already, so imports are only V3's
-
-    // heuristic to find out if we're dealing with a V3 or V4 message
-    // const v3Count = chatJV1.messages.filter((m) => 'text' in m).length;
-    // const v4Count = chatJV1.messages.filter((m) => 'fragments' in m).length;
-    // if (v3Count > v4Count) {
-    //   we are dealing with a V3 message
-    //  ...
-    // }
-
-    return V3StoreDataToHead.recreateConversation(chatJV1);
-  }
-
-  /** Used by: trade_client.loadConversationsFromAtRestV1 */
-  export function recreateFolders(part: RestFolderJsonV1[]): DFolder[] {
-    return (part || []).map(_recreateFolder).filter((f) => f) as DFolder[];
-  }
-
-  function _recreateFolder(part: RestFolderJsonV1): DFolder | null {
-
-    // sanity check
-    if (!part || !part.id || !part.title || !part.conversationIds) {
-      console.warn('createFolderFromJsonV1: invalid folder json', part);
-      return null;
-    }
-
-    return {
-      id: part.id,
-      title: part.title,
-      conversationIds: part.conversationIds,
-      color: part.color,
-    };
-  }
-
-
-  /// Head -> Rest V1 ///
-
-  /** Used by: downloadAllJsonV1B */
-  export function formatAllToJsonV1B(conversations: DConversation[], modelSources: DModelsService[], folders: DFolder[], enableFolders: boolean): RestAllJsonV1B {
-    return {
-      conversations: (conversations || []).map(formatChatToJsonV1),
-      models: { sources: modelSources },
-      folders: { folders, enableFolders },
-    };
-  }
-
-  /** Used by: ^, downloadSingleChat, ChatLinkExport.handleCreate */
-  export function formatChatToJsonV1(ec: DConversation): RestChatJsonV1 {
-    return {
-      id: ec.id,
-      messages: ec.messages,
-      systemPurposeId: ec.systemPurposeId,
-      userTitle: ec.userTitle,
-      autoTitle: ec.autoTitle,
-      created: ec.created,
-      updated: ec.updated,
-    };
-  }
-
-
-  /// STORED TYPES definitions ///
-  /// do not change(!) these - consider people's backups and stored data
-
-  export type RestAllJsonV1B = {
-    conversations: RestChatJsonV1[];
-    models: { sources: DModelsService[] };
-    folders?: { folders: RestFolderJsonV1[]; enableFolders: boolean };
-  }
-
-  export type RestChatJsonV1 = {
-    id: string;
-    messages: (DMessage | V3StoreDataToHead.ImportMessageV3)[];
-    systemPurposeId: string;
-    userTitle?: string;
-    autoTitle?: string;
-    created: number;
-    updated: number | null;
-  }
-
-  type RestFolderJsonV1 = {
-    id: string;
-    title: string;
-    conversationIds: DConversationId[];
-    color?: string; // Optional color property
   }
 
 }
@@ -308,6 +233,112 @@ export namespace V3StoreDataToHead {
 
   function _isDMessageV4(message: DMessage | ImportMessageV3): message is DMessage {
     return 'fragments' in message && Array.isArray(message.fragments);
+  }
+
+}
+
+
+export namespace DataAtRestV1 {
+
+
+  /// Rest V1 -> Head ///
+
+  /** Used by: AppLinkChat.fetchStoredChatV1, trade_client.loadSingleChatFromAtRestV1 */
+  export function recreateConversation(chatJV1: RestChatJsonV1 & { tokenCount?: number }): DConversation | null {
+
+    // sanity check
+    if (!chatJV1 || !chatJV1.id || !chatJV1.messages) {
+      console.warn('createDConversationFromJsonV1: invalid conversation json', chatJV1);
+      return null;
+    }
+
+    // RestChatJsonV1 could be EITHER a V3 or V4/Head message - uncomment below to see little difference
+    // const sentinel1: RestChatJsonV1 = {} as DConversation;
+    // const sentinel1: DConversation = {} as RestChatJsonV1;
+    // TODO: probably better to fork off the saving already, so imports are only V3's
+
+    // heuristic to find out if we're dealing with a V3 or V4 message
+    // const v3Count = chatJV1.messages.filter((m) => 'text' in m).length;
+    // const v4Count = chatJV1.messages.filter((m) => 'fragments' in m).length;
+    // if (v3Count > v4Count) {
+    //   we are dealing with a V3 message
+    //  ...
+    // }
+
+    return V3StoreDataToHead.recreateConversation(chatJV1);
+  }
+
+  /** Used by: trade_client.loadConversationsFromAtRestV1 */
+  export function recreateFolders(part: RestFolderJsonV1[]): DFolder[] {
+    return (part || []).map(_recreateFolder).filter((f) => f) as DFolder[];
+  }
+
+  function _recreateFolder(part: RestFolderJsonV1): DFolder | null {
+
+    // sanity check
+    if (!part || !part.id || !part.title || !part.conversationIds) {
+      console.warn('createFolderFromJsonV1: invalid folder json', part);
+      return null;
+    }
+
+    return {
+      id: part.id,
+      title: part.title,
+      conversationIds: part.conversationIds,
+      color: part.color,
+    };
+  }
+
+
+  /// Head -> Rest V1 ///
+
+  /** Used by: downloadAllJsonV1B */
+  export function formatAllToJsonV1B(conversations: DConversation[], modelSources: DModelsService[], folders: DFolder[], enableFolders: boolean): RestAllJsonV1B {
+    return {
+      conversations: (conversations || []).map(formatChatToJsonV1),
+      models: { sources: modelSources },
+      folders: { folders, enableFolders },
+    };
+  }
+
+  /** Used by: ^, downloadSingleChat, ChatLinkExport.handleCreate */
+  export function formatChatToJsonV1(ec: DConversation): RestChatJsonV1 {
+    return {
+      id: ec.id,
+      messages: ec.messages,
+      systemPurposeId: ec.systemPurposeId,
+      userTitle: ec.userTitle,
+      autoTitle: ec.autoTitle,
+      created: ec.created,
+      updated: ec.updated,
+    };
+  }
+
+
+  /// STORED TYPES definitions ///
+  /// do not change(!) these - consider people's backups and stored data
+
+  export type RestAllJsonV1B = {
+    conversations: RestChatJsonV1[];
+    models: { sources: DModelsService[] };
+    folders?: { folders: RestFolderJsonV1[]; enableFolders: boolean };
+  }
+
+  export type RestChatJsonV1 = {
+    id: string;
+    messages: (DMessage | V3StoreDataToHead.ImportMessageV3)[];
+    systemPurposeId: string;
+    userTitle?: string;
+    autoTitle?: string;
+    created: number;
+    updated: number | null;
+  }
+
+  type RestFolderJsonV1 = {
+    id: string;
+    title: string;
+    conversationIds: DConversationId[];
+    color?: string; // Optional color property
   }
 
 }

@@ -17,7 +17,7 @@ import VerticalSplitOutlinedIcon from '@mui/icons-material/VerticalSplitOutlined
 import { devMode_AixLastDispatchRequest } from '~/modules/aix/client/ContentReassembler';
 
 import type { DConversationId } from '~/common/stores/chat/chat.conversation';
-import { GoodModal } from '~/common/components/GoodModal';
+import { GoodModal } from '~/common/components/modals/GoodModal';
 import { optimaCloseAppMenu } from '~/common/layout/optima/useOptima';
 import { useLabsDevMode } from '~/common/state/store-ux-labs';
 
@@ -36,7 +36,7 @@ export function ChatAppMenuItems(props: {
   disableItems: boolean,
   hasConversations: boolean,
   isMessageSelectionMode: boolean,
-  onConversationBranch: (conversationId: DConversationId, messageId: string | null) => void,
+  onConversationBranch: (conversationId: DConversationId, messageId: string | null, addSplitPane: boolean) => void,
   onConversationClear: (conversationId: DConversationId) => void,
   onConversationFlatten: (conversationId: DConversationId) => void,
   // onConversationNew: (forceNoRecycle: boolean) => void,
@@ -80,7 +80,7 @@ export function ChatAppMenuItems(props: {
 
   const handleConversationBranch = (event: React.MouseEvent<HTMLDivElement>) => {
     closeMenu(event);
-    props.conversationId && props.onConversationBranch(props.conversationId, null);
+    props.conversationId && props.onConversationBranch(props.conversationId, null, true);
   };
 
   const handleConversationFlatten = (event: React.MouseEvent<HTMLElement>) => {
@@ -107,12 +107,15 @@ export function ChatAppMenuItems(props: {
         dividers
         onClose={() => setDevModeDialog(null)}
         title='Aix: Last Dispach Request Body'
-        sx={{ minWidth: '80vw', maxWidth: undefined, overflow: 'auto' }}
+        sx={{ minWidth: '80vw', maxWidth: undefined, overflow: 'hidden' }}
       >
         {devMode_AixLastDispatchRequest ? (
           <Box sx={{
+            m: 'calc(-1 * var(--Card-padding))',
+            p: 'calc(0.5 * var(--Card-padding))',
             fontSize: 'sm',
             display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 2, rowGap: 1,
+            overflow: 'auto',
           }}>
             <div>Url</div>
             <div style={{ whiteSpace: 'break-spaces' }}>{devMode_AixLastDispatchRequest.url}</div>

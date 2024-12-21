@@ -4,7 +4,7 @@ import type { DConversationId } from '~/common/stores/chat/chat.conversation';
 import type { DMessage } from '~/common/stores/chat/chat.message';
 import { ConversationHandler } from '~/common/chat-overlay/ConversationHandler';
 import { ConversationsManager } from '~/common/chat-overlay/ConversationsManager';
-import { createTextContentFragment, isContentFragment, isTextPart } from '~/common/stores/chat/chat.fragments';
+import { createTextContentFragment, isTextContentFragment } from '~/common/stores/chat/chat.fragments';
 import { getConversationSystemPurposeId } from '~/common/stores/chat/store-chats';
 
 import type { ChatExecuteMode } from '../execute-mode/execute-mode.types';
@@ -55,7 +55,7 @@ export async function _handleExecute(chatExecuteMode: ChatExecuteMode, conversat
 
   // execute a command, if the last message has one
   if (lastMessage.role === 'user') {
-    const cmdRC = await _handleExecuteCommand(lastMessage.id, firstFragment, cHandler, chatLLMId);
+    const cmdRC = await _handleExecuteCommand(lastMessage.id, firstFragment, lastMessage, cHandler, chatLLMId);
     if (cmdRC !== RET_NO_CMD) return cmdRC;
   }
 
@@ -80,7 +80,7 @@ export async function _handleExecute(chatExecuteMode: ChatExecuteMode, conversat
 
     case 'generate-image':
       // verify we were called with a single DMessageTextContent
-      if (!isContentFragment(firstFragment) || !isTextPart(firstFragment.part))
+      if (!isTextContentFragment(firstFragment))
         return false;
       const imagePrompt = firstFragment.part.text;
       cHandler.messageFragmentReplace(lastMessage.id, firstFragment.fId, createTextContentFragment(textToDrawCommand(imagePrompt)), true);
@@ -88,11 +88,11 @@ export async function _handleExecute(chatExecuteMode: ChatExecuteMode, conversat
 
     case 'react-content':
       // verify we were called with a single DMessageTextContent
-      if (!isContentFragment(firstFragment) || !isTextPart(firstFragment.part))
+      if (!isTextContentFragment(firstFragment))
         return false;
       const reactPrompt = firstFragment.part.text;
       cHandler.messageFragmentReplace(lastMessage.id, firstFragment.fId, createTextContentFragment(textToDrawCommand(reactPrompt)), true);
-      return await runReActUpdatingState(cHandler, reactPrompt, chatLLMId);
+      return await runReActUpdatingState(cHandler, reactPrompt, chatLLMId, lastMessage.id);
 
     default:
       console.log('Chat execute: issue running', chatExecuteMode, conversationId, lastMessage);

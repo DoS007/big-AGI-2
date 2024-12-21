@@ -6,10 +6,10 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 
-import type { DChatGeneratePricing } from '~/common/stores/llms/llms.pricing';
+import type { DPricingChatGenerate } from '~/common/stores/llms/llms.pricing';
 import type { DLLMId } from '~/common/stores/llms/llms.types';
 import { FormLabelStart } from '~/common/components/forms/FormLabelStart';
-import { GoodModal } from '~/common/components/GoodModal';
+import { GoodModal } from '~/common/components/modals/GoodModal';
 import { llmsStoreActions } from '~/common/stores/llms/store-llms';
 import { useDefaultLLMIDs, useLLM } from '~/common/stores/llms/llms.hooks';
 
@@ -31,34 +31,46 @@ function VendorLLMOptionsComponent(props: { llmId: DLLMId }) {
 }
 
 
-function prettyPricingComponent(chatPricing: DChatGeneratePricing): React.ReactNode {
-  if (!chatPricing) return 'Pricing not available';
+function prettyPricingComponent(pricingChatGenerate: DPricingChatGenerate): React.ReactNode {
+  if (!pricingChatGenerate) return 'Pricing not available';
 
-  const formatPrice = (price: DChatGeneratePricing['input']): string => {
+  const formatPrice = (price: DPricingChatGenerate['input']): string => {
     if (!price) return 'N/A';
     if (price === 'free') return 'Free';
-    if (typeof price === 'number') return `$${price.toFixed(4)}`;
+    if (typeof price === 'number') return `$${price.toFixed(2)}`;
     if (Array.isArray(price))
-      return price.map(bp => `${bp.upTo === null ? '>' : '<='} ${bp.upTo} tokens: ${formatPrice(bp.price)}`).join(', ');
+      return price.map(bp => `${bp.upTo === null ? '>' : '<='} ${bp.upTo || ''} tokens: ${formatPrice(bp.price)}`).join(', ');
     return 'Unknown';
   };
 
-  const inputPrice = formatPrice(chatPricing.input);
-  const outputPrice = formatPrice(chatPricing.output);
+  const inputPrice = formatPrice(pricingChatGenerate.input);
+  const outputPrice = formatPrice(pricingChatGenerate.output);
 
   let cacheInfo = '';
-  if (chatPricing.cache) {
-    const { read, write, duration } = chatPricing.cache;
-    cacheInfo = `Cache: Read ${formatPrice(read)}, Write ${formatPrice(write)}, Duration: ${duration}s`;
+  if (pricingChatGenerate.cache) {
+    switch (pricingChatGenerate.cache.cType) {
+      case 'ant-bp': {
+        const { read, write, duration } = pricingChatGenerate.cache;
+        cacheInfo = `Cache: Read ${formatPrice(read)}, Write ${formatPrice(write)}, Duration: ${duration}s`;
+        break;
+      }
+      case 'oai-ac': {
+        const { read } = pricingChatGenerate.cache;
+        cacheInfo = `Cache: Read ${formatPrice(read)}`;
+        break;
+      }
+      default:
+        throw new Error('LLMOptionsModal: Unknown cache type');
+    }
   }
 
   return (
-    <Typography level='body-sm'>
-      <strong>Pricing ($/M tokens):</strong><br />
-      Input: {inputPrice}<br />
-      Output: {outputPrice}<br />
-      {cacheInfo && <>{cacheInfo}<br /></>}
-    </Typography>
+    <div>
+      <span>pricing ($/M tokens):</span><br />
+      &nbsp;- Input: {inputPrice}<br />
+      &nbsp;- Output: {outputPrice}<br />
+      {cacheInfo && <>&nbsp;- {cacheInfo}<br /></>}
+    </div>
   );
 }
 
@@ -70,15 +82,14 @@ export function LLMOptionsModal(props: { id: DLLMId, onClose: () => void }) {
 
   // external state
   const llm = useLLM(props.id);
-  const { chatLLMId, fastLLMId, funcLLMId } = useDefaultLLMIDs();
-  const { removeLLM, updateLLM, setChatLLMId, setFastLLMId, setFuncLLMId } = llmsStoreActions();
+  const { chatLLMId, fastLLMId } = useDefaultLLMIDs();
+  const { removeLLM, updateLLM, setChatLLMId, setFastLLMId } = llmsStoreActions();
 
   if (!llm)
     return <>Options issue: LLM not found for id {props.id}</>;
 
   const isChatLLM = chatLLMId === props.id;
   const isFastLLM = fastLLMId === props.id;
-  const isFuncLLM = funcLLMId === props.id;
 
   const handleLlmLabelSet = (event: React.ChangeEvent<HTMLInputElement>) => updateLLM(llm.id, { label: event.target.value || '' });
 
@@ -122,9 +133,6 @@ export function LLMOptionsModal(props: { id: DLLMId, onClose: () => void }) {
           <Tooltip title='Use this Model for "fast" features, such as Auto-Title, Summarize, etc.'>
             <Button variant={isFastLLM ? 'solid' : undefined} onClick={() => setFastLLMId(isFastLLM ? null : props.id)}>Fast</Button>
           </Tooltip>
-          <Tooltip title='Use this Model for "function calling" and other structured features, such as Auto-Chart, Auto-Follow-ups, etc.'>
-            <Button variant={isFuncLLM ? 'solid' : undefined} onClick={() => setFuncLLMId(isFuncLLM ? null : props.id)}>Func</Button>
-          </Tooltip>
         </ButtonGroup>
       </FormControl>
 
@@ -137,15 +145,9 @@ export function LLMOptionsModal(props: { id: DLLMId, onClose: () => void }) {
         </Tooltip>
       </FormControl>
 
-      {/*<FormControl orientation='horizontal' sx={{ flexWrap: 'wrap', alignItems: 'center' }}>*/}
-      {/* <FormLabelStart title='Flags' sx={{ minWidth: 80 }} /> >*/}
-      {/*  <Checkbox color='neutral' checked={llm.tags?.includes('chat')} readOnly disabled label='Chat' sx={{ ml: 4 }} />*/}
-      {/*  <Checkbox color='neutral' checked={llm.tags?.includes('stream')} readOnly disabled label='Stream' sx={{ ml: 4 }} />*/}
-      {/*</FormControl>*/}
-
       <FormControl orientation='horizontal' sx={{ flexWrap: 'nowrap' }}>
         <FormLabelStart title='Details' sx={{ minWidth: 80 }} onClick={() => setShowDetails(!showDetails)} />
-        {showDetails && <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {showDetails && <Box sx={{ display: 'flex', flexDirection: 'column', wordBreak: 'break-word', gap: 1 }}>
           {!!llm.description && <Typography level='body-sm'>
             {llm.description}
           </Typography>}

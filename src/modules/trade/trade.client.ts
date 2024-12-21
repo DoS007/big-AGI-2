@@ -1,17 +1,17 @@
 import { fileOpen, fileSave, FileWithHandle } from 'browser-fs-access';
 
 import { SystemPurposeId, SystemPurposes } from '../../data';
-import { prettyBaseModel } from '../../apps/chat/components/message/messageUtils';
 
 import { Brand } from '~/common/app.config';
 import { DataAtRestV1 } from '~/common/stores/chat/chats.converters';
 import { capitalizeFirstLetter } from '~/common/util/textUtils';
-import { conversationTitle, DConversation } from '~/common/stores/chat/chat.conversation';
+import { conversationTitle, DConversation, excludeSystemMessages } from '~/common/stores/chat/chat.conversation';
 import { llmsStoreState } from '~/common/stores/llms/store-llms';
 import { messageFragmentsReduceText } from '~/common/stores/chat/chat.message';
+import { prettyShortChatModelName } from '~/common/util/dMessageUtils';
 import { prettyTimestampForFilenames } from '~/common/util/timeUtils';
 import { useChatStore } from '~/common/stores/chat/store-chats';
-import { useFolderStore } from '~/common/state/store-folders';
+import { useFolderStore } from '~/common/stores/folders/store-chat-folders';
 
 import type { ImportedOutcome } from './ImportOutcomeModal';
 
@@ -19,28 +19,22 @@ import type { ImportedOutcome } from './ImportOutcomeModal';
 /// IMPORT ///
 
 /**
- * Open a file dialog and load all conversations from the selected JSON files
+ * Load conversations from the given Files (we don't need/use the handle here, as no LiveFile is involved in the import)
+ * @param files The files to import, if null the user may have cancelled the request
+ * @param preventClash If true, the importer will not overwrite existing conversations with the same ID
  */
-export async function openAndLoadConversations(preventClash: boolean = false): Promise<ImportedOutcome | null> {
+export async function importConversationsFromFilesAtRest(files: File[] | null, preventClash: boolean = false): Promise<ImportedOutcome> {
   const outcome: ImportedOutcome = { conversations: [], activateConversationId: null };
 
-  let blobs: FileWithHandle[];
-  try {
-    blobs = await fileOpen({
-      description: `${Brand.Title.Base} JSON Conversations`,
-      mimeTypes: ['application/json', 'application/big-agi'],
-      multiple: true,
-    });
-  } catch (error) {
-    // User closed the dialog
-    return null;
-  }
+  // user cancelled
+  if (!files)
+    return outcome;
 
   // unroll files to conversations
-  for (const blob of blobs) {
-    const fileName = blob.name || 'unknown file';
+  for (const file of files) {
+    const fileName = file.name || 'unknown file';
     try {
-      const fileString = await blob.text();
+      const fileString = await file.text();
       const fileObject = JSON.parse(fileString);
       loadConversationsFromAtRestV1(fileName, fileObject, outcome);
     } catch (error: any) {
@@ -63,6 +57,23 @@ export async function openAndLoadConversations(preventClash: boolean = false): P
   }
 
   return outcome;
+}
+
+/**
+ * Show a file picker dialog, then return the selected files
+ * - this chains well with `importConversationsFromFilesAtRest`
+ */
+export async function openConversationsAtRestPicker(): Promise<FileWithHandle[] | null> {
+  try {
+    return await fileOpen({
+      description: `${Brand.Title.Base} JSON Conversations`,
+      mimeTypes: ['application/json', 'application/big-agi'],
+      multiple: true,
+    });
+  } catch (error) {
+    // User closed the dialog
+    return null;
+  }
 }
 
 
@@ -182,7 +193,7 @@ export function conversationToMarkdown(conversation: DConversation, hideSystemMe
   const mdTitle = exportTitle
     ? `# ${capitalizeFirstLetter(conversationTitle(conversation, Brand.Title.Common + ' Chat'))}\nA ${Brand.Title.Common} conversation, updated on ${(new Date(conversation.updated || conversation.created)).toLocaleString()}.\n\n`
     : '';
-  return mdTitle + conversation.messages.filter(message => !hideSystemMessage || message.role !== 'system').map(message => {
+  return mdTitle + excludeSystemMessages(conversation.messages, !hideSystemMessage).map(message => {
     let senderName: string = message.role === 'user' ? 'You' : 'Bot'; // from role
     let text = messageFragmentsReduceText(message.fragments);
     switch (message.role) {
@@ -192,7 +203,7 @@ export function conversationToMarkdown(conversation: DConversation, hideSystemMe
         break;
       case 'assistant':
         const purpose = message.purposeId || conversation.systemPurposeId || null;
-        senderName = `${purpose || 'Assistant'} · *${prettyBaseModel(message.generator?.name || '')}*`.trim();
+        senderName = `${purpose || 'Assistant'} · *${prettyShortChatModelName(message.generator?.name || '')}*`.trim();
         if (purpose && purpose in SystemPurposes)
           senderName = `${SystemPurposes[purpose as SystemPurposeId]?.symbol || ''} ${senderName}`.trim();
         break;

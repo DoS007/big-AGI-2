@@ -1,9 +1,9 @@
-import { finishChatGenerateTokenMetrics, pendChatGenerateTokenMetrics } from '~/common/stores/metrics/metrics.chatgenerate';
+import { metricsFinishChatGenerateLg, metricsPendChatGenerateLg } from '~/common/stores/metrics/metrics.chatgenerate';
 import { create_CodeExecutionInvocation_ContentFragment, create_CodeExecutionResponse_ContentFragment, create_FunctionCallInvocation_ContentFragment, createErrorContentFragment, createTextContentFragment, isTextPart } from '~/common/stores/chat/chat.fragments';
 
 import type { AixWire_Particles } from '../server/api/aix.wiretypes';
 
-import { Aix_LL_GenerateContentAccumulator, DEBUG_PARTICLES } from './aix.client';
+import { AixChatGenerateContent_LL, DEBUG_PARTICLES } from './aix.client';
 
 
 // configuration
@@ -21,7 +21,7 @@ export class ContentReassembler {
 
   private currentTextFragmentIndex: number | null = null;
 
-  constructor(readonly accumulator: Aix_LL_GenerateContentAccumulator) {
+  constructor(readonly accumulator: AixChatGenerateContent_LL) {
     // [DEV} nullify the global
     devMode_AixLastDispatchRequest = null;
   }
@@ -31,7 +31,7 @@ export class ContentReassembler {
   //   this.currentTextFragmentIndex = null;
   // }
 
-  reassembleParticle(op: AixWire_Particles.ChatGenerateOp): void {
+  reassembleParticle(op: AixWire_Particles.ChatGenerateOp, debugIsAborted: boolean): void {
     if (DEBUG_PARTICLES)
       console.log('-> aix.p:', op);
     let isDebug = false;
@@ -92,27 +92,27 @@ export class ContentReassembler {
 
     // [DEV] Debugging
     if (!isDebug && devMode_AixLastDispatchRequest?.particles)
-      devMode_AixLastDispatchRequest.particles.push(JSON.stringify(op));
+      devMode_AixLastDispatchRequest.particles.push((debugIsAborted ? '!(A)! ' : '') + JSON.stringify(op));
   }
 
-  reassembleExceptError(errorAsText: string): void {
+  reassembleClientAbort(): void {
+    if (DEBUG_PARTICLES)
+      console.log('-> aix.p: abort-client');
+    this.reassembleParticle({ cg: 'end', reason: 'abort-client', tokenStopReason: 'client-abort-signal' }, true);
+  }
+
+  reassembleClientException(errorAsText: string): void {
     if (DEBUG_PARTICLES)
       console.log('-> aix.p: issue:', errorAsText);
     this.onCGIssue({ cg: 'issue', issueId: 'client-read', issueText: errorAsText });
-    this.reassembleParticle({ cg: 'end', reason: 'issue-rpc', tokenStopReason: 'cg-issue' });
-  }
-
-  reassembleExceptUserAbort(): void {
-    if (DEBUG_PARTICLES)
-      console.log('-> aix.p: abort-client');
-    this.reassembleParticle({ cg: 'end', reason: 'abort-client', tokenStopReason: 'client-abort-signal' });
+    this.reassembleParticle({ cg: 'end', reason: 'issue-rpc', tokenStopReason: 'cg-issue' }, false);
   }
 
   reassembleFinalize(): void {
 
     // Perform all the latest operations
     const hasAborted = !!this.accumulator.genTokenStopReason;
-    finishChatGenerateTokenMetrics(this.accumulator.genMetricsLg, hasAborted);
+    metricsFinishChatGenerateLg(this.accumulator.genMetricsLg, hasAborted);
 
   }
 
@@ -143,7 +143,7 @@ export class ContentReassembler {
     const fragment = create_FunctionCallInvocation_ContentFragment(
       fci.id,
       fci.name,
-      fci.i_args || null,
+      fci.i_args || '', // if i_args is undefined, use an empty string, which means 'no args' in DParticle/AixTools (for now at least)
     );
     // TODO: add _description from the Spec
     // TODO: add _args_schema from the Spec
@@ -232,8 +232,9 @@ export class ContentReassembler {
   }
 
   private onMetrics({ metrics }: Extract<AixWire_Particles.ChatGenerateOp, { cg: 'set-metrics' }>): void {
+    // type check point for AixWire_Particles.CGSelectMetrics -> DMetricsChatGenerate_Lg
     this.accumulator.genMetricsLg = metrics;
-    pendChatGenerateTokenMetrics(this.accumulator.genMetricsLg);
+    metricsPendChatGenerateLg(this.accumulator.genMetricsLg);
   }
 
   private onModelName({ name }: Extract<AixWire_Particles.ChatGenerateOp, { cg: 'set-model' }>): void {

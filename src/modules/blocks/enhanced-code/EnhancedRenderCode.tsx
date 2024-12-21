@@ -34,19 +34,27 @@ export function EnhancedRenderCode(props: {
   language?: string,
   color?: ColorPaletteProp;
   contentScaling: ContentScaling;
+  initialIsCollapsed: boolean;
 
   // onLiveFileCreate?: () => void,
+  onReplaceInCode?: (search: string, replace: string) => boolean;
 }) {
 
   // state
   const [contextMenuAnchor, setContextMenuAnchor] = React.useState<HTMLElement | null>(null);
-  const [isCodeCollapsed, setIsCodeCollapsed] = React.useState(false);
+  const [isCodeCollapsed, setIsCodeCollapsed] = React.useState(props.initialIsCollapsed);
 
   // LiveFile - patch state
   const { button: liveFileButton, actionBar: liveFileActionBar } = useLiveFilePatch(
     props.title, props.code, props.isPartial,
     props.isMobile,
   );
+
+
+  // React to changes in the collapsed state. Note that by default, nothing is collapsed
+  React.useEffect(() => {
+    setIsCodeCollapsed(props.initialIsCollapsed);
+  }, [props.initialIsCollapsed]);
 
 
   // handlers
@@ -81,16 +89,20 @@ export function EnhancedRenderCode(props: {
       {/* This is what we have */}
       <div><strong>Code Block</strong></div>
       <div></div>
+      <div>{props.isPartial ? 'Partial ' : 'Complete'}</div>
+      <div></div>
       <div>Title</div>
       <div>{props.title || '(empty)'}</div>
+      <div>Version</div>
+      <div>{/* TODO props.version ||*/ '(none)'}</div>
       {/*<div>Language</div>*/}
       {/*<div>{props.language}</div>*/}
       <div>Code Lines</div>
       <div>{props.code.split('\n').length} lines</div>
-      <div>Code Length</div>
-      <div>{props.code.length} characters</div>
-      <div>semiStableId</div>
-      <div>{props.semiStableId || '(none)'}</div>
+      <div>Characters</div>
+      <div>{props.code.length}</div>
+      <div>tempId</div>
+      <div><small>{props.semiStableId || '(none)'}</small></div>
       {/* This is what attachments carry */}
       {/*<div>Attachment Title</div>*/}
       {/*<div>{fragment.title}</div>*/}
@@ -105,41 +117,44 @@ export function EnhancedRenderCode(props: {
       {/*<div>Text Buffer Id</div>*/}
       {/*<div>{fragmentId}</div>*/}
     </Box>
-  ), [props.code, props.semiStableId, props.title]);
+  ), [props.code, props.isPartial, props.semiStableId, props.title]);
 
-  const headerRow = React.useMemo(() => <>
-    {/* Icon and Title */}
-    <TooltipOutlined placement='top-start' color='neutral' title={headerTooltipContents}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <CodeIcon
-          aria-hidden
-          onClick={handleToggleCodeCollapse}
-          sx={{
-            transform: isCodeCollapsed ? 'rotate(-90deg)' : 'none',
-            transition: 'transform 0.2s cubic-bezier(.17,.84,.44,1)',
-            cursor: 'pointer',
-          }}
-        />
-        <Typography level='title-sm'>
-          {props.title || 'Code'}
-        </Typography>
-      </Box>
-    </TooltipOutlined>
+  const headerRow = React.useMemo(() => {
+    const Icon = CodeIcon;
+    return <>
+      {/* Icon and Title */}
+      <TooltipOutlined placement='top-start' color='neutral' title={headerTooltipContents}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Icon
+            aria-hidden
+            onClick={handleToggleCodeCollapse}
+            sx={{
+              transform: isCodeCollapsed ? 'rotate(-90deg)' : 'none',
+              transition: 'transform 0.2s cubic-bezier(.17,.84,.44,1)',
+              cursor: 'pointer',
+            }}
+          />
+          <Typography level={'title-sm'}>
+            {props.title || 'Code'}
+          </Typography>
+        </Box>
+      </TooltipOutlined>
 
-    {/* LiveFile - Select */}
-    {liveFileButton}
+      {/* LiveFile - Select */}
+      {liveFileButton}
 
-    {/* Menu Options button */}
-    <IconButton
-      size='sm'
-      onClick={handleToggleContextMenu}
-      onContextMenu={handleToggleContextMenu}
-      sx={{ mr: -0.5 }}
-    >
-      <MoreVertIcon />
-    </IconButton>
+      {/* Menu Options button */}
+      <IconButton
+        size='sm'
+        onClick={handleToggleContextMenu}
+        onContextMenu={handleToggleContextMenu}
+        sx={{ mr: -0.5 }}
+      >
+        <MoreVertIcon />
+      </IconButton>
 
-  </>, [handleToggleCodeCollapse, handleToggleContextMenu, headerTooltipContents, isCodeCollapsed, liveFileButton, props.title]);
+    </>;
+  }, [handleToggleCodeCollapse, handleToggleContextMenu, headerTooltipContents, isCodeCollapsed, liveFileButton, props.title]);
 
   // const toolbarRow = React.useMemo(() => <>
   //   {props.onLiveFileCreate && (
@@ -178,7 +193,7 @@ export function EnhancedRenderCode(props: {
       headerRow={headerRow}
       subHeaderInline={liveFileActionBar}
       onHeaderClick={/*props.isMobile ? handleToggleCodeCollapse :*/ undefined}
-      onHeaderContext={handleToggleContextMenu}
+      // onHeaderContext={handleToggleContextMenu} // disabled because ERC got larger, and this will intercept it all
     >
 
       {/* Body of the message (it's a RenderCode with patched sx, for looks) */}
@@ -190,6 +205,7 @@ export function EnhancedRenderCode(props: {
           initialShowHTML={props.initialShowHTML}
           noCopyButton={props.noCopyButton}
           optimizeLightweight={props.optimizeLightweight}
+          onReplaceInCode={props.onReplaceInCode}
           sx={patchCodeSx}
         />
       </ExpanderControlledBox>

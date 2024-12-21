@@ -1,5 +1,5 @@
 import { safeErrorString } from '~/server/wire';
-import { serverSideId } from '~/server/api/trpc.nanoid';
+import { serverSideId } from '~/server/trpc/trpc.nanoid';
 
 import type { AixWire_Particles } from '../../../api/aix.wiretypes';
 import type { ChatGenerateParseFunction } from '../chatGenerate.dispatch';
@@ -62,6 +62,11 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
     // Throws on malformed event data
     // ```Can you extend the Zod chunk response object parsing (all optional) to include the missing data? The following is an exampel of the object I received:```
     const chunkData = JSON.parse(eventData); // this is here just for ease of breakpoint, otherwise it could be inlined
+
+    // [OpenRouter] transmits upstream errors pre-parsing (object wouldn't be valid)
+    if (_forwardOpenRouterDataError(chunkData, pt))
+      return;
+
     const json = OpenAIWire_API_Chat_Completions.ChunkResponse_schema.parse(chunkData);
 
     // -> Model
@@ -88,18 +93,9 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
 
     // -> Stats
     if (json.usage) {
-      if (json.usage.completion_tokens !== undefined) {
-        const metricsUpdate: AixWire_Particles.CGSelectMetrics = {
-          TIn: json.usage.prompt_tokens || -1,
-          TOut: json.usage.completion_tokens,
-          // dtInner: openAI is not reporting the time as seen by the servers
-          dtAll: Date.now() - parserCreationTimestamp,
-        };
-        if (timeToFirstEvent !== undefined)
-          metricsUpdate.dtStart = timeToFirstEvent;
-        pt.updateMetrics(metricsUpdate);
-      }
-
+      const metrics = _fromOpenAIUsage(json.usage, parserCreationTimestamp, timeToFirstEvent);
+      if (metrics)
+        pt.updateMetrics(metrics);
       // [OpenAI] Expected correct case: the last object has usage, but an empty choices array
       if (!json.choices.length)
         return;
@@ -211,15 +207,10 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
     // Throws on malformed event data
     const completeData = JSON.parse(eventData);
 
-    // [OpenRouter] transmits upstream errors as a single field here
-    // Note: we perform pre-decoding as the parser will throw on error
-    if (completeData.error) {
-      // An upstream error will be transmitted as text (throw to transmit as 'error')
-      if ('message' in completeData.error && 'code' in completeData.error)
-        return pt.setDialectTerminatingIssue(completeData.error.message, IssueSymbols.Generic);
-      else
-        console.log('AIX: OpenAI-dispatch-NS error:', completeData.error);
-    }
+    // [OpenRouter] transmits upstream errors pre-parsing (object wouldn't be valid)
+    if (_forwardOpenRouterDataError(completeData, pt))
+      return;
+
     // [OpenAI] we don't know yet if warning messages are sent in non-streaming - for now we log
     if (completeData.warning)
       console.log('AIX: OpenAI-dispatch-NS warning:', completeData.warning);
@@ -232,15 +223,11 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
       pt.setModelName(json.model);
 
     // -> Stats
-    if (json.usage)
-      pt.updateMetrics({
-        TIn: json.usage.prompt_tokens,
-        TOut: json.usage.completion_tokens,
-        // vTOutInner: ...   // we don't have the inner time to compute this
-        // dtStart: ... // not meaningful for non-streaming
-        // dtInner: ... // not measured/reportd by OpenAI
-        dtAll: Date.now() - parserCreationTimestamp,
-      });
+    if (json.usage) {
+      const metrics = _fromOpenAIUsage(json.usage, parserCreationTimestamp, undefined);
+      if (metrics)
+        pt.updateMetrics(metrics);
+    }
 
     // Assumption/validate: expect 1 completion, or stop
     if (json.choices.length !== 1)
@@ -317,4 +304,87 @@ function _fromOpenAIFinishReason(finish_reason: string | null | undefined) {
   // Developers: show more finish reasons (not under flag for now, so we can add to the supported set)
   console.log('AIX: OpenAI-dispatch unexpected finish_reason:', finish_reason);
   return null;
+}
+
+function _fromOpenAIUsage(usage: OpenAIWire_API_Chat_Completions.Response['usage'], parserCreationTimestamp: number, timeToFirstEvent: number | undefined) {
+
+  // -> Stats only in some packages
+  if (!usage)
+    return undefined;
+
+  // Require at least the completion tokens, or issue a DEV warning otherwise
+  if (!usage.completion_tokens) {
+    // Warn, so we may adjust this usage parsing for Non-OpenAI APIs
+    console.log('[DEV] AIX: OpenAI-dispatch missing completion tokens in usage', { usage });
+    return undefined;
+  }
+
+  // Create the metrics update object
+  const metricsUpdate: AixWire_Particles.CGSelectMetrics = {
+    TIn: usage.prompt_tokens ?? undefined,
+    TOut: usage.completion_tokens,
+    // dtInner: openAI is not reporting the time as seen by the servers
+    dtAll: Date.now() - parserCreationTimestamp,
+  };
+
+  // Input Metrics
+
+  // Input redistribution: Cache Read
+  if (usage.prompt_tokens_details !== undefined) {
+    const TCacheRead = usage.prompt_tokens_details.cached_tokens;
+    if (TCacheRead !== undefined && TCacheRead > 0) {
+      metricsUpdate.TCacheRead = TCacheRead;
+      if (metricsUpdate.TIn !== undefined)
+        metricsUpdate.TIn -= TCacheRead;
+    }
+  }
+
+  // TODO Input redistribution: Audio tokens
+
+  // Output Metrics
+
+  // Output breakdown: Reasoning
+  if (usage.completion_tokens_details?.reasoning_tokens !== undefined)
+    metricsUpdate.TOutR = usage.completion_tokens_details.reasoning_tokens;
+
+  // TODO: Output breakdown: Audio
+
+  // Time Metrics
+
+  if (timeToFirstEvent !== undefined)
+    metricsUpdate.dtStart = timeToFirstEvent;
+
+  return metricsUpdate;
+}
+
+/**
+ * If there's an error in the pre-decoded message, push it down to the particle transmitter.
+ */
+function _forwardOpenRouterDataError(parsedData: any, pt: IParticleTransmitter) {
+
+  // operate on .error
+  if (!parsedData || !parsedData.error) return false;
+  const { error } = parsedData;
+
+  // require .message/.code to consider this a valid error object
+  if (!(typeof error === 'object') || !('message' in error) || !('code' in error)) {
+    console.log('AIX: OpenAI-dispatch ignored error:', { error });
+    return false;
+  }
+
+  // prepare the text message
+  let errorMessage = safeErrorString(error) || 'unknown.';
+
+  // [OpenRouter] we may have a more specific error message inside the 'metadata' field
+  if ('metadata' in error && typeof error.metadata === 'object') {
+    const { metadata } = error;
+    if ('provider_name' in metadata && 'raw' in metadata)
+      errorMessage += ` -- cause: ${safeErrorString(metadata.provider_name)} error: ${safeErrorString(metadata.raw)}`;
+    else
+      errorMessage += ` -- cause: ${safeErrorString(metadata)}`;
+  }
+
+  // Transmit the error as text - note: throw if you want to transmit as 'error'
+  pt.setDialectTerminatingIssue(errorMessage, IssueSymbols.Generic);
+  return true;
 }

@@ -1,8 +1,9 @@
-import { useStoreWithEqualityFn } from 'zustand/traditional';
+import * as React from 'react';
 
-import type { DFolder } from '~/common/state/store-folders';
+import type { DFolder } from '~/common/stores/folders/store-chat-folders';
 import { DMessage, DMessageUserFlag, MESSAGE_FLAG_STARRED, messageFragmentsReduceText, messageHasUserFlag, messageUserFlagToEmoji } from '~/common/stores/chat/chat.message';
 import { conversationTitle, DConversationId } from '~/common/stores/chat/chat.conversation';
+import { getLocalMidnightInUTCTimestamp, getTimeBucketEn } from '~/common/util/timeUtils';
 import { isAttachmentFragment, isContentOrAttachmentFragment, isDocPart, isImageRefPart } from '~/common/stores/chat/chat.fragments';
 import { shallowEquals } from '~/common/util/hooks/useShallowObject';
 import { useChatStore } from '~/common/stores/chat/store-chats';
@@ -14,9 +15,14 @@ import type { ChatNavigationItemData } from './ChatDrawerItem';
 const SEARCH_MIN_CHARS = 3;
 
 
-export type ChatNavGrouping = false | 'date' | 'persona' | 'dimension';
-
-export type ChatSearchSorting = 'frequency' | 'date';
+interface ChatDrawerRenderItems {
+  renderNavItems: (ChatNavigationItemData | ChatNavigationGroupData | ChatNavigationInfoMessage)[];
+  filteredChatIDs: DConversationId[];
+  filteredChatsCount: number;
+  filteredChatsAreEmpty: boolean;
+  filteredChatsBarBasis: number;
+  filteredChatsIncludeActive: boolean;
+}
 
 interface ChatNavigationGroupData {
   type: 'nav-item-group',
@@ -28,48 +34,33 @@ interface ChatNavigationInfoMessage {
   message: string,
 }
 
-type ChatRenderItemData = ChatNavigationItemData | ChatNavigationGroupData | ChatNavigationInfoMessage;
+export type ChatNavGrouping = false | 'date' | 'persona' | 'dimension';
 
+export type ChatSearchSorting = 'frequency' | 'date';
+
+export type ChatSearchDepth = 'titles' | 'content' | 'attachments';
+
+
+function messageHasDocAttachmentFragments(message: DMessage): boolean {
+  return message.fragments.some(fragment => isAttachmentFragment(fragment) && isDocPart(fragment.part));
+}
+
+function messageHasImageFragments(message: DMessage): boolean {
+  return message.fragments.some(fragment => isContentOrAttachmentFragment(fragment) && isImageRefPart(fragment.part) /*&& fragment.part.dataRef.reftype === 'dblob'*/);
+}
+
+function messageHasStarredFragments(message: DMessage): boolean {
+  return messageHasUserFlag(message, MESSAGE_FLAG_STARRED);
+}
 
 // Returns a string with the pane indices where the conversation is also open, or false if it's not
-function findOpenInViewNumbers(chatPanesConversationIds: DConversationId[], ourId: DConversationId): string | false {
+function findOpenInViewIndices(chatPanesConversationIds: DConversationId[], ourId: DConversationId): string | false {
   if (chatPanesConversationIds.length <= 1) return false;
   return chatPanesConversationIds.reduce((acc: string[], id, idx) => {
     if (id === ourId)
       acc.push((idx + 1).toString());
     return acc;
   }, []).join(', ') || false;
-}
-
-function getNextMidnightTime(): number {
-  const midnight = new Date();
-  // midnight.setDate(midnight.getDate() - 1);
-  midnight.setHours(24, 0, 0, 0);
-  return midnight.getTime();
-}
-
-function getTimeBucketEn(currentTime: number, midnightTime: number): string {
-  const oneDay = 24 * 60 * 60 * 1000;
-  const oneWeek = oneDay * 7;
-  const oneMonth = oneDay * 30; // approximation
-
-  const diff = midnightTime - currentTime;
-
-  if (diff < oneDay) {
-    return 'Today';
-  } else if (diff < oneDay * 2) {
-    return 'Yesterday';
-  } else if (diff < oneWeek) {
-    return 'This Week';
-  } else if (diff < oneWeek * 2) {
-    return 'Last Week';
-  } else if (diff < oneMonth) {
-    return 'This Month';
-  } else if (diff < oneMonth * 2) {
-    return 'Last Month';
-  } else {
-    return 'Older';
-  }
 }
 
 export function isDrawerSearching(filterByQuery: string): { isSearching: boolean, lcTextQuery: string } {
@@ -97,56 +88,60 @@ export function useChatDrawerRenderItems(
   grouping: ChatNavGrouping,
   searchSorting: ChatSearchSorting,
   showRelativeSize: boolean,
-): {
-  renderNavItems: ChatRenderItemData[],
-  filteredChatIDs: DConversationId[],
-  filteredChatsCount: number,
-  filteredChatsAreEmpty: boolean,
-  filteredChatsBarBasis: number,
-  filteredChatsIncludeActive: boolean,
-} {
-  return useStoreWithEqualityFn(useChatStore, ({ conversations }) => {
+  searchDepth: ChatSearchDepth,
+): ChatDrawerRenderItems {
+
+  const stabilizeRenderItems = React.useRef<ChatDrawerRenderItems>();
+
+  return useChatStore(({ conversations }) => {
 
       // filter 1: select all conversations or just the ones in the active folder
-      const selectedConversations = !activeFolder ? conversations : conversations.filter(_c => activeFolder.conversationIds.includes(_c.id));
+      const conversationsInFolder = !activeFolder ? conversations
+        : conversations.filter(_c => activeFolder.conversationIds.includes(_c.id));
 
       // filter 2: preparation: lowercase the query
       const { isSearching, lcTextQuery } = isDrawerSearching(filterByQuery);
 
-      function messageHasDocAttachmentFragments(message: DMessage): boolean {
-        return message.fragments.some(fragment => isAttachmentFragment(fragment) && isDocPart(fragment.part));
-      }
-
-      function messageHasImageFragments(message: DMessage): boolean {
-        return message.fragments.some(fragment => isContentOrAttachmentFragment(fragment) && isImageRefPart(fragment.part) /*&& fragment.part.dataRef.reftype === 'dblob'*/);
-      }
-
       // transform (the conversations into ChatNavigationItemData) + filter2 (if searching)
-      const chatNavItems = selectedConversations
-        .filter(_c => !filterHasStars || _c.messages.some(m => messageHasUserFlag(m, MESSAGE_FLAG_STARRED)))
-        .filter(_c => !filterHasImageAssets || _c.messages.some(messageHasImageFragments))
-        .filter(_c => !filterHasDocFragments || _c.messages.some(messageHasDocAttachmentFragments))
-        .map((_c): ChatNavigationItemData => {
+      const chatNavItems = conversationsInFolder
+        .map((_c): ChatNavigationItemData | null => {
+
+          // optimized reduction to find stars/images/docs/and lowercased text for search
+          const messageCount = _c.messages.length;
+          const messageFlags = new Set<DMessageUserFlag>();
+          let lcMessageSearchText = '';
+          let hasStars = false, hasImages = false, hasDocs = false;
+          for (const _m of _c.messages) {
+            _m.userFlags?.forEach(flag => messageFlags.add(flag));
+            if (isSearching && searchDepth !== 'titles') {
+              const messageText = messageFragmentsReduceText(_m.fragments, '\n', searchDepth !== 'attachments');
+              if (messageText) lcMessageSearchText += messageText.toLowerCase() + '\n';
+            }
+            if (!hasStars && messageHasStarredFragments(_m)) hasStars = true;
+            if (!hasImages && messageHasImageFragments(_m)) hasImages = true;
+            if (!hasDocs && messageHasDocAttachmentFragments(_m)) hasDocs = true;
+          }
+
+          // filter for required attributes
+          if ((filterHasStars && !hasStars) || (filterHasImageAssets && !hasImages) || (filterHasDocFragments && !hasDocs))
+            return null;
+
           // rich properties
           const title = conversationTitle(_c);
-          const isAlsoOpen = findOpenInViewNumbers(chatPanesConversationIds, _c.id);
+          const isAlsoOpen = findOpenInViewIndices(chatPanesConversationIds, _c.id);
 
           // set the frequency counters if filtering is enabled
           let searchFrequency: number = 0;
           if (isSearching) {
             const titleFrequency = title.toLowerCase().split(lcTextQuery).length - 1;
-            const messageFrequency = _c.messages.reduce((count, message) => {
-              return count + messageFragmentsReduceText(message.fragments).toLowerCase().split(lcTextQuery).length - 1;
-            }, 0);
+            const messageFrequency = lcMessageSearchText.split(lcTextQuery).length - 1;
             searchFrequency = titleFrequency + messageFrequency;
+            if (searchFrequency === 0) return null;
           }
 
           // union of message flags -> emoji string
-          const allFlags = new Set<DMessageUserFlag>();
-          _c.messages.forEach(_m => _m.userFlags?.forEach(flag => allFlags.add(flag)));
-          const userFlagsSummary = !allFlags.size ? undefined : Array.from(allFlags).map(messageUserFlagToEmoji).join('');
-          const containsDocAttachments = filterHasDocFragments || _c.messages.some(messageHasDocAttachmentFragments);
-          const containsImageAssets = filterHasImageAssets || _c.messages.some(messageHasImageFragments);
+          const userFlagsUnique = !messageFlags.size ? undefined
+            : Array.from(messageFlags).map(messageUserFlagToEmoji).join('');
 
           // create the ChatNavigationData
           return {
@@ -154,25 +149,26 @@ export function useChatDrawerRenderItems(
             conversationId: _c.id,
             isActive: _c.id === activeConversationId,
             isAlsoOpen,
-            isEmpty: !_c.messages.length && !_c.userTitle,
+            isIncognito: !!_c._isIncognito,
+            isEmpty: !messageCount && !_c.userTitle,
             title,
             userSymbol: _c.userSymbol || undefined,
-            userFlagsSummary,
-            containsDocAttachments: containsDocAttachments && filterHasDocFragments, // special case: only show this icon when filtering - too many icons otherwise
-            containsImageAssets,
+            userFlagsSummary: userFlagsUnique,
+            containsDocAttachments: hasDocs && filterHasDocFragments, // special case: only show this icon when filtering - too many icons otherwise
+            containsImageAssets: hasImages,
             folder: !allFolders.length
               ? undefined                             // don't show folder select if folders are disabled
               : _c.id === activeConversationId        // only show the folder for active conversation(s)
                 ? allFolders.find(folder => folder.conversationIds.includes(_c.id)) ?? null
                 : null,
             updatedAt: _c.updated || _c.created || 0,
-            messageCount: _c.messages.length,
+            messageCount,
             beingGenerated: !!_c._abortController, // FIXME: when the AbortController is moved at the message level, derive the state in the conv
             systemPurposeId: _c.systemPurposeId,
             searchFrequency,
           };
         })
-        .filter(item => !isSearching || item.searchFrequency > 0);
+        .filter(item => !!item) as ChatNavigationItemData[];
 
       // check if the active conversation has an item in the list
       const filteredChatsIncludeActive = chatNavItems.some(_c => _c.conversationId === activeConversationId);
@@ -183,14 +179,20 @@ export function useChatDrawerRenderItems(
         chatNavItems.sort((a, b) => b.searchFrequency - a.searchFrequency);
 
       // Render List
-      let renderNavItems: ChatRenderItemData[] = chatNavItems;
+      let renderNavItems: ChatDrawerRenderItems['renderNavItems'];
 
       // [search] add a header if searching
       if (isSearching) {
 
+        // start growing the render array from the nav array
+        renderNavItems = [...chatNavItems];
+
         // only prepend a 'Results' group if there are results
         if (chatNavItems.length)
-          renderNavItems = [{ type: 'nav-item-group', title: 'Search results' }, ...chatNavItems];
+          renderNavItems.unshift({
+            type: 'nav-item-group',
+            title: chatNavItems.length >= 10 ? `Search results (${chatNavItems.length})` : chatNavItems.length > 1 ? 'Search Results' : 'Search Result',
+          });
 
       }
       // [grouping] group by date or persona
@@ -208,7 +210,7 @@ export function useChatDrawerRenderItems(
             break;
         }
 
-        const midnightTime = getNextMidnightTime();
+        const midnightTime = getLocalMidnightInUTCTimestamp();
         const grouped = chatNavItems.reduce((acc, item) => {
 
           // derive the bucket name
@@ -247,6 +249,12 @@ export function useChatDrawerRenderItems(
           { type: 'nav-item-group', title: groupName },
           ...items,
         ]);
+      } else {
+
+        // [no grouping & no searching] just render the chatNavItems
+        // Note: we don't want to modify the original array, as we're including spurious objects for subsequent reduction functions
+        renderNavItems = [...chatNavItems];
+
       }
 
       // [zero state] searching & filtering
@@ -274,11 +282,21 @@ export function useChatDrawerRenderItems(
       const filteredChatIDs = chatNavItems.map(_c => _c.conversationId);
       const filteredChatsCount = chatNavItems.length;
       const filteredChatsAreEmpty = !filteredChatsCount || (filteredChatsCount === 1 && chatNavItems[0].isEmpty);
-      const filteredChatsBarBasis = ((showRelativeSize && filteredChatsCount >= 2) || isSearching)
-        ? chatNavItems.reduce((longest, _c) => Math.max(longest, isSearching ? _c.searchFrequency : _c.messageCount), 1)
-        : 0;
+      const filteredChatsBarBasis = !isSearching && (!showRelativeSize || filteredChatsCount < 2) ? 0
+        : chatNavItems.reduce((longest, _c) => Math.max(longest, isSearching ? _c.searchFrequency : _c.messageCount), 1);
 
-      return {
+      // stabilize individual renderNavItems (only if in the same place)
+      const prev = stabilizeRenderItems.current;
+      // Update: we don't need this as <ChatDrawerItem> is already memoed
+      // if (prev && renderNavItems.length === prev.renderNavItems.length)
+      //   renderNavItems = renderNavItems.map((item, index) => {
+      //     if (index < prev.renderNavItems.length && shallowEquals(item, prev.renderNavItems[index]))
+      //       return prev.renderNavItems[index];
+      //     return item;
+      //   });
+
+      // next state
+      const next: ChatDrawerRenderItems = {
         renderNavItems,
         filteredChatIDs,
         filteredChatsCount,
@@ -286,16 +304,18 @@ export function useChatDrawerRenderItems(
         filteredChatsBarBasis,
         filteredChatsIncludeActive,
       };
-    },
-    (a, b) => {
-      // we only compare the renderNavItems array, which shall be changed if the rest changes
-      return a.renderNavItems.length === b.renderNavItems.length
-        && a.renderNavItems.every((_a, i) => shallowEquals(_a, b.renderNavItems[i]))
-        && shallowEquals(a.filteredChatIDs, b.filteredChatIDs)
-        && a.filteredChatsCount === b.filteredChatsCount
-        && a.filteredChatsAreEmpty === b.filteredChatsAreEmpty
-        && a.filteredChatsBarBasis === b.filteredChatsBarBasis
-        && a.filteredChatsIncludeActive === b.filteredChatsIncludeActive;
+
+      // stabilize the render items
+      if (prev
+        && prev.renderNavItems.length === next.renderNavItems.length
+        && prev.renderNavItems.every((_a, i) => shallowEquals(_a, next.renderNavItems[i]))
+        && shallowEquals(prev.filteredChatIDs, next.filteredChatIDs)
+        && prev.filteredChatsCount === next.filteredChatsCount
+        && prev.filteredChatsAreEmpty === next.filteredChatsAreEmpty
+        && prev.filteredChatsBarBasis === next.filteredChatsBarBasis
+        && prev.filteredChatsIncludeActive === next.filteredChatsIncludeActive
+      ) return prev;
+      return stabilizeRenderItems.current = next;
     },
   );
 }

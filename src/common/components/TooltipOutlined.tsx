@@ -15,16 +15,19 @@ export function TooltipOutlined(props: {
   color?: TooltipProps['color'];
   variant?: TooltipProps['variant'];
   placement?: TooltipProps['placement'];
+  slowEnter?: boolean;
   asLargePane?: boolean;
+  enableInteractive?: boolean;
   children: React.JSX.Element;
 }) {
   return (
     <Tooltip
       title={props.title}
       color={props.color}
+      enterDelay={props.slowEnter ? 600 : 0}
       variant={props.variant ?? 'outlined'}
       arrow
-      disableInteractive
+      disableInteractive={!props.enableInteractive}
       placement={props.placement ?? 'top'}
       sx={props.asLargePane ? largePaneSx : undefined}
     >

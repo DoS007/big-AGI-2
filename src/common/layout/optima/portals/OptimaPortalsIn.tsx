@@ -1,21 +1,21 @@
 import * as React from 'react';
 import { createPortal } from 'react-dom';
 
-import { OptimaPortalId, useOptimaPortalsStore } from './store-optima-portals';
+import { OptimaPortalId, useLayoutPortalsStore } from './store-layout-portals';
 
 
 export function OptimaDrawerIn(props: { children: React.ReactNode }) {
-  const portalElement = _useOptimaPortalTargetElement('optima-portal-drawer');
+  const portalElement = useOptimaPortalTargetElement('optima-portal-drawer');
   return portalElement ? createPortal(props.children, portalElement) : null;
 }
 
 export function OptimaPanelIn(props: { children: React.ReactNode }) {
-  const portalElement = _useOptimaPortalTargetElement('optima-portal-panel');
+  const portalElement = useOptimaPortalTargetElement('optima-portal-panel');
   return portalElement ? createPortal(props.children, portalElement) : null;
 }
 
 export function OptimaToolbarIn(props: { children: React.ReactNode }) {
-  const portalElement = _useOptimaPortalTargetElement('optima-portal-toolbar');
+  const portalElement = useOptimaPortalTargetElement('optima-portal-toolbar');
   return portalElement ? createPortal(props.children, portalElement) : null;
 }
 
@@ -23,13 +23,13 @@ export function OptimaToolbarIn(props: { children: React.ReactNode }) {
 /**
  * Hook to get the target element for a portal.
  */
-function _useOptimaPortalTargetElement(targetPortalId: OptimaPortalId) {
+function useOptimaPortalTargetElement(targetPortalId: OptimaPortalId) {
   // get the output element
-  const targetPortalEl = useOptimaPortalsStore(state => state.portals[targetPortalId]?.element ?? null);
+  const targetPortalEl = useLayoutPortalsStore(state => state.portals[targetPortalId]?.element ?? null);
 
   // increment/decrement input count
   React.useEffect(() => {
-    const { incrementInputs, decrementInputs } = useOptimaPortalsStore.getState();
+    const { incrementInputs, decrementInputs } = useLayoutPortalsStore.getState();
     incrementInputs(targetPortalId);
     return () => decrementInputs(targetPortalId);
   }, [targetPortalId]);

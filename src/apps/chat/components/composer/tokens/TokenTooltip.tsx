@@ -3,13 +3,13 @@ import * as React from 'react';
 import type { SxProps } from '@mui/joy/styles/types';
 import { Box, ColorPaletteProp, Tooltip } from '@mui/joy';
 
-import { DChatGeneratePricing, getLlmPriceForTokens } from '~/common/stores/llms/llms.pricing';
+import { DPricingChatGenerate, getLlmCostForTokens } from '~/common/stores/llms/llms.pricing';
 import { adjustContentScaling, themeScalingMap } from '~/common/app.theme';
 import { formatModelsCost } from '~/common/util/costUtils';
 import { useUIContentScaling } from '~/common/state/store-ui';
 
 
-export function tokenCountsMathAndMessage(tokenLimit: number | 0, directTokens: number, historyTokens?: number, responseMaxTokens?: number, chatPricing?: DChatGeneratePricing): {
+export function tokenCountsMathAndMessage(tokenLimit: number | 0, directTokens: number, historyTokens?: number, responseMaxTokens?: number, chatPricing?: DPricingChatGenerate): {
   color: ColorPaletteProp,
   message: string,
   remainingTokens: number,
@@ -43,8 +43,8 @@ export function tokenCountsMathAndMessage(tokenLimit: number | 0, directTokens: 
 
     // add the price, if available
     if (chatPricing) {
-      const inputPrice = getLlmPriceForTokens(usedInputTokens, usedInputTokens, chatPricing.input);
-      const outputPrice = getLlmPriceForTokens(usedInputTokens, responseMaxTokens || 0, chatPricing.output);
+      const inputPrice = getLlmCostForTokens(usedInputTokens, usedInputTokens, chatPricing.input);
+      const outputPrice = getLlmCostForTokens(usedInputTokens, responseMaxTokens || 0, chatPricing.output);
 
       costMin = inputPrice;
       const costOutMax = outputPrice;

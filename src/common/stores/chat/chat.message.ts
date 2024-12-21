@@ -1,11 +1,11 @@
 import { agiUuid } from '~/common/util/idUtils';
 
-import { createPlaceholderMetaFragment, createTextContentFragment, DMessageContentFragment, DMessageFragment, duplicateDMessageFragments, isAttachmentFragment, isContentFragment, isContentOrAttachmentFragment, isTextPart, specialShallowReplaceTextContentFragment } from './chat.fragments';
+import { createPlaceholderVoidFragment, createTextContentFragment, DMessageFragment, duplicateDMessageFragmentsNoVoid, isAttachmentFragment, isContentFragment, isVoidFragment } from './chat.fragments';
 
 import type { ModelVendorId } from '~/modules/llms/vendors/vendors.registry';
 
-import type { DChatGenerateMetricsMd } from '~/common/stores/metrics/metrics.chatgenerate';
 import type { DLLMId } from '~/common/stores/llms/llms.types';
+import type { DMetricsChatGenerate_Md } from '~/common/stores/metrics/metrics.chatgenerate';
 
 
 // Message
@@ -63,12 +63,14 @@ export interface DMetaReferenceItem {
 export type DMessageUserFlag =
   | 'aix.skip'                        // mark this message as skipped during generation (won't be sent to the LLM)
   | 'starred'                         // user has starred this message
+  | 'notify.complete'                 // user has requested a notification when this message is complete
   | 'vnd.ant.cache.auto'              // [Anthropic] user requested breakpoints to be added automatically (per conversation)
   | 'vnd.ant.cache.user'              // [Anthropic] user requestd for a breakpoint to be added here specifically
   ;
 
 export const MESSAGE_FLAG_AIX_SKIP: DMessageUserFlag = 'aix.skip';
 export const MESSAGE_FLAG_STARRED: DMessageUserFlag = 'starred';
+export const MESSAGE_FLAG_NOTIFY_COMPLETE: DMessageUserFlag = 'notify.complete';
 export const MESSAGE_FLAG_VND_ANT_CACHE_AUTO: DMessageUserFlag = 'vnd.ant.cache.auto';
 export const MESSAGE_FLAG_VND_ANT_CACHE_USER: DMessageUserFlag = 'vnd.ant.cache.user';
 
@@ -76,9 +78,13 @@ export const MESSAGE_FLAG_VND_ANT_CACHE_USER: DMessageUserFlag = 'vnd.ant.cache.
 // Message > Generator
 
 export type DMessageGenerator = ({
+  // A named generator is a simple string, presented as-is
   mgt: 'named';
   name: 'web' | 'issue' | 'help' | string;
 } | {
+  // An AIX generator preserves information about original model and vendor:
+  // - vendor ids will be stable across time
+  // - no guarantee of consistency on the model, e.g. could be across different devices
   mgt: 'aix',
   name: string;                       // model that handled the request
   aix: {
@@ -86,7 +92,7 @@ export type DMessageGenerator = ({
     mId: DLLMId;                      // Models Id
   },
 }) & {
-  metrics?: DChatGenerateMetricsMd;   // medium-sized metrics stored in the message
+  metrics?: DMetricsChatGenerate_Md;   // medium-sized metrics stored in the message
   tokenStopReason?:
     | 'client-abort'                  // if the generator stopped due to a client abort signal
     | 'filter'                        // (inline filter message injected) if the generator stopped due to a filter
@@ -106,7 +112,7 @@ export function createDMessageTextContent(role: DMessageRole, text: string): DMe
 }
 
 export function createDMessagePlaceholderIncomplete(role: DMessageRole, placeholderText: string): DMessage {
-  const placeholderFragment = createPlaceholderMetaFragment(placeholderText);
+  const placeholderFragment = createPlaceholderVoidFragment(placeholderText);
   const message = createDMessageFromFragments(role, [placeholderFragment]);
   message.pendingIncomplete = true;
   return message;
@@ -139,12 +145,12 @@ export function createDMessageFromFragments(role: DMessageRole, fragments: DMess
 
 // helpers - duplication
 
-export function duplicateDMessage(message: Readonly<DMessage>): DMessage {
+export function duplicateDMessageNoVoid(message: Readonly<DMessage>): DMessage {
   return {
     id: agiUuid('chat-dmessage'),
 
     role: message.role,
-    fragments: duplicateDMessageFragments(message.fragments),
+    fragments: duplicateDMessageFragmentsNoVoid(message.fragments), // [*] full message duplication (see downstream)
 
     ...(message.pendingIncomplete ? { pendingIncomplete: true } : {}),
 
@@ -187,11 +193,19 @@ export function duplicateDMessageGenerator(generator: Readonly<DMessageGenerator
 }
 
 
+// helpers - status checks
+
+export function messageWasInterruptedAtStart(message: Pick<DMessage, 'generator' | 'fragments'>): boolean {
+  return message.generator?.tokenStopReason === 'client-abort' && message.fragments.length === 0;
+}
+
+
 // helpers - user flags
 
 const flag2EmojiMap: Record<DMessageUserFlag, string> = {
   [MESSAGE_FLAG_AIX_SKIP]: '',
   [MESSAGE_FLAG_STARRED]: '⭐️',
+  [MESSAGE_FLAG_NOTIFY_COMPLETE]: '', //'🔔',
   [MESSAGE_FLAG_VND_ANT_CACHE_AUTO]: '',
   [MESSAGE_FLAG_VND_ANT_CACHE_USER]: '',
 };
@@ -205,71 +219,56 @@ export function messageHasUserFlag(message: Pick<DMessage, 'userFlags'>, flag: D
 }
 
 export function messageSetUserFlag(message: Pick<DMessage, 'userFlags'>, flag: DMessageUserFlag, on: boolean): DMessageUserFlag[] {
-  if (on)
+  if (on) {
+    if (message.userFlags?.includes(flag))
+      return message.userFlags;
     return [...(message.userFlags || []), flag];
-  else
+  } else {
+    if (!message.userFlags?.includes(flag))
+      return message.userFlags || [];
     return (message.userFlags || []).filter(_f => _f !== flag);
+  }
 }
 
 
 // helpers during the transition from V3
 
-export function messageFragmentsReduceText(fragments: DMessageFragment[], fragmentSeparator: string = '\n\n'): string {
+export function messageFragmentsReduceText(fragments: DMessageFragment[], fragmentSeparator: string = '\n\n', excludeAttachmentFragments?: boolean): string {
 
   return fragments
     .map(fragment => {
-      if (isContentFragment(fragment)) {
-        switch (fragment.part.pt) {
-          case 'text':
-            return fragment.part.text;
-          case 'error':
-            return fragment.part.error;
-          case 'image_ref':
+      switch (true) {
+        case isContentFragment(fragment):
+          switch (fragment.part.pt) {
+            case 'text':
+              return fragment.part.text;
+            case 'error':
+              return fragment.part.error;
+            case 'image_ref':
+              return '';
+            case 'tool_invocation':
+            case 'tool_response':
+              // Ignore tools for the text reduction
+              return '';
+          }
+          break;
+        case isAttachmentFragment(fragment):
+          if (excludeAttachmentFragments)
             return '';
-          case 'ph':
-            return '';
-          // ignore tools
-          case 'tool_invocation':
-          case 'tool_response':
-            return '';
-        }
-      } else if (isAttachmentFragment(fragment)) {
-        switch (fragment.part.pt) {
-          case 'doc':
-            return fragment.part.data.text;
-          case 'image_ref':
-            return '';
-        }
+          switch (fragment.part.pt) {
+            case 'doc':
+              return fragment.part.data.text;
+            case 'image_ref':
+              return '';
+          }
+          break;
+        case isVoidFragment(fragment):
+          // all void fragments are ignored by definition when doing a text reduction
+          return '';
       }
-      console.warn(`DEV: messageFragmentsReduceText: unexpected '${fragment.ft}' fragment with '${(fragment as any)?.part?.pt}' part`);
+      console.warn(`[DEV] messageFragmentsReduceText: unexpected '${fragment.ft}' fragment with '${(fragment as any)?.part?.pt}' part`);
       return '';
     })
     .filter(text => !!text)
     .join(fragmentSeparator);
-}
-
-export function messageFragmentsReplaceLastContentText(fragments: Readonly<DMessageFragment[]>, newText: string, appendText?: boolean): DMessageFragment[] {
-
-  // if there's no text fragment, create it
-  const lastTextFragment = fragments.findLast(f => isContentFragment(f) && isTextPart(f.part)) as DMessageContentFragment | undefined;
-  if (!lastTextFragment)
-    return [...fragments, createTextContentFragment(newText)];
-
-  // append/replace the last text fragment
-  return fragments.map(fragment =>
-    (fragment === lastTextFragment)
-      ? specialShallowReplaceTextContentFragment(lastTextFragment, (appendText && isTextPart(lastTextFragment.part)) ? lastTextFragment.part.text + newText : newText)
-      : fragment,
-  );
-}
-
-// TODO: remove once the port is fully done - at 2.0.0 ?
-export function messageSingleTextOrThrow(message: DMessage): string {
-  if (message.fragments.length !== 1)
-    throw new Error('Expected single fragment');
-  if (!isContentOrAttachmentFragment(message.fragments[0]))
-    throw new Error('Expected a content or attachment fragment');
-  if (message.fragments[0].part.pt !== 'text')
-    throw new Error('Expected a text part');
-  return message.fragments[0].part.text;
 }

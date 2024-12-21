@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { LLM_IF_ANT_PromptCaching, LLM_IF_OAI_Chat, LLM_IF_OAI_Complete, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Vision } from '~/common/stores/llms/llms.types';
+import { LLMS_ALL_INTERFACES } from '~/common/stores/llms/llms.types';
 
 
 export type ModelDescriptionSchema = z.infer<typeof ModelDescription_schema>;
@@ -11,18 +11,6 @@ export type ModelDescriptionSchema = z.infer<typeof ModelDescription_schema>;
  * Note: this needs to be moved to the AixWire_API_ListModels namespace
  * HOWEVER if we did it now there will be some circular dependency issue
  */
-
-/// Interfaces
-
-// TODO: just remove this, and move to a capabilities array (I/O/...)
-const Interface_enum = z.enum([
-  LLM_IF_OAI_Chat,            // OpenAI Chat
-  LLM_IF_OAI_Fn,              // JSON mode?
-  LLM_IF_OAI_Vision,          // Vision mode?
-  LLM_IF_OAI_Json,            // Function calling
-  LLM_IF_OAI_Complete,        // Complete mode
-  LLM_IF_ANT_PromptCaching,   // Anthropic Prompt caching
-]);
 
 
 /// Benchmark
@@ -44,20 +32,30 @@ const PriceUpTo_schema = z.object({
   price: PricePerMToken_schema,
 });
 
-const TieredPrice_schema = z.union([
+const TieredPricing_schema = z.union([
   PricePerMToken_schema,
   z.array(PriceUpTo_schema),
 ]);
 
-const ChatGeneratePricing_schema = z.object({
-  input: TieredPrice_schema.optional(),
-  output: TieredPrice_schema.optional(),
-  cache: z.object({
-    cType: z.literal('ant-bp'),
-    read: TieredPrice_schema,
-    write: TieredPrice_schema,
-    duration: z.number(),
-  }).optional(),
+// NOTE: (!) keep this in sync with DPricingChatGenerate (llms.pricing.ts)
+const PricingChatGenerate_schema = z.object({
+  input: TieredPricing_schema.optional(),
+  output: TieredPricing_schema.optional(),
+  // Future: Perplexity has a cost per request, consider this for future additions
+  // perRequest: z.number().optional(), // New field for fixed per-request pricing
+  cache: z.discriminatedUnion('cType', [
+    z.object({
+      cType: z.literal('ant-bp'), // [Anthropic] Breakpoint-based caching
+      read: TieredPricing_schema,
+      write: TieredPricing_schema,
+      duration: z.number(),
+    }),
+    z.object({
+      cType: z.literal('oai-ac'), // [OpenAI] Automatic Caching
+      read: TieredPricing_schema,
+      // write: TieredPricing_schema, // Not needed, as it's the same as input cost, i.e. = 0
+    }),
+  ]).optional(),
   // Not for the server-side, computed on the client only
   // _isFree: z.boolean().optional(),
 });
@@ -72,12 +70,12 @@ export const ModelDescription_schema = z.object({
   updated: z.number().optional(),
   description: z.string(),
   contextWindow: z.number().nullable(),
-  interfaces: z.array(Interface_enum),
+  interfaces: z.array(z.enum(LLMS_ALL_INTERFACES)),
   maxCompletionTokens: z.number().optional(),
   // rateLimits: rateLimitsSchema.optional(),
   trainingDataCutoff: z.string().optional(),
   benchmark: BenchmarksScores_schema.optional(),
-  chatPrice: ChatGeneratePricing_schema.optional(),
+  chatPrice: PricingChatGenerate_schema.optional(),
   hidden: z.boolean().optional(),
   // TODO: add inputTypes/Kinds..
 });

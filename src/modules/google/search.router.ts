@@ -1,9 +1,9 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
-import { createTRPCRouter, publicProcedure } from '~/server/api/trpc.server';
+import { createTRPCRouter, publicProcedure } from '~/server/trpc/trpc.server';
 import { env } from '~/server/env.mjs';
-import { fetchJsonOrTRPCThrow } from '~/server/api/trpc.router.fetchers';
+import { fetchJsonOrTRPCThrow } from '~/server/trpc/trpc.router.fetchers';
 
 import { Search } from './search.types';
 
@@ -38,6 +38,11 @@ export const googleSearchRouter = createTRPCRouter({
       const data: Search.Wire.SearchResponse & { error?: { message?: string } } = await fetchJsonOrTRPCThrow({
         url,
         name: 'Google Custom Search',
+        headers: {
+          'Accept': 'application/json',
+          'Accept-Encoding': 'gzip',
+          'User-Agent': 'Big-AGI (gzip)',
+        },
       });
 
       if (data.error)

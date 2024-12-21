@@ -9,17 +9,21 @@ import LaunchIcon from '@mui/icons-material/Launch';
 import { Brand } from '~/common/app.config';
 import { Link } from '~/common/components/Link';
 import { ROUTE_INDEX } from '~/common/app.routes';
+import { Release } from '~/common/app.release';
 import { animationColorBlues, animationColorRainbow } from '~/common/util/animUtils';
 import { capitalizeFirstLetter } from '~/common/util/textUtils';
 
 import { NewsItems } from './news.data';
 import { beamNewsCallout } from './beam.data';
+import { bigAgi2NewsCallout } from './bigAgi2.data';
 
 
 // number of news items to show by default, before the expander
 const NEWS_INITIAL_COUNT = 3;
 const NEWS_LOAD_STEP = 2;
 
+
+const _frontendBuild = Release.buildInfo('frontend');
 
 export const newsRoadmapCallout =
   <Card variant='solid' invertedColors>
@@ -110,6 +114,13 @@ export function AppNews() {
             const addPadding = false; //!firstCard; // || showExpander;
             return <React.Fragment key={idx}>
 
+              {/* Inject the Big-AGI 2.0 item here*/}
+              {idx === 0 && (
+                <Box sx={{ mb: 3 }}>
+                  {bigAgi2NewsCallout}
+                </Box>
+              )}
+
               {/* Inject the Beam item here*/}
               {idx === 2 && (
                 <Box sx={{ mb: 3 }}>
@@ -135,7 +146,9 @@ export function AppNews() {
                       </Box>
                     </Typography>
                     <Typography level='body-sm' sx={{ ml: 'auto' }}>
-                      {!!ni.versionDate && <TimeAgo date={ni.versionDate} />}
+                      {idx === 0 && _frontendBuild.timestamp
+                        ? <TimeAgo date={_frontendBuild.timestamp} />
+                        : !!ni.versionDate && <TimeAgo date={ni.versionDate} />}
                     </Typography>
                   </Box>
 

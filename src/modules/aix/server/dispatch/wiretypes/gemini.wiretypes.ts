@@ -233,6 +233,7 @@ export namespace GeminiWire_ToolDeclarations {
     // See also ExecutableCode and CodeExecutionResult which are only generated when using this tool.
   });
 
+  export type FunctionDeclaration = z.infer<typeof FunctionDeclaration_schema>;
   export const FunctionDeclaration_schema = z.object({
     name: z.string(),
     description: z.string(),
@@ -248,7 +249,7 @@ export namespace GeminiWire_ToolDeclarations {
        */
       properties: z.record(z.any()).optional(),
       required: z.array(z.string()).optional(),
-    }),
+    }).optional(),
   });
 
   export const Tool_schema = z.object({
@@ -432,7 +433,8 @@ export namespace GeminiWire_API_Generate_Content {
      * Index of the candidate in the list of candidates.
      * NOTE: see GenerationConfig_schema.candidateCount, which can only be set to 1, so index is supposed to be 0.
      */
-    index: z.number(),
+    index: z.number()
+      .optional(), // for `1.5-002` models, on Sept 24, 2024, this became optional
     /**
      * This seems to be equal to 'STOP' on all streaming chunks.
      * In theory: if empty, the model has not stopped generating the tokens.
@@ -480,7 +482,8 @@ export namespace GeminiWire_API_Generate_Content {
 
   export type Response = z.infer<typeof Response_schema>;
   export const Response_schema = z.object({
-    candidates: z.array(Candidate_schema),
+    candidates: z.array(Candidate_schema)
+      .optional(), // 2024-09-27: added for when Gemini only sends usageMetadata (happened firs this day, on gemini-pro-1.5-001)
     promptFeedback: GeminiWire_Safety.PromptFeedback_schema.optional(), // rarely sent (only on violations?)
     /**
      * Metadata on the generation requests' token usage.
@@ -500,6 +503,7 @@ export namespace GeminiWire_API_Models_List {
   export const getPath = '/v1beta/models?pageSize=1000';
 
   const Methods_enum = z.enum([
+    'bidiGenerateContent', // appeared on 2024-12, see https://github.com/enricoros/big-AGI/issues/700
     'createCachedContent', // appeared on 2024-06-10, see https://github.com/enricoros/big-AGI/issues/565
     'countMessageTokens',
     'countTextTokens',

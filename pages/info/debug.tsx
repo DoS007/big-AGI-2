@@ -12,25 +12,23 @@ import { getPlantUmlServerUrl } from '~/modules/blocks/code/code-renderers/Rende
 import { withNextJSPerPageLayout } from '~/common/layout/withLayout';
 
 
-// app config
+// basics
 import { Brand } from '~/common/app.config';
 import { ROUTE_APP_CHAT, ROUTE_INDEX } from '~/common/app.routes';
-
-// apps access
-import { incrementalNewsVersion, useAppNewsStateStore } from '../../src/apps/news/news.version';
+import { Release } from '~/common/app.release';
 
 // capabilities access
 import { useCapabilityBrowserSpeechRecognition, useCapabilityElevenLabs, useCapabilityTextToImage } from '~/common/components/useCapabilities';
 
 // stores access
 import { getLLMsDebugInfo } from '~/common/stores/llms/store-llms';
-import { useAppStateStore } from '~/common/state/store-appstate';
 import { useChatStore } from '~/common/stores/chat/store-chats';
-import { useFolderStore } from '~/common/state/store-folders';
+import { useFolderStore } from '~/common/stores/folders/store-chat-folders';
+import { useLogicSherpaStore } from '~/common/logic/store-logic-sherpa';
 import { useUXLabsStore } from '~/common/state/store-ux-labs';
 
 // utils access
-import { clientHostName, isChromeDesktop, isFirefox, isIPhoneUser, isMacUser, isPwa, isVercelFromFrontend } from '~/common/util/pwaUtils';
+import { BrowserLang, clientHostName, Is, isPwa } from '~/common/util/pwaUtils';
 import { getGA4MeasurementId } from '~/common/components/GoogleAnalytics';
 import { prettyTimestampForFilenames } from '~/common/util/timeUtils';
 import { supportsClipboardRead } from '~/common/util/clipboardUtils';
@@ -71,6 +69,8 @@ function DebugJsonCard(props: { title: string, data: any }) {
 }
 
 
+const frontendBuild = Release.buildInfo('frontend');
+
 function AppDebug() {
 
   // state
@@ -81,19 +81,15 @@ function AppDebug() {
   const chatsCount = useChatStore.getState().conversations?.length;
   const uxLabsExperiments = Object.entries(useUXLabsStore.getState()).filter(([_k, v]) => v === true).map(([k, _]) => k).join(', ');
   const { folders, enableFolders } = useFolderStore.getState();
-  const { lastSeenNewsVersion } = useAppNewsStateStore.getState();
-  const { usageCount } = useAppStateStore.getState();
-
+  const { lastSeenNewsVersion, usageCount } = useLogicSherpaStore.getState();
 
   // derived state
   const cClient = {
     // isBrowser,
-    isChromeDesktop,
-    isFirefox,
-    isIPhone: isIPhoneUser,
-    isMac: isMacUser,
+    Is,
+    BrowserLang,
     isPWA: isPwa(),
-    supportsClipboardPaste: supportsClipboardRead,
+    supportsClipboardPaste: supportsClipboardRead(),
     supportsScreenCapture,
   };
   const cProduct = {
@@ -107,10 +103,14 @@ function AppDebug() {
       chatsCount,
       foldersCount: folders?.length,
       foldersEnabled: enableFolders,
-      newsCurrent: incrementalNewsVersion,
+      newsCurrent: Release.Monotonics.NewsVersion,
       newsSeen: lastSeenNewsVersion,
       labsActive: uxLabsExperiments,
       reloads: usageCount,
+    },
+    release: {
+      app: Release.App,
+      build: frontendBuild,
     },
   };
   const cBackend = {
@@ -118,7 +118,6 @@ function AppDebug() {
     deployment: {
       home: Brand.URIs.Home,
       hostName: clientHostName(),
-      isVercelFromFrontend,
       measurementId: getGA4MeasurementId(),
       plantUmlServerUrl: getPlantUmlServerUrl(),
       routeIndex: ROUTE_INDEX,
@@ -164,4 +163,4 @@ function AppDebug() {
 }
 
 
-export default withNextJSPerPageLayout({ type: 'plain' }, () => <AppDebug />);
+export default withNextJSPerPageLayout({ type: 'container' }, () => <AppDebug />);

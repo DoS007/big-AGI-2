@@ -10,14 +10,15 @@ import { findModelVendor } from '~/modules/llms/vendors/vendors.registry';
 import type { DLLM, DLLMId } from '~/common/stores/llms/llms.types';
 import type { DModelsServiceId } from '~/common/stores/llms/modelsservice.types';
 import { DebouncedInputMemo } from '~/common/components/DebouncedInput';
-import { OptimaBarDropdownMemo, OptimaDropdownItems } from '~/common/layout/optima/bar/OptimaBarDropdown';
 import { GoodTooltip } from '~/common/components/GoodTooltip';
 import { KeyStroke } from '~/common/components/KeyStroke';
+import { OptimaBarControlMethods, OptimaBarDropdownMemo, OptimaDropdownItems } from '~/common/layout/optima/bar/OptimaBarDropdown';
 import { findModelsServiceOrNull, llmsStoreActions, useModelsStore } from '~/common/stores/llms/store-llms';
 import { optimaActions, optimaOpenModels } from '~/common/layout/optima/useOptima';
 
 
 function LLMDropdown(props: {
+  dropdownRef: React.Ref<OptimaBarControlMethods>,
   llms: DLLM[],
   chatLlmId: DLLMId | null,
   setChatLlmId: (llmId: DLLMId | null) => void,
@@ -98,7 +99,7 @@ function LLMDropdown(props: {
     <GoodTooltip title={
       <Box sx={{ px: 1, py: 0.75, lineHeight: '1.5rem' }}>
         Model Options
-        <KeyStroke combo='Ctrl + Shift + O' sx={{ my: 0.5 }} />
+        <KeyStroke variant='outlined' combo='Ctrl + Shift + O' sx={{ my: 0.5 }} />
       </Box>
     }>
       <IconButton
@@ -154,11 +155,11 @@ function LLMDropdown(props: {
     {/*  </ListItemButton>*/}
     {/*)}*/}
 
-    <ListItemButton key='menu-llms' onClick={optimaOpenModels}>
+    <ListItemButton key='menu-llms' onClick={optimaOpenModels} sx={{ backgroundColor: 'background.surface' }}>
       <ListItemDecorator><BuildCircleIcon color='success' /></ListItemDecorator>
       <Box sx={{ flexGrow: 1, display: 'flex', justifyContent: 'space-between', gap: 1 }}>
         Models
-        <KeyStroke combo='Ctrl + Shift + M' sx={{ ml: 2 }} />
+        <KeyStroke variant='outlined' combo='Ctrl + Shift + M' sx={{ ml: 2 }} />
       </Box>
     </ListItemButton>
 
@@ -167,6 +168,7 @@ function LLMDropdown(props: {
 
   return (
     <OptimaBarDropdownMemo
+      ref={props.dropdownRef}
       items={llmDropdownItems}
       value={chatLlmId}
       onChange={handleChatLLMChange}
@@ -179,16 +181,17 @@ function LLMDropdown(props: {
 }
 
 
-export function useChatLLMDropdown() {
+export function useChatLLMDropdown(dropdownRef: React.Ref<OptimaBarControlMethods>) {
   // external state
   const { llms, chatLLMId } = useModelsStore(useShallow(state => ({
     llms: state.llms, // NOTE: we don't need a deep comparison as we reference the same array
     chatLLMId: state.chatLLMId,
   })));
 
-  const chatLLMDropdown = React.useMemo(() => {
-    return <LLMDropdown llms={llms} chatLlmId={chatLLMId} setChatLlmId={llmsStoreActions().setChatLLMId} />;
-  }, [llms, chatLLMId]);
+  const chatLLMDropdown = React.useMemo(
+    () => <LLMDropdown dropdownRef={dropdownRef} llms={llms} chatLlmId={chatLLMId} setChatLlmId={llmsStoreActions().setChatLLMId} />,
+    [chatLLMId, dropdownRef, llms],
+  );
 
   return { chatLLMId, chatLLMDropdown };
 }

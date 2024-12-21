@@ -1,15 +1,16 @@
 import type { StateCreator } from 'zustand/vanilla';
 
-import { aixChatGenerateContentStreaming, AixChatGenerateDMessageUpdate } from '~/modules/aix/client/aix.client';
+import { AixChatGenerateContent_DMessage, aixChatGenerateContent_DMessage_FromConversation } from '~/modules/aix/client/aix.client';
 
 import type { DLLMId } from '~/common/stores/llms/llms.types';
 import { agiUuid } from '~/common/util/idUtils';
-import { createDMessageEmpty, DMessage, duplicateDMessage } from '~/common/stores/chat/chat.message';
-import { createPlaceholderMetaFragment } from '~/common/stores/chat/chat.fragments';
+import { createDMessageEmpty, DMessage, duplicateDMessageNoVoid, messageWasInterruptedAtStart } from '~/common/stores/chat/chat.message';
+import { createPlaceholderVoidFragment } from '~/common/stores/chat/chat.fragments';
 import { findLLMOrThrow } from '~/common/stores/llms/store-llms';
 import { getUXLabsHighPerformance } from '~/common/state/store-ux-labs';
+import { splitSystemMessageFromHistory } from '~/common/stores/chat/chat.conversation';
 
-import type { RootStoreSlice } from '../store-beam-vanilla';
+import type { RootStoreSlice } from '../store-beam_vanilla';
 import { SCATTER_DEBUG_STATE, SCATTER_PLACEHOLDER } from '../beam.config';
 import { updateBeamLastConfig } from '../store-module-beam';
 
@@ -53,9 +54,13 @@ function rayScatterStart(ray: BRay, llmId: DLLMId | null, inputHistory: DMessage
   if (!inputHistory || inputHistory.length < 1 || inputHistory[inputHistory.length - 1].role !== 'user')
     return { ...ray, scatterIssue: `Invalid conversation history (${inputHistory?.length})` };
 
+  // split pre dynamic-personas
+  const { chatSystemInstruction: scatterSystemInstruction, chatHistory: scatterInputHistory } = splitSystemMessageFromHistory(inputHistory);
+
+
   const abortController = new AbortController();
 
-  const onMessageUpdated = (incrementalMessage: AixChatGenerateDMessageUpdate, completed: boolean) => {
+  const onMessageUpdated = (incrementalMessage: AixChatGenerateContent_DMessage, completed: boolean) => {
     const { fragments: incrementalFragments, ...incrementalRest } = incrementalMessage;
     _rayUpdate(ray.rayId, (ray) => ({
       message: {
@@ -69,16 +74,18 @@ function rayScatterStart(ray: BRay, llmId: DLLMId | null, inputHistory: DMessage
   };
 
   // stream the ray's messages directly to the state store
-  aixChatGenerateContentStreaming(
+  aixChatGenerateContent_DMessage_FromConversation(
     llmId,
-    inputHistory,
+    scatterSystemInstruction,
+    scatterInputHistory,
     'beam-scatter', ray.rayId,
-    getUXLabsHighPerformance() ? 0 : rays.length,
-    abortController.signal,
+    { abortSignal: abortController.signal, throttleParallelThreads: getUXLabsHighPerformance() ? 0 : rays.length },
     onMessageUpdated,
   )
     .then((status) => {
+      const clearFragments = messageWasInterruptedAtStart(status.lastDMessage);
       _rayUpdate(ray.rayId, {
+        ...(clearFragments && { message: createDMessageEmpty('assistant') }),
         status: (status.outcome === 'success') ? 'success'
           : (status.outcome === 'aborted') ? 'stopped'
             : (status.outcome === 'errored') ? 'error' : 'empty',
@@ -92,7 +99,7 @@ function rayScatterStart(ray: BRay, llmId: DLLMId | null, inputHistory: DMessage
 
   const newMessage: DMessage = {
     ...ray.message,
-    fragments: [createPlaceholderMetaFragment(SCATTER_PLACEHOLDER)],
+    fragments: [createPlaceholderVoidFragment(SCATTER_PLACEHOLDER)],
     pendingIncomplete: true,
     created: Date.now(),
     updated: null,
@@ -260,7 +267,7 @@ export const createScatterSlice: StateCreator<RootStoreSlice & ScatterStoreSlice
       // pre-fill the ray with the imported message
       if (message.fragments.length) {
         emptyRay.status = 'success';
-        emptyRay.message = duplicateDMessage(message);
+        emptyRay.message = duplicateDMessageNoVoid(message); // [beam] import dmessage copy from chat
         emptyRay.message.updated = Date.now();
         emptyRay.imported = true;
       }

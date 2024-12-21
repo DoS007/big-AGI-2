@@ -1,7 +1,8 @@
 import * as React from 'react';
 
 import type { DMessageId } from '~/common/stores/chat/chat.message';
-import { createTextContentFragment, DMessageContentFragment, DMessageFragment, DMessageFragmentId, isTextPart } from '~/common/stores/chat/chat.fragments';
+import { createTextContentFragment, DMessageFragment, DMessageFragmentId, isTextContentFragment } from '~/common/stores/chat/chat.fragments';
+import { wrapWithMarkdownSyntax } from '~/modules/blocks/markdown/markdown.wrapper';
 
 import { BUBBLE_MIN_TEXT_LENGTH } from './ChatMessage';
 
@@ -19,15 +20,16 @@ import { BUBBLE_MIN_TEXT_LENGTH } from './ChatMessage';
  *   This is an important highlight.
  * </mark>
  */
-const APPLY_HIGHLIGHT = (text: string) => `<mark>${text}</mark>`;
-const APPLY_STRONG = (text: string) => `**${text}**`;
+const APPLY_HTML_HIGHLIGHT = (text: string) => `<mark>${text}</mark>`;
+const APPLY_HTML_STRIKE = (text: string) => `<del>${text}</del>`;
+const APPLY_MD_STRONG = (text: string) => wrapWithMarkdownSyntax(text, '**');
 
-type HighlightTool = 'highlight' | 'strong';
+type HighlightTool = 'highlight' | 'strike' | 'strong';
 
 export function useSelHighlighterMemo(
   messageId: DMessageId,
   selText: string | null,
-  contentFragments: DMessageContentFragment[],
+  fragments: DMessageFragment[],
   fromAssistant: boolean,
   onMessageFragmentReplace?: (messageId: DMessageId, fragmentId: DMessageFragmentId, newFragment: DMessageFragment) => void,
 ): ((tool: HighlightTool) => void) | null {
@@ -38,8 +40,8 @@ export function useSelHighlighterMemo(
       return null;
 
     // Create the highlighter function, if there's 1 and only 1 occurrence of the selection
-    const highlightFunction = contentFragments.reduce((acc: false /* not found */ | ((tool: HighlightTool) => void) | true /* more than one */, fragment) => {
-      if (!acc && isTextPart(fragment.part)) {
+    const highlightFunction = fragments.reduce((acc: false /* not found */ | ((tool: HighlightTool) => void) | true /* more than one */, fragment) => {
+      if (!acc && isTextContentFragment(fragment)) {
         const fragmentText = fragment.part.text;
         let index = fragmentText.indexOf(selText);
 
@@ -50,13 +52,24 @@ export function useSelHighlighterMemo(
 
           index = fragmentText.indexOf(selText, index + 1);
 
-          // make the highlighter function
+          // Tool application function
           acc = (tool: HighlightTool) => {
-            const highlighted = tool === 'highlight' ? APPLY_HIGHLIGHT(selText) : APPLY_STRONG(selText);
+
+            // Apply the tool
+            const highlighted =
+              tool === 'highlight' ? APPLY_HTML_HIGHLIGHT(selText)
+                : tool === 'strike' ? APPLY_HTML_STRIKE(selText)
+                  : tool === 'strong' ? APPLY_MD_STRONG(selText)
+                    : selText;
+
+            // Toggle, if the tooled text is already present
             const newFragmentText =
               fragmentText.includes(highlighted) ? fragmentText.replace(highlighted, selText) // toggles selection
                 : fragmentText.replace(selText, highlighted);
+
+            // Replace the whole fragment within the message
             onMessageFragmentReplace(messageId, fragment.fId, createTextContentFragment(newFragmentText));
+
           };
         }
       }
@@ -64,5 +77,5 @@ export function useSelHighlighterMemo(
     }, false);
 
     return typeof highlightFunction === 'function' ? highlightFunction : null;
-  }, [selText, fromAssistant, onMessageFragmentReplace, contentFragments, messageId]);
+  }, [fragments, fromAssistant, messageId, onMessageFragmentReplace, selText]);
 }

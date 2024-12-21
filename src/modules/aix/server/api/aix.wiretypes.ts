@@ -23,8 +23,9 @@ export type AixParts_MetaCacheControl = z.infer<typeof AixWire_Parts.MetaCacheCo
 export type AixParts_MetaInReferenceToPart = z.infer<typeof AixWire_Parts.MetaInReferenceToPart_schema>;
 
 export type AixMessages_SystemMessage = z.infer<typeof AixWire_Content.SystemInstruction_schema>;
-export type AixMessages_UserMessage = z.infer<typeof AixWire_Content.UserMessage_schema>;
 export type AixMessages_ModelMessage = z.infer<typeof AixWire_Content.ModelMessage_schema>;
+export type AixMessages_ToolMessage = z.infer<typeof AixWire_Content.ToolMessage_schema>;
+export type AixMessages_UserMessage = z.infer<typeof AixWire_Content.UserMessage_schema>;
 export type AixMessages_ChatMessage = z.infer<typeof AixWire_Content.ChatMessage_schema>;
 
 export type AixTools_ToolDefinition = z.infer<typeof AixWire_Tooling.Tool_schema>;
@@ -32,9 +33,7 @@ export type AixTools_FunctionCallDefinition = Extract<z.infer<typeof AixWire_Too
 export type AixTools_ToolsPolicy = z.infer<typeof AixWire_Tooling.ToolsPolicy_schema>;
 
 export type AixAPI_Access = z.infer<typeof AixWire_API.Access_schema>;
-export type AixAPI_Context = z.infer<typeof AixWire_API.Context_schema>;
-export type AixAPI_Context_ChatGenerateNS = z.infer<typeof AixWire_API.ContextChatGenerateNS_schema>;
-export type AixAPI_Context_ChatGenerateStream = z.infer<typeof AixWire_API.ContextChatGenerateStream_schema>;
+export type AixAPI_Context_ChatGenerate = z.infer<typeof AixWire_API.ContextChatGenerate_schema>;
 export type AixAPI_Model = z.infer<typeof AixWire_API.Model_schema>;
 export type AixAPIChatGenerate_Request = z.infer<typeof AixWire_API_ChatContentGenerate.Request_schema>;
 
@@ -136,6 +135,9 @@ export namespace AixWire_Parts {
     // optional title of the document
     l1Title: z.string().optional(),
 
+    // version of the document - optional because it's not guaranteed, but strongly suggested
+    version: z.number().optional(),
+
     // inlined for now as it's only used here; in the TypeScript definition this is DMessageDataInline
     data: z.object({
       idt: z.literal('text'),
@@ -151,7 +153,7 @@ export namespace AixWire_Parts {
   const _FunctionCallInvocation_schema = z.object({
     type: z.literal('function_call'),
     name: z.string(),
-    args: z.string().nullable(),
+    args: z.string(), //.nullable(), // 2024-11-03: disabled .nullable(), as we'll use '' for no args (which some APIs weirdly don't support so we'll mock downstream as '{}')
     // _description: z.string().optional(),
     // _args_schema: z.object({}).optional(),
   });
@@ -253,6 +255,7 @@ export namespace AixWire_Content {
     role: z.literal('tool'),
     parts: z.array(z.discriminatedUnion('pt', [
       AixWire_Parts.ToolResponsePart_schema,
+      AixWire_Parts.MetaCacheControl_schema,
     ])),
   });
 
@@ -266,7 +269,7 @@ export namespace AixWire_Content {
 
 export namespace AixWire_Tooling {
 
-  /// Function Call Tool
+  /// Function Call Tool Definition
 
   const _FunctionCall_schema = z.object({
     /**
@@ -283,6 +286,7 @@ export namespace AixWire_Tooling {
     description: z.string(),
     /**
      *  A JSON Schema object defining the expected parameters for the function call.
+     *  - Optional. If not provided, it means the Function Tool does not require any input and will be invoked without any arguments.
      *  (OpenAI + Google: parameters, Anthropic: input_schema)
      */
     input_schema: z.object({
@@ -371,27 +375,45 @@ export namespace AixWire_API {
   export const Model_schema = z.object({
     id: z.string(),
     temperature: z.number().min(0).max(2).optional(),
-    maxTokens: z.number().min(1).max(1000000).optional(),
+    maxTokens: z.number().min(1).optional(),
   });
 
   /// Context
 
-  export const ContextChatGenerateNS_schema = z.object({
+  export const ContextChatGenerate_schema = z.object({
     method: z.literal('chat-generate'),
-    name: z.enum(['chat-ai-title', 'chat-ai-summarize', 'chat-followup-diagram', 'chat-followup-htmlui', 'chat-react-turn', 'draw-expand-prompt']),
+    name: z.enum([
+
+      // non-streaming AI operations
+      'chat-ai-summarize',
+      'chat-ai-title',
+      'chat-attachment-prompts',  // - id of the first fragment
+      'chat-followup-diagram',
+      'chat-followup-htmlui',
+      'chat-react-turn',
+      'draw-expand-prompt',
+      'fixup-code',
+
+      // streaming AI operations
+      'ai-diagram',               // making a diagram - messageId
+      'ai-flattener',             // flattening a thread - messageId of the first message
+      'beam-gather',              // fusing beam rays - fusionId
+      'beam-scatter',             // scattering beam rays - rayId
+      'call',                     // having a phone conversation - messageId of the first message
+      'conversation',             // chatting with a persona - conversationId
+      'persona-extract',          // extracting a persona from texts - chainId
+
+      // temporary (nothing is more permanent than a temporary fix that works well)
+      '_DEV_',
+
+    ]),
     ref: z.string(),
   });
 
-  export const ContextChatGenerateStream_schema = z.object({
-    method: z.literal('chat-stream'),
-    name: z.enum(['DEV', 'conversation', 'ai-diagram', 'ai-flattener', 'call', 'beam-scatter', 'beam-gather', 'persona-extract']),
-    ref: z.string(),
-  });
-
-  export const Context_schema = z.discriminatedUnion('method', [
-    ContextChatGenerateNS_schema,
-    ContextChatGenerateStream_schema,
-  ]);
+  // For future use
+  // export const Context_schema = z.discriminatedUnion('method', [
+  //   ContextChatGenerate_schema,
+  // ]);
 
   /// Connection options
 
@@ -409,7 +431,7 @@ export namespace AixWire_API_ChatContentGenerate {
   /// Request
 
   export const Request_schema = z.object({
-    systemMessage: AixWire_Content.SystemInstruction_schema.optional(),
+    systemMessage: AixWire_Content.SystemInstruction_schema.nullable(),
     chatSequence: z.array(AixWire_Content.ChatMessage_schema),
     tools: z.array(AixWire_Tooling.Tool_schema).optional(),
     toolsPolicy: AixWire_Tooling.ToolsPolicy_schema.optional(),
@@ -498,18 +520,20 @@ export namespace AixWire_Particles {
    */
   export type CGSelectMetrics = {
     // T = milliseconds
-    TIn?: number,
+    TIn?: number,         // Portion of Input tokens which is new (not cached)
     TCacheRead?: number,
     TCacheWrite?: number,
     TOut?: number,
-
-    // v = Tokens/s
-    vTOutInner?: number,  // TOut / dtInner
+    TOutR?: number,       // Portion of TOut that was used for reasoning (e.g. not for output)
+    // TOutA?: number,    // Portion of TOut that was used for Audio
 
     // dt = milliseconds
     dtStart?: number,
     dtInner?: number,
     dtAll?: number,
+
+    // v = Tokens/s
+    vTOutInner?: number,  // TOut / dtInner
   };
 
   // TextParticle / PartParticle - keep in line with the DMessage*Part counterparts

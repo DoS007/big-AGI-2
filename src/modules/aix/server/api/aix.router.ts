@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
 import { createEmptyReadableStream, createServerDebugWireEvents, safeErrorString, serverCapitalizeFirstLetter } from '~/server/wire';
-import { createTRPCRouter, publicProcedure } from '~/server/api/trpc.server';
-import { fetchResponseOrTRPCThrow } from '~/server/api/trpc.router.fetchers';
+import { createTRPCRouter, publicProcedure } from '~/server/trpc/trpc.server';
+import { fetchResponseOrTRPCThrow } from '~/server/trpc/trpc.router.fetchers';
 
 import { AixWire_API, AixWire_API_ChatContentGenerate, AixWire_Particles } from './aix.wiretypes';
 import { ChatGenerateTransmitter } from '../dispatch/chatGenerate/ChatGenerateTransmitter';
@@ -21,7 +21,7 @@ export const aixRouter = createTRPCRouter({
       access: AixWire_API.Access_schema,
       model: AixWire_API.Model_schema,
       chatGenerate: AixWire_API_ChatContentGenerate.Request_schema,
-      context: AixWire_API.Context_schema,
+      context: AixWire_API.ContextChatGenerate_schema,
       streaming: z.boolean(),
       connectionOptions: AixWire_API.ConnectionOptions_schema.optional(),
     }))
@@ -44,7 +44,7 @@ export const aixRouter = createTRPCRouter({
       try {
         dispatch = createChatGenerateDispatch(access, model, chatGenerate, streaming);
       } catch (error: any) {
-        chatGenerateTx.setRpcTerminatingIssue('dispatch-prepare', `**[Configuration Issue] ${prettyDialect}**: ${safeErrorString(error) || 'Unknown service preparation error'}`, false);
+        chatGenerateTx.setRpcTerminatingIssue('dispatch-prepare', `**[AIX Configuration Issue] ${prettyDialect}**: ${safeErrorString(error) || 'Unknown service preparation error'}`, false);
         yield* chatGenerateTx.flushParticles();
         return; // exit
       }
@@ -80,7 +80,7 @@ export const aixRouter = createTRPCRouter({
 
         // Handle AI Service connection error
         const dispatchFetchError = safeErrorString(error) + (error?.cause ? ' · ' + JSON.stringify(error.cause) : '');
-        const extraDevMessage = process.env.NODE_ENV === 'development' ? `\n[DEV_URL: ${dispatch.request.url}]` : '';
+        const extraDevMessage = process.env.NODE_ENV === 'development' ? ` - [DEV_URL: ${dispatch.request.url}]` : '';
 
         const showOnConsoleForNonCustomServers = access.dialect !== 'openai' || !access.oaiHost;
         chatGenerateTx.setRpcTerminatingIssue('dispatch-fetch', `**[Service Issue] ${prettyDialect}**: ${dispatchFetchError}${extraDevMessage}`, showOnConsoleForNonCustomServers);

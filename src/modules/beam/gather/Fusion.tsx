@@ -24,6 +24,7 @@ import { GATHER_COLOR } from '../beam.config';
 import { findFusionFactory } from './instructions/beam.gather.factories';
 import { fusionIsEditable, fusionIsError, fusionIsFusing, fusionIsIdle, fusionIsStopped, fusionIsUsableOutput } from './beam.gather';
 import { useBeamCardScrolling } from '../store-module-beam';
+import { useMessageAvatarLabel } from '~/common/util/dMessageUtils';
 
 
 export function Fusion(props: {
@@ -44,6 +45,7 @@ export function Fusion(props: {
   const isStopped = fusionIsStopped(fusion);
   const isUsable = fusionIsUsableOutput(fusion);
   const showUseButtons = isUsable && !isFusing;
+  const { tooltip: fusionAvatarTooltip } = useMessageAvatarLabel(fusion?.outputDMessage, 'pro');
 
   const factory = findFusionFactory(fusion?.factoryId);
 
@@ -98,6 +100,8 @@ export function Fusion(props: {
 
   return (
     <BeamCard
+      role='beam-card'
+      tabIndex={-1}
       className={
         // (isIdle ? beamCardClasses.fusionIdle : '')
         (isError ? beamCardClasses.errored + ' ' : '')
@@ -116,6 +120,7 @@ export function Fusion(props: {
         isUsable={isUsable}
         llmLabel={llmLabel}
         llmVendorIcon={llmVendorIcon}
+        fusionAvatarTooltip={fusionAvatarTooltip}
         onRemove={handleFusionRemove}
         onToggleGenerate={handleToggleFusionGather}
       />
@@ -148,7 +153,7 @@ export function Fusion(props: {
               fitScreen={true}
               isMobile={props.isMobile}
               hideAvatar
-              showUnsafeHtml={true}
+              showUnsafeHtmlCode={true}
               adjustContentScaling={-1}
               sx={!cardScrolling ? beamCardMessageSx : beamCardMessageScrollingSx}
             />

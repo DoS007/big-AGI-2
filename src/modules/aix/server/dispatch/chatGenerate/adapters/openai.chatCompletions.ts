@@ -1,6 +1,6 @@
 import type { OpenAIDialects } from '~/modules/llms/server/openai/openai.router';
 
-import { AixAPI_Model, AixAPIChatGenerate_Request, AixMessages_ChatMessage, AixMessages_SystemMessage, AixParts_MetaInReferenceToPart, AixTools_ToolDefinition, AixTools_ToolsPolicy } from '../../../api/aix.wiretypes';
+import type { AixAPI_Model, AixAPIChatGenerate_Request, AixMessages_ChatMessage, AixMessages_SystemMessage, AixParts_MetaInReferenceToPart, AixTools_ToolDefinition, AixTools_ToolsPolicy } from '../../../api/aix.wiretypes';
 import { OpenAIWire_API_Chat_Completions, OpenAIWire_ContentParts, OpenAIWire_Messages } from '../../wiretypes/openai.wiretypes';
 
 
@@ -35,13 +35,19 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
   const hotFixSquashMultiPartText = openAIDialect === 'deepseek';
   const hotFixThrowCannotFC = openAIDialect === 'deepseek' || openAIDialect === 'openrouter' /* OpenRouter FC support is not good (as of 2024-07-15) */ || openAIDialect === 'perplexity';
 
+  // Model incompatibilities -> Hotfixes
+
+  // [OpenAI] - o1 models
+  // - o1 models don't support system messages, we could hotfix this here once and for all, but we want to transfer the responsibility to the UI for better messaging to the user
+  // - o1 models also use the new 'max_completion_tokens' rather than 'max_tokens', breaking API compatibility, so we have to address it here
+  const hotFixOpenAIo1Family = openAIDialect === 'openai' && (model.id === 'o1' || model.id.startsWith('o1-'));
 
   // Throw if function support is needed but missing
   if (chatGenerate.tools?.length && hotFixThrowCannotFC)
     throw new Error('This service does not support function calls');
 
   // Convert the chat messages to the OpenAI 4-Messages format
-  let chatMessages = _toOpenAIMessages(chatGenerate.systemMessage, chatGenerate.chatSequence);
+  let chatMessages = _toOpenAIMessages(chatGenerate.systemMessage, chatGenerate.chatSequence, hotFixOpenAIo1Family);
 
   // Apply hotfixes
   if (hotFixSquashMultiPartText)
@@ -73,13 +79,18 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
     user: undefined,
   };
 
+  if (hotFixOpenAIo1Family)
+    payload = _fixRequestForOpenAIO1_maxCompletionTokens(payload);
+
   if (hotFixRemoveStreamOptions)
     payload = _fixRemoveStreamOptions(payload);
 
   // Preemptive error detection with server-side payload validation before sending it upstream
   const validated = OpenAIWire_API_Chat_Completions.Request_schema.safeParse(payload);
-  if (!validated.success)
-    throw new Error(`Invalid message sequence for OpenAI models: ${validated.error.errors?.[0]?.message || validated.error.message || validated.error}`);
+  if (!validated.success) {
+    console.warn('OpenAI: invalid chatCompletions payload. Error:', validated.error);
+    throw new Error(`Invalid sequence for OpenAI models: ${validated.error.errors?.[0]?.message || validated.error.message || validated.error}.`);
+  }
 
   // if (hotFixUseDeprecatedFunctionCalls)
   //   validated.data = _fixUseDeprecatedFunctionCalls(validated.data);
@@ -125,6 +136,20 @@ function _fixRemoveEmptyMessages(chatMessages: TRequestMessages): TRequestMessag
   return chatMessages.filter(message => message.content !== null && message.content !== '');
 }
 
+function _fixRequestForOpenAIO1_maxCompletionTokens(payload: TRequest): TRequest {
+
+  // Remove temperature and top_p controls
+  const { max_tokens, temperature: _removeTemperature, top_p: _removeTopP, ...rest } = payload;
+
+  // Change max_tokens to max_completion_tokens:
+  // - pre-o1: max_tokens is the output amount
+  // - o1: max_completion_tokens is the output amount + reasoning amount
+  if (max_tokens)
+    rest.max_completion_tokens = max_tokens;
+
+  return rest;
+}
+
 function _fixRemoveStreamOptions(payload: TRequest): TRequest {
   const { stream_options, parallel_tool_calls, ...rest } = payload;
   return rest;
@@ -157,7 +182,7 @@ function _fixSquashMultiPartText(chatMessages: TRequestMessages): TRequestMessag
 }*/
 
 
-function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | undefined, chatSequence: AixMessages_ChatMessage[]): TRequestMessages {
+function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | null, chatSequence: AixMessages_ChatMessage[], hotFixOpenAIo1Family: boolean): TRequestMessages {
 
   // Transform the chat messages into OpenAI's format (an array of 'system', 'user', 'assistant', and 'tool' messages)
   const chatMessages: TRequestMessages = [];
@@ -165,9 +190,12 @@ function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | undefined,
   // Convert the system message
   systemMessage?.parts.forEach((part) => {
     if (part.pt === 'meta_cache_control') {
-      // ignore this hint - openai doesn't support thiss yet
+      // ignore this hint - openai doesn't support this yet
     } else
-      chatMessages.push({ role: 'system', content: part.text /*, name: _optionalParticipantName */ });
+      chatMessages.push({
+        role: !hotFixOpenAIo1Family ? 'system' : 'developer', // NOTE: o1Family in this case is not o1-preview as it's sporting the Sys0ToUsr0 hotfix
+        content: part.text, /*, name: _optionalParticipantName */
+      });
   });
 
   // Convert the messages
@@ -217,7 +245,10 @@ function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | undefined,
               break;
 
             case 'meta_in_reference_to':
-              chatMessages.push({ role: 'system', content: _toOpenAIInReferenceToText(part) });
+              chatMessages.push({
+                role: !hotFixOpenAIo1Family ? 'system' : 'user', // NOTE: o1Family does not support system messages for this, we downcast to 'user'
+                content: _toOpenAIInReferenceToText(part),
+              });
               break;
 
             default:
@@ -381,7 +412,7 @@ function _toOpenAIInReferenceToText(irt: AixParts_MetaInReferenceToPart): string
     return `${index !== undefined ? `ITEM ${index + 1}:\n` : ''}---\n${text}\n---`;
   };
 
-  // Formely: `The user is referring to this in particular:\n{{ReplyToText}}`.replace('{{ReplyToText}}', part.replyTo);
+  // Formerly: `The user is referring to this in particular:\n{{ReplyToText}}`.replace('{{ReplyToText}}', part.replyTo);
   if (items.length === 1)
     return `CONTEXT: The user is referring to this in particular:\n${formatItem(items[0])}`;
 

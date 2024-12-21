@@ -2,42 +2,17 @@ import { sendGAEvent } from '@next/third-parties/google';
 
 import { hasGoogleAnalytics } from '~/common/components/GoogleAnalytics';
 
-import type { OpenAIWire_Tools } from '~/modules/aix/server/dispatch/wiretypes/openai.wiretypes';
-
 import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/modelsservice.types';
-import { DLLM, DLLMId, LLM_IF_OAI_Chat } from '~/common/stores/llms/llms.types';
+import { DLLM, LLM_IF_OAI_Chat } from '~/common/stores/llms/llms.types';
+import { isModelPricingFree } from '~/common/stores/llms/llms.pricing';
 import { llmsStoreActions } from '~/common/stores/llms/store-llms';
-import { isModelPriceFree } from '~/common/stores/llms/llms.pricing';
 
 import type { ModelDescriptionSchema } from './server/llm.server.types';
 import { DOpenAILLMOptions, FALLBACK_LLM_TEMPERATURE } from './vendors/openai/openai.vendor';
 import { findServiceAccessOrThrow } from './vendors/vendor.helpers';
 
 
-// LLM Client Types
-// NOTE: Model List types in '../server/llm.server.types';
-
-export interface VChatMessageIn {
-  role: 'assistant' | 'system' | 'user'; // | 'function';
-  content: string;
-  //name?: string; // when role: 'function'
-}
-
-export type VChatFunctionIn = OpenAIWire_Tools.FunctionDefinition;
-
-export interface VChatMessageOut {
-  role: 'assistant' | 'system' | 'user';
-  content: string;
-  finish_reason: 'stop' | 'length' | null;
-}
-
-export interface VChatMessageOrFunctionCallOut extends VChatMessageOut {
-  function_name: string;
-  function_arguments: object | null;
-}
-
-
-// LLM Client Functions
+// LLM Model Updates Client Functions
 
 export async function llmsUpdateModelsForServiceOrThrow(serviceId: DModelsServiceId, keepUserEdits: boolean): Promise<{ models: ModelDescriptionSchema[] }> {
 
@@ -116,40 +91,10 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
       chat: {
         ...d.chatPrice,
         // compute the free status
-        _isFree: isModelPriceFree(d.chatPrice),
+        _isFree: isModelPricingFree(d.chatPrice),
       },
     };
   }
 
   return dllm;
-}
-
-
-export async function llmChatGenerateOrThrow<TServiceSettings extends object = {}, TAccess = unknown, TLLMOptions = unknown>(
-  llmId: DLLMId,
-  messages: VChatMessageIn[],
-  contextName: string,
-  contextRef: string | null,
-  functions: VChatFunctionIn[] | null,
-  forceFunctionName: string | null,
-  maxTokens?: number,
-): Promise<VChatMessageOut | VChatMessageOrFunctionCallOut> {
-  throw new Error(`llmChatGenerateOrThrow: ${contextName} not migrated to AIX yet.`);
-}
-
-export async function llmStreamingChatGenerate<
-  TServiceSettings extends object = {},
-  TAccess = undefined,
-  TLLMOptions = unknown
->(
-  llmId: DLLMId,
-  messages: VChatMessageIn[],
-  contextName: string,
-  contextRef: string | null,
-  functions: VChatFunctionIn[] | null,
-  forceFunctionName: string | null,
-  abortSignal: AbortSignal,
-  onUpdate: (update: any, done: boolean) => void,
-): Promise<void> {
-  throw new Error(`llmStreamingChatGenerate: ${contextName} not migrated to AIX yet.`);
 }

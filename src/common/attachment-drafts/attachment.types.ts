@@ -62,6 +62,10 @@ export type AttachmentDraftSourceOriginFile = 'camera' | 'screencapture' | 'file
 
 export type AttachmentDraftSourceOriginDTO = 'drop' | 'paste';
 
+export type AttachmentCreationOptions = {
+  hintAddImages?: boolean;
+}
+
 
 // 1. draft input (loaded from the source)
 
@@ -77,6 +81,9 @@ export type AttachmentDraftInput = {
     mimeType: string;
     width: number;
     height: number;
+    // to discriminate the source
+    generator: 'web-capture' | 'youtube-thumbnail';
+    timestamp: number; // Unix timestamp
   };
   // preview?: AttachmentPreview; // Preview of the input
 };
@@ -126,7 +133,7 @@ export type AttachmentDraftConverter = {
 export type AttachmentDraftConverterType =
   | 'text' | 'rich-text' | 'rich-text-cleaner' | 'rich-text-table'
   | 'image-original' | 'image-resized-high' | 'image-resized-low' | 'image-ocr' | 'image-to-default'
-  | 'pdf-text' | 'pdf-images'
+  | 'pdf-text' | 'pdf-images' | 'pdf-text-and-images'
   | 'docx-to-html'
   | 'url-page-text' | 'url-page-markdown' | 'url-page-html' | 'url-page-null' | 'url-page-image'
   | 'youtube-transcript' | 'youtube-transcript-simple'

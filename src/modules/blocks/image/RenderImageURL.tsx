@@ -55,16 +55,18 @@ const overlayButtonsGridSx: SxProps = {
   gap: 0.5,
 };
 
-export type RenderImageURLVarint = 'content-part' | 'attachment-card' | 'attachment-button';
+export type RenderImageURLVariant = 'content-part' | 'attachment-card' | 'attachment-button';
 
 export const RenderImageURL = (props: {
   imageURL: string | null,        // remote URL, or data URL: `data:image/png;base64,...`
   overlayText?: React.ReactNode,  // bottom overlay text
   expandableText?: string,        // expandable pane below the image
-  variant: RenderImageURLVarint,  // either a responsive Block image, or an inline Card
+  variant: RenderImageURLVariant,  // either a responsive Block image, or an inline Card
+  disabled?: boolean,             // if true, interaction is disabled
   onOpenInNewTab?: (e: React.MouseEvent) => void,
   onImageDelete?: () => void,
   onImageRegenerate?: () => void,
+  onClick?: (e: React.MouseEvent) => void,  // use this generic as a fallback, but should not be needed
   scaledImageSx?: SxProps,
   className?: string,
 }) => {
@@ -132,20 +134,22 @@ export const RenderImageURL = (props: {
       <Sheet
         color={isCard ? 'primary' : undefined}
         variant={isCard ? 'outlined' : 'solid'}
+        aria-disabled={props.disabled}
+        onClick={props.onClick}
         className={props.className}
         sx={{
           // style
           mx: isOnButton ? undefined : 1.5,  // 1.5 like the other 'Render*' components
           minWidth: isOnButton ? 20 : 256,
           minHeight: isOnButton ? 20 : 128,
-          boxShadow: isCard ? undefined : isOnButton ? '0 2px 6px 0 rgba(0, 0, 0, 0.2)' : 'md',
+          boxShadow: isCard ? undefined : isOnButton ? '0 2px 6px 0 rgba(0, 0, 0, 0.2)' : 'sm',
 
           // enable anchoring
           position: 'relative',
 
           // resizeable image
           '& picture': { display: 'flex', justifyContent: 'center' },
-          '& img': { maxWidth: '100%', maxHeight: '100%' },
+          '& img': { maxWidth: '100%', maxHeight: '100%', filter: props.disabled ? 'grayscale(100%)' : undefined },
           [`&:hover > .${overlayButtonsClassName}`]: overlayButtonsActiveSx,
           '&:hover .overlay-text': overlayButtonsActiveSx,
 
@@ -179,7 +183,7 @@ export const RenderImageURL = (props: {
                 display: 'block',
               }}
             >
-              {loadingTimeout ? 'Could not load image' : 'Loading...'}
+              {loadingTimeout ? 'Image Missing' : 'Loading...'}
             </Box>
           )}
 
@@ -213,7 +217,7 @@ export const RenderImageURL = (props: {
         )}
 
         {/* [overlay] Buttons (RenderImage) */}
-        <Box className={overlayButtonsClassName} sx={overlayButtonsGridSx}>
+        {!props.disabled && <Box className={overlayButtonsClassName} sx={overlayButtonsGridSx}>
 
           {!!props.expandableText && (
             <OverlayButton tooltip={infoOpen ? 'Hide Prompt' : 'Show Prompt'} variant={infoOpen ? 'solid' : 'outlined'} color={isCard ? 'primary' : undefined} onClick={handleToggleInfoOpen} sx={{ gridRow: '1', gridColumn: '1' }}>
@@ -264,7 +268,7 @@ export const RenderImageURL = (props: {
             </OverlayButton>
           )}
 
-        </Box>
+        </Box>}
       </Sheet>
 
 

@@ -49,3 +49,7 @@ next-env.d.ts
 
 # Ingore k8s/env-secret.yaml
 ./k8s/env-secret.yaml
+/certificates
+.env*.local
+/.run/dev (ENV).run.xml
+/src/modules/3rdparty/aider/scratch*

@@ -5,12 +5,12 @@ import { useQuery } from '@tanstack/react-query';
 import { Box, Button, Card, CardContent, Divider, Input, Typography } from '@mui/joy';
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
 
-import { forgetChatLinkItem, useSharedChatLinkItems } from '~/modules/trade/link/store-link';
+import { forgetChatLinkItem, useSharedChatLinkItems } from '~/modules/trade/link/store-share-link';
 
 import { Brand } from '~/common/app.config';
-import { ConfirmationModal } from '~/common/components/ConfirmationModal';
+import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
 import { DataAtRestV1 } from '~/common/stores/chat/chats.converters';
-import { GoodModal } from '~/common/components/GoodModal';
+import { GoodModal } from '~/common/components/modals/GoodModal';
 import { InlineError } from '~/common/components/InlineError';
 import { LogoProgress } from '~/common/components/LogoProgress';
 import { OptimaDrawerIn } from '~/common/layout/optima/portals/OptimaPortalsIn';

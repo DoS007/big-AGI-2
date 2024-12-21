@@ -3,7 +3,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 import type { ContentScaling, UIComplexityMode } from '~/common/app.theme';
-import { browserLangOrUS } from '~/common/util/pwaUtils';
+import { BrowserLang } from '~/common/util/pwaUtils';
 
 
 // UI Preferences
@@ -58,7 +58,7 @@ export const useUIPreferencesStore = create<UIPreferencesStore>()(
 
       // UI Features
 
-      preferredLanguage: browserLangOrUS,
+      preferredLanguage: BrowserLang.orUS,
       setPreferredLanguage: (preferredLanguage: string) => set({ preferredLanguage }),
 
       centerMode: 'wide',
@@ -133,6 +133,10 @@ export const useUIPreferencesStore = create<UIPreferencesStore>()(
   ),
 );
 
+
+export function useUIComplexityMode(): UIComplexityMode {
+  return useUIPreferencesStore((state) => state.complexityMode);
+}
 
 export function useUIComplexityIsMinimal(): boolean {
   return useUIPreferencesStore((state) => state.complexityMode === 'minimal');

@@ -14,11 +14,11 @@ import type { ContentScaling } from '~/common/app.theme';
 import type { DMessageRole } from '~/common/stores/chat/chat.message';
 import type { LiveFileId } from '~/common/livefile/liveFile.types';
 import { TooltipOutlined } from '~/common/components/TooltipOutlined';
-import { createDMessageDataInlineText, createDocAttachmentFragment, DMessageAttachmentFragment, DMessageFragmentId, DVMimeType, isDocPart } from '~/common/stores/chat/chat.fragments';
+import { DMessageAttachmentFragment, DMessageFragmentId, DVMimeType, isDocPart, updateFragmentWithEditedText } from '~/common/stores/chat/chat.fragments';
 import { useContextWorkspaceId } from '~/common/stores/workspace/WorkspaceIdProvider';
 import { useScrollToBottom } from '~/common/scroll-to-bottom/useScrollToBottom';
 
-import { TextFragmentEditor } from '../fragments-content/TextFragmentEditor';
+import { BlockEdit_TextFragment } from '../fragments-content/BlockEdit_TextFragment';
 import { buttonIconForFragment, DocSelColor } from './DocAttachmentFragmentButton';
 import { useLiveFileSync } from './livefile-sync/useLiveFileSync';
 
@@ -69,16 +69,15 @@ export function DocAttachmentFragment(props: {
   // hooks
 
   const handleReplaceDocFragmentText = React.useCallback((newText: string) => {
-    // create a new Doc Attachment Fragment
-    const newData = createDMessageDataInlineText(newText, fragmentDocPart.data.mimeType);
-    const newAttachment = createDocAttachmentFragment(fragmentTitle, fragment.caption, fragmentDocPart.vdt, newData, fragmentDocPart.ref, fragmentDocPart.meta, fragment.liveFileId);
+    // replacement fragment (same fId)
+    const newFragment = updateFragmentWithEditedText(fragment, newText);
 
-    // reuse the same fragment ID, which makes the screen not flash (otherwise the whole editor would disappear as the ID does not exist anymore)
-    newAttachment.fId = fragmentId;
+    // if not replaced, ignore the change
+    if (!newFragment) return;
 
-    // replace this fragment with the new one
-    onFragmentReplace(fragmentId, newAttachment);
-  }, [fragment.caption, fragment.liveFileId, fragmentDocPart, fragmentId, fragmentTitle, onFragmentReplace]);
+    // Note: this reuses the same fragment ID, which makes the screen not flash (otherwise the whole editor would disappear as the ID does not exist anymore)
+    onFragmentReplace(fragmentId, newFragment as DMessageAttachmentFragment);
+  }, [fragment, fragmentId, onFragmentReplace]);
 
   const handleReplaceFragmentLiveFileId = React.useCallback((liveFileId: LiveFileId) => {
     onFragmentReplace(fragmentId, { ...fragment, liveFileId: liveFileId });
@@ -157,14 +156,16 @@ export function DocAttachmentFragment(props: {
     <Box sx={enhancedCodePanelTitleTooltipSx}>
       <div>Attachment Title</div>
       <div>{fragment.title}</div>
-      <div>Doc Title</div>
-      <div>{fragmentDocPart.l1Title}</div>
       <div>Identifier</div>
       <div>{fragmentDocPart.ref}</div>
-      <div>Render type</div>
-      <div>{fragmentDocPart.vdt}</div>
+      <div>Doc Title</div>
+      <div>{fragmentDocPart.l1Title}</div>
+      <div>Doc Version</div>
+      <div>{fragmentDocPart.version || '(none)'}</div>
       <div>Text Mime type</div>
       <div>{fragmentDocPart.data?.mimeType || '(unknown)'}</div>
+      <div>Render type</div>
+      <div>{fragmentDocPart.vdt}</div>
       <div>Text Buffer Id</div>
       <div>{fragmentId}</div>
     </Box>
@@ -180,7 +181,7 @@ export function DocAttachmentFragment(props: {
           : '';
 
     return <>
-      <TooltipOutlined placement='top-start' color='neutral' title={headerTooltipContents}>
+      <TooltipOutlined color='neutral' placement='top-start' slowEnter title={headerTooltipContents}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           {TitleIcon && <TitleIcon />}
           <Typography level='title-sm'>
@@ -258,8 +259,8 @@ export function DocAttachmentFragment(props: {
       {/* Show / Edit the Document Attachment Part */}
       {isEditing ? (
         // Document Editor
-        <TextFragmentEditor
-          textPartText={fragmentDocPart.data.text}
+        <BlockEdit_TextFragment
+          initialText={fragmentDocPart.data.text}
           fragmentId={fragmentId}
           contentScaling={props.contentScaling}
           editedText={editedText}

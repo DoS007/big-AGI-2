@@ -50,13 +50,22 @@ export function safeErrorString(error: any): string | null {
   if (!error)
     return null;
 
+  // handle AggregateError
+  if (error instanceof AggregateError) {
+    const errors = error.errors.map(e => safeErrorString(e)).filter(Boolean);
+    return `AggregateError: ${errors.join('; ')}`;
+  }
+
   // descend into an 'error' object
   if (error.error)
     return safeErrorString(error.error);
 
   // choose the 'message' property if available
-  if (error.message)
+  if (error.message) {
+    if (error.message === 'AggregateError' && error.stack)
+      return `AggregateError: ${safeErrorString(error.stack)}`;
     return safeErrorString(error.message);
+  }
   if (typeof error === 'string')
     return error;
   if (typeof error === 'object') {
@@ -79,7 +88,7 @@ export function serverCapitalizeFirstLetter(string: string) {
 /**
  * Weak (meaning the string could be encoded poorly) function that returns a string that can be used to debug a request
  */
-export function debugGenerateCurlCommand(method: 'GET' | 'POST' | 'DELETE', url: string, headers?: HeadersInit, body?: object): string {
+export function debugGenerateCurlCommand(method: 'GET' | 'POST' | 'DELETE' | 'PUT', url: string, headers?: HeadersInit, body?: object): string {
   let curl = `curl -X ${method} '${url}' `;
 
   const headersRecord = (headers || {}) as Record<string, string>;

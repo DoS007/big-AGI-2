@@ -1,19 +1,22 @@
 import * as React from 'react';
 
 import type { SxProps } from '@mui/joy/styles/types';
-import { Box, Button, Sheet } from '@mui/joy';
+import { Box, Button } from '@mui/joy';
+import { ScaledTextBlockRenderer } from '~/modules/blocks/ScaledTextBlockRenderer';
 
-import { BlocksContainer } from '~/modules/blocks/BlocksContainers';
-
-import type { ContentScaling } from '~/common/app.theme';
+import type { ContentScaling, UIComplexityMode } from '~/common/app.theme';
 import type { DMessageRole } from '~/common/stores/chat/chat.message';
-import { DMessageContentFragment, DMessageFragment, DMessageFragmentId, isContentFragment, isTextPart } from '~/common/stores/chat/chat.fragments';
+import { DMessageContentFragment, DMessageFragment, DMessageFragmentId, isContentFragment, isPlaceholderPart, isTextPart, isVoidFragment } from '~/common/stores/chat/chat.fragments';
 
 import type { ChatMessageTextPartEditState } from '../ChatMessage';
-import { ContentPartImageRef } from './ContentPartImageRef';
-import { ContentPartPlaceholder } from './ContentPartPlaceholder';
-import { ContentPartText_AutoBlocks } from './ContentPartText_AutoBlocks';
-import { TextFragmentEditor } from './TextFragmentEditor';
+import { BlockEdit_TextFragment } from './BlockEdit_TextFragment';
+import { BlockOpEmpty } from './BlockOpEmpty';
+import { BlockPartError } from './BlockPartError';
+import { BlockPartImageRef } from './BlockPartImageRef';
+import { BlockPartPlaceholder } from './BlockPartPlaceholder';
+import { BlockPartText_AutoBlocks } from './BlockPartText_AutoBlocks';
+import { BlockPartToolInvocation } from './BlockPartToolInvocation';
+import { BlockPartToolResponse } from './BlockPartToolResponse';
 
 
 const editLayoutSx: SxProps = {
@@ -44,22 +47,24 @@ export function ContentFragments(props: {
   showEmptyNotice: boolean,
 
   contentScaling: ContentScaling,
+  uiComplexityMode: UIComplexityMode,
   fitScreen: boolean,
   isMobile: boolean,
   messageRole: DMessageRole,
   optiAllowSubBlocksMemo?: boolean,
   disableMarkdownText: boolean,
   enhanceCodeBlocks: boolean,
-  showUnsafeHtml?: boolean,
+  showUnsafeHtmlCode?: boolean,
 
   textEditsState: ChatMessageTextPartEditState | null,
-  setEditedText: (fragmentId: DMessageFragmentId, value: string) => void,
+  setEditedText?: (fragmentId: DMessageFragmentId, value: string, applyNow: boolean) => void,
   onEditsApply: (withControl: boolean) => void,
   onEditsCancel: () => void,
 
   onFragmentBlank: () => void
   onFragmentDelete: (fragmentId: DMessageFragmentId) => void,
   onFragmentReplace: (fragmentId: DMessageFragmentId, newFragment: DMessageContentFragment) => void,
+  onMessageDelete?: () => void,
 
   onContextMenu?: (event: React.MouseEvent) => void;
   onDoubleClick?: (event: React.MouseEvent) => void;
@@ -70,6 +75,8 @@ export function ContentFragments(props: {
   const fromUser = props.messageRole === 'user';
   const isEditingText = !!props.textEditsState;
   // const isMonoFragment = props.fragments.length < 2;
+  const enableRestartFromEdit = !fromAssistant && props.messageRole !== 'system';
+  const showDataStreamViz = props.uiComplexityMode !== 'minimal' && props.fragments.length === 1 && isVoidFragment(props.fragments[0]) && isPlaceholderPart(props.fragments[0].part);
 
   // Content Fragments Edit Zero-State: button to create a new TextContentFragment
   if (isEditingText && !props.fragments.length)
@@ -87,36 +94,89 @@ export function ContentFragments(props: {
   if (!props.showEmptyNotice && !props.fragments.length)
     return null;
 
-  return <Box aria-label='message body' sx={isEditingText ? editLayoutSx : fromAssistant ? startLayoutSx : endLayoutSx}>
+  return <Box aria-label='message body' sx={(isEditingText || showDataStreamViz) ? editLayoutSx : fromAssistant ? startLayoutSx : endLayoutSx}>
 
-    {/* The overall message is empty - show an indication of it */}
+    {/* Empty Message Block - if empty */}
     {props.showEmptyNotice && (
-      <Sheet variant='solid' color='neutral' invertedColors sx={{ mx: 1.5 }}>
-        <ContentPartPlaceholder
-          placeholderText={`empty ${fromAssistant ? 'assistant ' : fromUser ? 'user ' : ''}message - please edit or delete`}
-          messageRole={props.messageRole}
-          contentScaling={props.contentScaling}
-          showAsItalic
-        />
-      </Sheet>
+      <BlockOpEmpty
+        text={`empty ${fromAssistant ? 'model ' : fromUser ? 'user ' : ''}message`}
+        contentScaling={props.contentScaling}
+        onDelete={props.onMessageDelete}
+      />
     )}
 
     {props.fragments.map((fragment) => {
 
-      // only proceed with DMessageContentFragment
+      // Render VOID fragments
+      if (isVoidFragment(fragment)) {
+        const { fId, part } = fragment;
+        switch (part.pt) {
+          case 'ph': {
+            return (
+              <BlockPartPlaceholder
+                key={fId}
+                placeholderText={part.pText}
+                messageRole={props.messageRole}
+                contentScaling={props.contentScaling}
+                showAsItalic
+                showAsDataStreamViz={showDataStreamViz}
+              />
+            );
+          }
+
+          case '_pt_sentinel':
+          default:
+            <ScaledTextBlockRenderer
+              key={fId}
+              text={`Unknown Void Fragment: ${part.pt}`}
+              contentScaling={props.contentScaling}
+              textRenderVariant='text'
+              showAsDanger
+            />;
+            break;
+        }
+      }
+
+      // Render CONTENT fragments
       if (!isContentFragment(fragment))
         return null;
 
-      // editing for text parts
-      if (props.textEditsState && (isTextPart(fragment.part) || fragment.part.pt === 'error')) {
+      // simplify
+      const { fId, part } = fragment;
+
+      // Determine the text to edit based on the part type
+      let editText = '';
+      let editLabel;
+      if (isTextPart(part))
+        editText = part.text;
+      else if (part.pt === 'error')
+        editText = part.error;
+      else if (part.pt === 'tool_invocation') {
+        if (part.invocation.type === 'function_call') {
+          editText = part.invocation.args /* string | null */ || '';
+          editLabel = `[Invocation] Function Call: \`${part.invocation.name}\``;
+        } else {
+          editText = part.invocation.code;
+          editLabel = `[Invocation] Code Execution: \`${part.invocation.language}\``;
+        }
+      } else if (part.pt === 'tool_response') {
+        if (!part.error) {
+          editText = part.response.result;
+          editLabel = `[Response]: ${part.response.type === 'function_call' ? 'Function Call' : 'Code Execution'}: \`${part.id}\``;
+        }
+      }
+
+      // editing for text parts, tool invocations, or tool responses
+      if (props.textEditsState && !!props.setEditedText && (isTextPart(part) || part.pt === 'error' || part.pt === 'tool_invocation' || part.pt === 'tool_response')) {
         return (
-          <TextFragmentEditor
-            key={'edit-' + fragment.fId}
-            textPartText={isTextPart(fragment.part) ? fragment.part.text : fragment.part.error}
-            fragmentId={fragment.fId}
+          <BlockEdit_TextFragment
+            key={'edit-' + fId}
+            initialText={editText}
+            inputLabel={editLabel}
+            fragmentId={fId}
             contentScaling={props.contentScaling}
-            enableRestart
-            editedText={props.textEditsState[fragment.fId]}
+            enableRestart={enableRestartFromEdit}
+            editedText={props.textEditsState[fId]}
             setEditedText={props.setEditedText}
             onSubmit={props.onEditsApply}
             onEscapePressed={props.onEditsCancel}
@@ -125,58 +185,47 @@ export function ContentFragments(props: {
         );
       }
 
-      switch (fragment.part.pt) {
+      switch (part.pt) {
         case 'error':
           return (
-            <ContentPartPlaceholder
-              key={fragment.fId}
-              placeholderText={fragment.part.error}
+            <BlockPartError
+              key={fId}
+              errorText={part.error}
               messageRole={props.messageRole}
               contentScaling={props.contentScaling}
-              showAsDanger
-              // showAsItalic
             />
           );
 
 
         case 'image_ref':
           return (
-            <ContentPartImageRef
-              key={fragment.fId}
-              imageRefPart={fragment.part}
-              fragmentId={fragment.fId}
+            <BlockPartImageRef
+              key={fId}
+              imageRefPart={part}
+              fragmentId={fId}
               contentScaling={props.contentScaling}
               onFragmentDelete={/*isMonoFragment ? undefined :*/ props.onFragmentDelete}
               onFragmentReplace={props.onFragmentReplace}
             />
           );
 
-        case 'ph':
-          return (
-            <ContentPartPlaceholder
-              key={fragment.fId}
-              placeholderText={fragment.part.pText}
-              messageRole={props.messageRole}
-              contentScaling={props.contentScaling}
-              showAsItalic
-            />
-          );
-
         // This is the most frequent part by far, and can be broken down into sub-blocks
         case 'text':
           return (
-            <ContentPartText_AutoBlocks
-              key={fragment.fId}
+            <BlockPartText_AutoBlocks
+              key={fId}
               // ref={blocksRendererRef}
-              textPartText={fragment.part.text}
+              textPartText={part.text}
+              setEditedText={props.setEditedText}
+              fragmentId={fId}
               messageRole={props.messageRole}
               contentScaling={props.contentScaling}
               fitScreen={props.fitScreen}
               isMobile={props.isMobile}
               disableMarkdownText={props.disableMarkdownText}
               enhanceCodeBlocks={props.enhanceCodeBlocks}
-              // renderTextDiff={textDiffs || undefined}
-              showUnsafeHtml={props.showUnsafeHtml}
+              // renderWordsDiff={wordsDiff || undefined}
+              showUnsafeHtmlCode={props.showUnsafeHtmlCode}
               optiAllowSubBlocksMemo={!!props.optiAllowSubBlocksMemo}
               onContextMenu={props.onContextMenu}
               onDoubleClick={props.onDoubleClick}
@@ -185,132 +234,32 @@ export function ContentFragments(props: {
 
         case 'tool_invocation':
           return (
-            <BlocksContainer key={fragment.fId}>
-              {fragment.part.invocation.type === 'function_call' ? (
-                <Sheet color='neutral' variant='soft' sx={{
-                  flex: 1,
-                  border: '1px solid',
-                  borderColor: 'neutral.outlinedColor',
-                  width: '100%',
-                  borderRadius: 'lg',
-                  boxShadow: 'inset 2px 0 4px -2px rgba(0, 0, 0, 0.2)',
-                  fontSize: 'sm',
-                  p: 2,
-                  // grid layout with 2 cols
-                  display: 'grid',
-                  gridTemplateColumns: 'auto 1fr',
-                  columnGap: 2,
-                  rowGap: 1,
-                }}>
-                  <div>Id</div>
-                  <div>{fragment.part.id}</div>
-                  <div>Name</div>
-                  <div>{fragment.part.invocation.name}</div>
-                  <div>Args</div>
-                  <div>{fragment.part.invocation.args/*?.replaceAll('{', '').replaceAll('}', '').replaceAll('","', '", "')*/}</div>
-                </Sheet>
-              ) : (
-                <Sheet color='neutral' variant='soft' sx={{
-                  flex: 1,
-                  border: '1px solid',
-                  borderColor: 'neutral.outlinedColor',
-                  width: '100%',
-                  borderRadius: 'lg',
-                  boxShadow: 'inset 2px 0 4px -2px rgba(0, 0, 0, 0.2)',
-                  fontSize: 'sm',
-                  p: 2,
-                  // grid layout with 2 cols
-                  display: 'grid',
-                  gridTemplateColumns: 'auto 1fr',
-                  columnGap: 2,
-                  rowGap: 1,
-                }}>
-                  <div>Id</div>
-                  <div>{fragment.part.id}</div>
-                  <div>Language</div>
-                  <div>{fragment.part.invocation.language}</div>
-                  <div>Code</div>
-                  <div style={{ whiteSpace: 'pre' }}>{fragment.part.invocation.code?.trim()}</div>
-                  <div>Author</div>
-                  <div>{fragment.part.invocation.author}</div>
-                </Sheet>
-              )}
-            </BlocksContainer>
+            <BlockPartToolInvocation
+              key={fId}
+              toolInvocationPart={part}
+              contentScaling={props.contentScaling}
+              onDoubleClick={props.onDoubleClick}
+            />
           );
 
         case 'tool_response':
           return (
-            <BlocksContainer key={fragment.fId}>
-              {fragment.part.response.type === 'function_call' ? (
-                <Sheet color='neutral' variant='soft' sx={{
-                  flex: 1,
-                  border: '1px solid',
-                  borderColor: 'neutral.outlinedColor',
-                  width: '100%',
-                  borderRadius: 'lg',
-                  boxShadow: 'inset 2px 0 4px -2px rgba(0, 0, 0, 0.2)',
-                  fontSize: 'sm',
-                  p: 2,
-                  // grid layout with 2 cols
-                  display: 'grid',
-                  gridTemplateColumns: 'auto 1fr',
-                  columnGap: 2,
-                  rowGap: 1,
-                }}>
-                  <div>Type</div>
-                  <div>Function Call Response</div>
-                  <div>Id</div>
-                  <div>{fragment.part.id}</div>
-                  <div>Error</div>
-                  <div>{fragment.part.error === null ? 'null' : fragment.part.error === 'false' ? '' : fragment.part.error}</div>
-                  <div>Name</div>
-                  <div style={{ fontWeight: 700 }}>{fragment.part.response.name}</div>
-                  <div>Result</div>
-                  <div style={{ fontWeight: 700 }}>{fragment.part.response.result}</div>
-                  <div>Environment</div>
-                  <div>{fragment.part.environment}</div>
-                </Sheet>
-              ) : (
-                <Sheet color='neutral' variant='solid' sx={{
-                  flex: 1,
-                  border: '1px solid',
-                  borderColor: 'neutral.outlinedColor',
-                  width: '100%',
-                  borderRadius: 'lg',
-                  boxShadow: 'inset 2px 0 4px -2px rgba(0, 0, 0, 0.2)',
-                  fontSize: 'sm',
-                  p: 2,
-                  // grid layout with 2 cols
-                  display: 'grid',
-                  gridTemplateColumns: 'auto 1fr',
-                  columnGap: 2,
-                  rowGap: 1,
-                }}>
-                  <div>Type</div>
-                  <div>Code Execution Response</div>
-                  <div>Id</div>
-                  <div>{fragment.part.id}</div>
-                  <div>Error</div>
-                  <div>{fragment.part.error === null ? 'null' : fragment.part.error === 'false' ? '' : fragment.part.error}</div>
-                  <div>Result</div>
-                  <div style={{ fontWeight: 700 }}>{fragment.part.response.result}</div>
-                  <div>Executor</div>
-                  <div>{fragment.part.response.executor}</div>
-                  <div>Environment</div>
-                  <div>{fragment.part.environment}</div>
-                </Sheet>
-              )}
-            </BlocksContainer>
+            <BlockPartToolResponse
+              key={fId}
+              toolResponsePart={part}
+              contentScaling={props.contentScaling}
+              onDoubleClick={props.onDoubleClick}
+            />
           );
 
         case '_pt_sentinel':
         default:
           return (
-            <ContentPartPlaceholder
-              key={fragment.fId}
-              placeholderText={`Unknown Content fragment: ${fragment.part.pt}`}
-              messageRole={props.messageRole}
+            <ScaledTextBlockRenderer
+              key={fId}
+              text={`Unknown Content Fragment: ${part.pt}`}
               contentScaling={props.contentScaling}
+              textRenderVariant='text'
               showAsDanger
             />
           );

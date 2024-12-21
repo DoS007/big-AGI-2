@@ -1,6 +1,7 @@
 import * as React from 'react';
+import TimeAgo from 'react-timeago';
 
-import { Box, Button, CircularProgress, ColorPaletteProp, Sheet, Typography } from '@mui/joy';
+import { Box, Button, CircularProgress, ColorPaletteProp, Sheet, Typography, VariantProp } from '@mui/joy';
 import AbcIcon from '@mui/icons-material/Abc';
 import CodeIcon from '@mui/icons-material/Code';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
@@ -17,23 +18,34 @@ import TextureIcon from '@mui/icons-material/Texture';
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
 import YouTubeIcon from '@mui/icons-material/YouTube';
 
+import { RenderImageRefDBlob } from '~/modules/blocks/image/RenderImageRefDBlob';
 import { RenderImageURL } from '~/modules/blocks/image/RenderImageURL';
 
-import { GoodTooltip } from '~/common/components/GoodTooltip';
+import type { AttachmentDraft, AttachmentDraftConverterType, AttachmentDraftId } from '~/common/attachment-drafts/attachment.types';
+import { DMessageDataRef, DMessageImageRefPart, DMessageTextPart, isImageRefPart } from '~/common/stores/chat/chat.fragments';
 import { LiveFileIcon } from '~/common/livefile/liveFile.icons';
 import { TooltipOutlined } from '~/common/components/TooltipOutlined';
 import { ellipsizeFront, ellipsizeMiddle } from '~/common/util/textUtils';
 
-import type { AttachmentDraft, AttachmentDraftConverterType, AttachmentDraftId } from '~/common/attachment-drafts/attachment.types';
 import type { LLMAttachmentDraft } from './useLLMAttachmentDrafts';
 
 
-// default attachment width
 const ATTACHMENT_MIN_STYLE = {
   height: '100%',
   minHeight: '40px',
-  minWidth: '64px',
+  // commented, this is messing with the style
+  // minWidth: '64px',
 };
+
+const attachmentConverterSx = { width: 18, height: 18 } as const;
+const attachmentIconSx = { width: 30, maxHeight: 30, overflow: 'hidden' } as const;
+
+const webPreviewImageSx = {
+  ...attachmentIconSx,
+  // transform: 'perspective(100px) rotateX(60deg)',
+  // transform: 'perspective(100px) rotateY(-20deg) rotateX(30deg)',
+  // transformStyle: 'preserve-3d',
+} as const;
 
 
 const ellipsizeLabel = (label?: string) => {
@@ -49,8 +61,8 @@ const ellipsizeLabel = (label?: string) => {
 /**
  * Displayed while a source is loading
  */
-const LoadingIndicator = React.forwardRef((props: { label: string }, _ref) =>
-  <Sheet
+function InputLoadingPlaceholder(props: { label: string }) {
+  return <Sheet
     color='success' variant='soft'
     sx={{
       border: '1px solid',
@@ -59,21 +71,22 @@ const LoadingIndicator = React.forwardRef((props: { label: string }, _ref) =>
       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1,
       ...ATTACHMENT_MIN_STYLE,
       boxSizing: 'border-box',
-      px: 1,
-      py: 0.5,
+      px: 1, py: 0.5, // reduce
     }}
   >
     <CircularProgress color='success' size='sm' />
     <Typography level='title-sm' sx={{ whiteSpace: 'nowrap' }}>
       {ellipsizeLabel(props.label)}
     </Typography>
-  </Sheet>,
-);
-LoadingIndicator.displayName = 'LoadingIndicator';
+  </Sheet>;
+}
 
-
-const InputErrorIndicator = () =>
-  <WarningRoundedIcon sx={{ color: 'danger.solidBg' }} />;
+/**
+ * Displayed when there is an error loading the input (e.g. file does not exist)
+ */
+function InputErrorIndicator() {
+  return <WarningRoundedIcon sx={{ color: 'danger.solidBg' }} />;
+}
 
 
 const converterTypeToIconMap: { [key in AttachmentDraftConverterType]: React.ComponentType<any> | null } = {
@@ -88,6 +101,7 @@ const converterTypeToIconMap: { [key in AttachmentDraftConverterType]: React.Com
   'image-ocr': AbcIcon,
   'pdf-text': PictureAsPdfIcon,
   'pdf-images': PermMediaOutlinedIcon,
+  'pdf-text-and-images': PermMediaOutlinedIcon,
   'docx-to-html': DescriptionOutlinedIcon,
   'url-page-text': TextFieldsIcon, // was LanguageIcon
   'url-page-markdown': CodeIcon, // was LanguageIcon
@@ -100,56 +114,78 @@ const converterTypeToIconMap: { [key in AttachmentDraftConverterType]: React.Com
   'unhandled': TextureIcon,
 };
 
-function attachmentIcons(attachmentDraft: AttachmentDraft): React.ReactNode {
+function attachmentIcons(attachmentDraft: AttachmentDraft, noTooltips: boolean, onViewImageRefPart: (imageRefPart: DMessageImageRefPart) => void) {
   const activeConterters = attachmentDraft.converters.filter(c => c.isActive);
   if (activeConterters.length === 0)
     return null;
 
-  // find an icon for the first active converter
-  // Note: commented on 2024-07-16 because not tested enough
-  // const imageDataRefs = attachmentDraft.outputFragments.map(f => {
-  //   if (!isImageRefPart(f.part))
-  //     return null;
-  //   const dataRef = f.part.dataRef;
-  //   if (!dataRef || dataRef.reftype !== 'dblob')
-  //     return null;
-  //   return dataRef;
-  // }).filter(Boolean);
+  // Alternate icon for the Web Page Screenshot
+  const urlImage = attachmentDraft.input?.urlImage;
+  const urlImageData = urlImage?.imgDataUrl;
+
+  // Alternate icon for Single-Image DBlob output fragments (just single for now, multiple may not look good)
+  let outputSingleImageRefDBlobs: Extract<DMessageDataRef, { reftype: 'dblob' }>[] = [];
+  if (!urlImageData && attachmentDraft.outputFragments.length === 1) {
+    const fragment = attachmentDraft.outputFragments[0];
+    if (isImageRefPart(fragment.part) && fragment.part.dataRef && fragment.part.dataRef.reftype === 'dblob')
+      outputSingleImageRefDBlobs = [fragment.part.dataRef];
+  }
+
+  const handleViewFirstImage = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (attachmentDraft.outputFragments[0] && isImageRefPart(attachmentDraft.outputFragments[0].part))
+      onViewImageRefPart(attachmentDraft.outputFragments[0].part);
+  };
+
+  // Whether to render the converters
+  const renderConverterIcons = !outputSingleImageRefDBlobs.length;
 
   // 1+ icons
   return <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
 
     {/* If we have a Web preview, show it first */}
-    {!!attachmentDraft.input?.urlImage?.imgDataUrl && /*!imageDataRefs.length &&*/ (
-      // <Tooltip title={<>This was the page.<br />You can also Add the Screenshot as attachment</>}>
-      <RenderImageURL
-        imageURL={attachmentDraft.input.urlImage.imgDataUrl}
-        variant='attachment-button'
-        scaledImageSx={{ width: 28, height: 28 }}
-      />
-      // </Tooltip>
+    {!!urlImageData && /*!imageDataRefs.length &&*/ (
+      <TooltipOutlined key='preview' title={noTooltips ? null : <>
+        {urlImage?.generator === 'youtube-thumbnail' ? 'Thumbnail' : 'Page screenshot'} {!!urlImage?.timestamp && <>as of <TimeAgo date={urlImage.timestamp} /></>}.
+        <br />
+        Select <b>Add {urlImage?.generator === 'youtube-thumbnail' ? 'Thumbnail' : 'Screenshot'}</b> to attach it too.
+      </>} placement='top-start'>
+        <div>
+          <RenderImageURL
+            imageURL={urlImageData}
+            variant='attachment-button'
+            scaledImageSx={webPreviewImageSx}
+          />
+        </div>
+      </TooltipOutlined>
     )}
 
-    {/* If an output fragment contains a base64 image, show that as an icon too */}
-    {/*{imageDataRefs.map((dataRef, i) => dataRef && (*/}
-    {/*  <RenderImageRefDBlob*/}
-    {/*    key={i}*/}
-    {/*    dataRefDBlobAssetId={dataRef.dblobAssetId}*/}
-    {/*    dataRefMimeType={dataRef.mimeType}*/}
-    {/*    variant='attachment-button'*/}
-    {/*    scaledImageSx={{ width: 28, height: 28 }}*/}
-    {/*  />*/}
-    {/*))}*/}
+    {/* Render DBlob referred images in place of converter icons */}
+    {outputSingleImageRefDBlobs.map((dataRef, i) => dataRef && (
+      <TooltipOutlined key={`image-${dataRef.dblobAssetId}`} title={noTooltips ? null : <>View converted image{/* <br/>{dataRef?.bytesSize?.toLocaleString()} bytes */}</>} placement='top-start'>
+        <div>
+          <RenderImageRefDBlob
+            dataRefDBlobAssetId={dataRef.dblobAssetId}
+            dataRefMimeType={dataRef.mimeType}
+            variant='attachment-button'
+            scaledImageSx={attachmentIconSx}
+            onClick={handleViewFirstImage}
+          />
+        </div>
+      </TooltipOutlined>
+    ))}
 
     {/*{activeConterters.some(c => c.id.startsWith('url-page-')) ? <LanguageIcon sx={{ opacity: 0.2, ml: -2.5 }} /> : null}*/}
-    {activeConterters.map((_converter, idx) => {
+    {renderConverterIcons && activeConterters.map((_converter, idx) => {
       const Icon = converterTypeToIconMap[_converter.id] ?? null;
       return !Icon ? null : (
-        <TooltipOutlined key={`${_converter.id}-${idx}`} title={`Attached as ${_converter.name}`} placement='top-start'>
-          <Icon sx={{ width: 20, height: 20 }} />
+        <TooltipOutlined key={`${_converter.id}-${idx}`} title={noTooltips ? null : `Attached as ${_converter.name}`} placement='top-start'>
+          <Icon sx={attachmentConverterSx} />
         </TooltipOutlined>
       );
     })}
+
   </Box>;
 }
 
@@ -163,7 +199,7 @@ function attachmentLabelText(attachmentDraft: AttachmentDraft): string {
     if (converter.id === 'rich-text')
       return 'Rich HTML';
   }
-  return ellipsizeFront(attachmentDraft.label, 24);
+  return ellipsizeFront(attachmentDraft.label, 22);
 }
 
 
@@ -173,6 +209,7 @@ function LLMAttachmentButton(props: {
   llmAttachment: LLMAttachmentDraft,
   menuShown: boolean,
   onToggleMenu: (attachmentDraftId: AttachmentDraftId, anchor: HTMLAnchorElement) => void,
+  onViewImageRefPart: (imageRefPart: DMessageImageRefPart) => void,
 }) {
 
   // derived state
@@ -197,91 +234,59 @@ function LLMAttachmentButton(props: {
     onToggleMenu(draft.id, event.currentTarget);
   }, [draft.id, onToggleMenu]);
 
-
-  // compose tooltip
-  let tooltip: string | null = '';
-  if (draft.source.media !== 'text')
-    tooltip += draft.source.media + ': ';
-  tooltip += draft.label;
-  // if (hasInput)
-  //   tooltip += `\n(${aInput.mimeType}: ${aInput.dataSize.toLocaleString()} bytes)`;
-  // if (aOutputs && aOutputs.length >= 1)
-  //   tooltip += `\n\n${JSON.stringify(aOutputs)}`;
-
   // choose variants and color
-  let color: ColorPaletteProp;
-  let variant: 'soft' | 'outlined' | 'contained' = 'soft';
-  if (isInputLoading || isOutputLoading) {
-    color = 'success';
-  } else if (isInputError) {
-    color = 'danger';
-    tooltip = props.menuShown ? null
-      : `Issue loading the attachment: ${draft.inputError}\n\n${tooltip}`;
-  } else if (showWarning) {
-    color = 'warning';
-    tooltip = props.menuShown ? null
-      : isUnconvertible
-        ? `Attachments of type '${draft.input?.mimeType}' are not supported yet. You can open a feature request on GitHub.\n\n${tooltip}`
-        : `Not compatible with the selected LLM or file not supported. Please try another format.\n\n${tooltip}`;
-  } else {
-    // all good
-    tooltip = null;
-    color = /*props.menuShown ? 'primary' :*/ 'neutral';
-    variant = 'outlined';
-  }
+  const color: ColorPaletteProp =
+    (isInputLoading || isOutputLoading) ? 'success'
+      : isInputError ? 'danger'
+        : showWarning ? 'warning'
+          : /*props.menuShown ? 'primary' :*/ 'neutral';
 
+  const variant: VariantProp =
+    (isInputLoading || isOutputLoading || isInputError || showWarning) ? 'soft'
+      : 'outlined';
 
-  return <Box>
+  // loading indicator before we are ready for a button
+  if (isInputLoading)
+    return <InputLoadingPlaceholder label={draft.label} />;
 
-    <GoodTooltip
-      title={tooltip}
-      isError={isInputError}
-      isWarning={showWarning}
-      sx={{ p: 1, whiteSpace: 'break-spaces' }}
+  return (
+    <Button
+      size='sm'
+      color={color}
+      variant={variant}
+      onClick={handleToggleMenu}
+      onContextMenu={handleToggleMenu}
+      sx={{
+        backgroundColor: props.menuShown ? `${color}.softActiveBg` : variant === 'outlined' ? 'background.popup' : undefined,
+        border: variant === 'soft' ? '1px solid' : undefined,
+        borderColor: variant === 'soft' ? `${color}.solidBg` : undefined,
+        borderRadius: 'sm',
+        ...ATTACHMENT_MIN_STYLE,
+        px: 1, py: 0.5, // reduce
+        gap: 1,
+      }}
     >
-      {isInputLoading
-        ? <LoadingIndicator label={draft.label} />
-        : (
-          <Button
-            size='sm'
-            color={color}
-            variant={variant}
-            onClick={handleToggleMenu}
-            onContextMenu={handleToggleMenu}
-            sx={{
-              backgroundColor: props.menuShown ? `${color}.softActiveBg` : variant === 'outlined' ? 'background.popup' : undefined,
-              border: variant === 'soft' ? '1px solid' : undefined,
-              borderColor: variant === 'soft' ? `${color}.solidBg` : undefined,
-              borderRadius: 'sm',
-              ...ATTACHMENT_MIN_STYLE,
-              px: 1, py: 0.5,
-              display: 'flex', flexDirection: 'row', gap: 1,
-            }}
-          >
-            {isInputError
-              ? <InputErrorIndicator />
-              : <>
-                {/* Icons: Web Page Screenshot, Converter[s] */}
-                {attachmentIcons(draft)}
 
-                {/* Label */}
-                <Typography level='title-sm' sx={{ whiteSpace: 'nowrap' }}>
-                  {isOutputLoading ? 'Converting... ' : attachmentLabelText(draft)}
-                </Typography>
+      {isInputError && <InputErrorIndicator />}
 
-                {/* Loading icon */}
-                {isOutputLoading && <CircularProgress color='success' size='sm' />}
+      {/* Icons: Web Page Screenshot, Converter[s] */}
+      {attachmentIcons(draft, props.menuShown, props.onViewImageRefPart)}
 
-                {/* LiveFile icon */}
-                {hasLiveFiles && (
-                  <TooltipOutlined title='LiveFile is supported' placement='top-end'>
-                    <LiveFileIcon />
-                  </TooltipOutlined>
-                )}
-              </>}
-          </Button>
-        )}
-    </GoodTooltip>
+      {/* Label */}
+      <Typography level='title-sm' sx={{ whiteSpace: 'nowrap' }}>
+        {isOutputLoading ? 'Converting... ' : attachmentLabelText(draft)}
+      </Typography>
 
-  </Box>;
+      {/* Is Converting icon */}
+      {isOutputLoading && <CircularProgress color='success' size='sm' />}
+
+      {/* LiveFile is supported icon */}
+      {hasLiveFiles && (
+        <TooltipOutlined title='LiveFile is supported' placement='top-end'>
+          <LiveFileIcon />
+        </TooltipOutlined>
+      )}
+
+    </Button>
+  );
 }

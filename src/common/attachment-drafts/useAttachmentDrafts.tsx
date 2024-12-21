@@ -10,17 +10,17 @@ import type { DConversationId } from '~/common/stores/chat/chat.conversation';
 import type { DMessageFragment } from '~/common/stores/chat/chat.fragments';
 import type { DMessageId } from '~/common/stores/chat/chat.message';
 import { getAllFilesFromDirectoryRecursively, getDataTransferFilesOrPromises } from '~/common/util/fileSystemUtils';
-import { useChatAttachmentsStore } from '~/common/chat-overlay/store-chat-overlay';
+import { useChatAttachmentsStore } from '~/common/chat-overlay/store-perchat_vanilla';
 
 import type { AttachmentDraftSourceOriginDTO, AttachmentDraftSourceOriginFile } from './attachment.types';
-import type { AttachmentDraftsStoreApi } from './store-attachment-drafts-slice';
+import type { AttachmentDraftsStoreApi } from './store-perchat-attachment-drafts_slice';
 
 
 // enable to debug operations
 const ATTACHMENTS_DEBUG_INTAKE = false;
 
 
-export const useAttachmentDrafts = (attachmentsStoreApi: AttachmentDraftsStoreApi | null, enableLoadURLs: boolean) => {
+export const useAttachmentDrafts = (attachmentsStoreApi: AttachmentDraftsStoreApi | null, enableLoadURLs: boolean, hintAddImages: boolean, onFilterAGIFile: (file: File) => Promise<boolean>) => {
 
   // state
   const { _createAttachmentDraft, attachmentDrafts, attachmentsRemoveAll, attachmentsTakeAllFragments, attachmentsTakeFragmentsByType } = useChatAttachmentsStore(attachmentsStoreApi, useShallow(state => ({
@@ -41,10 +41,15 @@ export const useAttachmentDrafts = (attachmentsStoreApi: AttachmentDraftsStoreAp
     if (ATTACHMENTS_DEBUG_INTAKE)
       console.log('attachAppendFile', origin, fileWithHandle, overrideFileName);
 
+    // special case: intercept AGI files to potentially load them instead of attaching them
+    if (fileWithHandle.name.endsWith('.agi.json'))
+      if (await onFilterAGIFile(fileWithHandle))
+        return;
+
     return _createAttachmentDraft({
       media: 'file', origin, fileWithHandle, refPath: overrideFileName || fileWithHandle.name,
-    });
-  }, [_createAttachmentDraft]);
+    }, { hintAddImages });
+  }, [_createAttachmentDraft, hintAddImages, onFilterAGIFile]);
 
   /**
    * Append data transfer to the attachments.
@@ -145,7 +150,7 @@ export const useAttachmentDrafts = (attachmentsStoreApi: AttachmentDraftsStoreAp
       if (textPlainUrl && textPlainUrl.trim()) {
         void _createAttachmentDraft({
           media: 'url', url: textPlainUrl, refUrl: textPlain,
-        });
+        }, { hintAddImages});
 
         return 'as_url';
       }
@@ -155,7 +160,7 @@ export const useAttachmentDrafts = (attachmentsStoreApi: AttachmentDraftsStoreAp
     if (attachText && (textHtml || textPlain)) {
       void _createAttachmentDraft({
         media: 'text', method, textPlain, textHtml,
-      });
+      }, { hintAddImages });
 
       return 'as_text';
     }
@@ -165,7 +170,7 @@ export const useAttachmentDrafts = (attachmentsStoreApi: AttachmentDraftsStoreAp
 
     // did not attach anything from this data transfer
     return false;
-  }, [attachAppendFile, _createAttachmentDraft, enableLoadURLs]);
+  }, [_createAttachmentDraft, attachAppendFile, enableLoadURLs, hintAddImages]);
 
   /**
    * Append clipboard items to the attachments.
@@ -223,7 +228,7 @@ export const useAttachmentDrafts = (attachmentsStoreApi: AttachmentDraftsStoreAp
         if (textPlainUrl && textPlainUrl.trim()) {
           void _createAttachmentDraft({
             media: 'url', url: textPlainUrl.trim(), refUrl: textPlain,
-          });
+          }, { hintAddImages });
           continue;
         }
       }
@@ -232,13 +237,13 @@ export const useAttachmentDrafts = (attachmentsStoreApi: AttachmentDraftsStoreAp
       if (textHtml || textPlain) {
         void _createAttachmentDraft({
           media: 'text', method: 'clipboard-read', textPlain, textHtml,
-        });
+        }, { hintAddImages });
         continue;
       }
 
       console.warn('Clipboard item has no text/html or text/plain item.', clipboardItem.types, clipboardItem);
     }
-  }, [attachAppendFile, _createAttachmentDraft, enableLoadURLs]);
+  }, [_createAttachmentDraft, attachAppendFile, enableLoadURLs, hintAddImages]);
 
   /**
    * Append ego content to the attachments.
@@ -257,8 +262,8 @@ export const useAttachmentDrafts = (attachmentsStoreApi: AttachmentDraftsStoreAp
         conversationId,
         messageId,
       },
-    });
-  }, [_createAttachmentDraft]);
+    }, { hintAddImages });
+  }, [_createAttachmentDraft, hintAddImages]);
 
 
   return {

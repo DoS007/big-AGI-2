@@ -10,7 +10,7 @@ import EditNoteIcon from '@mui/icons-material/EditNote';
 import SearchIcon from '@mui/icons-material/Search';
 import TelegramIcon from '@mui/icons-material/Telegram';
 
-import { SystemPurposeData, SystemPurposeId, SystemPurposes } from '../../../../data';
+import { SystemPurposeData, SystemPurposeExample, SystemPurposeId, SystemPurposes } from '../../../../data';
 
 import { bareBonesPromptMixer } from '~/modules/persona/pmix/pmix';
 
@@ -115,7 +115,11 @@ function Tile(props: {
 /**
  * Purpose selector for the current chat. Clicking on any item activates it for the current chat.
  */
-export function PersonaSelector(props: { conversationId: DConversationId, runExample: (example: string) => void }) {
+export function PersonaSelector(props: {
+  conversationId: DConversationId,
+  isMobile: boolean,
+  runExample: (example: SystemPurposeExample) => void,
+}) {
 
   // state
   const [searchQuery, setSearchQuery] = React.useState('');
@@ -124,8 +128,11 @@ export function PersonaSelector(props: { conversationId: DConversationId, runExa
 
 
   // external state
-  const showFinder = useUIPreferencesStore(state => state.showPersonaFinder);
-  const [showExamples, showExamplescomponent] = useChipBoolean('Examples', false);
+  const { complexityMode, showPersonaFinder } = useUIPreferencesStore(useShallow(state => ({
+    complexityMode: state.complexityMode,
+    showPersonaFinder: state.showPersonaFinder,
+  })));
+  const [showExamples, showExamplescomponent] = useChipBoolean('Examples', complexityMode === 'extra' && !props.isMobile);
   const [showPrompt, showPromptComponent] = useChipBoolean('Prompt', false);
   const { systemPurposeId, setSystemPurposeId } = useChatStore(useShallow(state => {
     const conversation = state.conversations.find(conversation => conversation.id === props.conversationId);
@@ -156,7 +163,7 @@ export function PersonaSelector(props: { conversationId: DConversationId, runExa
   }, [systemPurposeId]);
 
 
-  const unfilteredPurposeIDs = (filteredIDs && showFinder) ? filteredIDs : Object.keys(SystemPurposes) as SystemPurposeId[];
+  const unfilteredPurposeIDs = (filteredIDs && showPersonaFinder) ? filteredIDs : Object.keys(SystemPurposes) as SystemPurposeId[];
   const visiblePurposeIDs = editMode ? unfilteredPurposeIDs : unfilteredPurposeIDs.filter(id => !hiddenPurposeIDs.includes(id));
   const hidePersonaCreator = hiddenPurposeIDs.includes(PURPOSE_ID_PERSONA_CREATOR);
 
@@ -245,7 +252,7 @@ export function PersonaSelector(props: { conversationId: DConversationId, runExa
       py: 2,
     }}>
 
-      {showFinder && <Box>
+      {showPersonaFinder && <Box>
         <Input
           fullWidth
           variant='outlined' color='neutral'
@@ -326,8 +333,7 @@ export function PersonaSelector(props: { conversationId: DConversationId, runExa
 
 
         {/* [row -3] Description */}
-        <Box sx={{ gridColumn: '1 / -1', mt: 3, display: 'flex', alignItems: 'center', gap: 1 }}>
-
+        <Box sx={{ gridColumn: '1 / -1', mt: 3, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
 
           {/* Description*/}
           <Typography level='body-sm' sx={{ color: 'text.primary' }}>
@@ -335,11 +341,13 @@ export function PersonaSelector(props: { conversationId: DConversationId, runExa
               ? 'Cannot find the former persona' + (systemPurposeId ? ` "${systemPurposeId}"` : '')
               : selectedPurpose?.description || 'No description available'}
           </Typography>
-          {/* Examples Toggle */}
-          {/*<Box sx={{ display: 'flex', flexFlow: 'row wrap', flexShrink: 1 }}>*/}
-          {fourExamples && showExamplescomponent}
-          {!isCustomPurpose && showPromptComponent}
-          {/*</Box>*/}
+
+          {/* Examples/Prompt Toggles */}
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            {fourExamples && showExamplescomponent}
+            {!isCustomPurpose && showPromptComponent}
+          </Box>
+
         </Box>
 
         {/* [row -3] Example incipits */}
@@ -370,7 +378,9 @@ export function PersonaSelector(props: { conversationId: DConversationId, runExa
                   >
                     <ListItemButton onClick={() => props.runExample(example)} sx={{ justifyContent: 'space-between', borderRadius: 'md' }}>
                       <Typography level='body-sm'>
-                        {example}
+                        {/* Icon 📁 when the .action is 'require-data-attachment' */}
+                        {(typeof example === 'object' && example.action === 'require-data-attachment') ? '📁 ' : ''}
+                        {(typeof example === 'string') ? example : example.prompt}
                       </Typography>
                       <TelegramIcon color='primary' sx={{}} />
                     </ListItemButton>

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { createJSONStorage, persist } from 'zustand/middleware';
+import { persist } from 'zustand/middleware';
 import { useShallow } from 'zustand/react/shallow';
 
 import type { SystemPurposeId } from '../../../data';
@@ -8,7 +8,7 @@ import type { DLLMId } from '~/common/stores/llms/llms.types';
 import { findLLMOrThrow, getChatLLMId } from '~/common/stores/llms/store-llms';
 
 import { agiUuid } from '~/common/util/idUtils';
-import { backupIdbV3, idbStateStorage } from '~/common/util/idbUtils';
+import { backupIdbV3, createIDBPersistStorage } from '~/common/util/idbUtils';
 
 import { workspaceActions } from '~/common/stores/workspace/store-client-workspace';
 import { workspaceForConversationIdentity } from '~/common/stores/workspace/workspace.types';
@@ -16,8 +16,9 @@ import { workspaceForConversationIdentity } from '~/common/stores/workspace/work
 import { DMessage, DMessageId, DMessageMetadata, MESSAGE_FLAG_AIX_SKIP, messageHasUserFlag } from './chat.message';
 import type { DMessageFragment, DMessageFragmentId } from './chat.fragments';
 import { V3StoreDataToHead, V4ToHeadConverters } from './chats.converters';
-import { conversationTitle, createDConversation, DConversation, DConversationId, duplicateDConversation } from './chat.conversation';
+import { conversationTitle, createDConversation, DConversation, DConversationId, duplicateDConversationNoVoid } from './chat.conversation';
 import { estimateTokensForFragments } from './chat.tokens';
+import { gcChatImageAssets } from '~/common/stores/chat/chat.gc';
 
 
 /// Conversations Store
@@ -29,13 +30,14 @@ interface ChatState {
 export interface ChatActions {
 
   // CRUD conversations
-  prependNewConversation: (personaId: SystemPurposeId | undefined) => DConversationId;
+  prependNewConversation: (personaId: SystemPurposeId | undefined, isIncognito: boolean) => DConversationId;
   importConversation: (c: DConversation, preventClash: boolean) => DConversationId;
   branchConversation: (cId: DConversationId, mId: DMessageId | null) => DConversationId | null;
   deleteConversations: (cIds: DConversationId[], newConversationPersonaId?: SystemPurposeId) => DConversationId;
 
   // within a conversation
-  setAbortController: (cId: DConversationId, _abortController: AbortController | null) => void;
+  isIncognito: (cId: DConversationId) => boolean | undefined;
+  setAbortController: (cId: DConversationId, _abortController: AbortController | null, debugScope: string) => void;
   abortConversationTemp: (cId: DConversationId) => void;
   historyReplace: (cId: DConversationId, messages: DMessage[]) => void;
   historyTruncateToIncluded: (cId: DConversationId, mId: DMessageId, offset: number) => void;
@@ -67,8 +69,9 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
       // default state
       conversations: defaultConversations,
 
-      prependNewConversation: (personaId: SystemPurposeId | undefined): DConversationId => {
+      prependNewConversation: (personaId: SystemPurposeId | undefined, isIncognito: boolean): DConversationId => {
         const newConversation = createDConversation(personaId);
+        if (isIncognito) newConversation._isIncognito = true;
 
         _set(state => ({
           conversations: [newConversation, ...state.conversations],
@@ -120,7 +123,7 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
         if (!conversation)
           return null;
 
-        const branched = duplicateDConversation(conversation, messageId ?? undefined);
+        const branched = duplicateDConversationNoVoid(conversation, messageId ?? undefined);
 
         _set({
           conversations: [branched, ...conversations],
@@ -174,11 +177,23 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
           ),
         })),
 
-      setAbortController: (conversationId: DConversationId, _abortController: AbortController | null) =>
-        _get()._editConversation(conversationId, () =>
-          ({
-            _abortController: _abortController,
-          })),
+      isIncognito: (conversationId: DConversationId): boolean | undefined =>
+        _get().conversations.find(_c => _c.id === conversationId)?._isIncognito ?? undefined,
+
+      setAbortController: (conversationId: DConversationId, _nextController: AbortController | null, debugScope: string) =>
+        _get()._editConversation(conversationId, ({ _abortController: _currentController }) => {
+          // [DEV] Debug state management of controllers - FIXME: migrate away from a per-chat, unless done properly (cascade triggering)
+          if (_nextController !== null && _currentController) {
+            const isAlreadyAborted = _currentController.signal.aborted;
+            if (process.env.NODE_ENV === 'development')
+              console.warn(`[DEV] setAbortController (${debugScope}): race condition (${isAlreadyAborted ? 'Already aborted' : 'Not aborted'}) for conversation ${conversationId}`);
+            if (!isAlreadyAborted)
+              _currentController.abort();
+          }
+          return {
+            _abortController: _nextController,
+          };
+        }),
 
       abortConversationTemp: (conversationId: DConversationId) =>
         _get()._editConversation(conversationId, conversation => {
@@ -229,7 +244,7 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
           };
         }),
 
-      historyView: (conversationId: DConversationId) =>
+      historyView: (conversationId: DConversationId): Readonly<DMessage[]> | undefined =>
         _get().conversations.find(_c => _c.id === conversationId)?.messages ?? undefined,
 
 
@@ -371,6 +386,7 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
         _get()._editConversation(conversationId,
           {
             userTitle,
+            ...(!userTitle && { autoTitle: undefined }), // clear autotitle when clearing usertitle
           }),
 
       setUserSymbol: (conversationId: DConversationId, userSymbol: string | null) =>
@@ -390,7 +406,7 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
        *  - 4: [2024-05-14] Convert messages to multi-part, removed the IDB migration
        */
       version: 4,
-      storage: createJSONStorage(() => idbStateStorage),
+      storage: createIDBPersistStorage<ConversationsStore>(),
 
       // Migrations
       migrate: async (state: any, fromVersion: number) => {
@@ -410,11 +426,18 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
       // Pre-Saving: remove transient properties
       partialize: (state) => ({
         ...state,
-        conversations: state.conversations.map((conversation: DConversation) => {
-          // remove the converation AbortController (current data structure version)
-          const { _abortController, ...rest } = conversation;
-          return rest;
-        }),
+        conversations: state.conversations
+          .filter((c, _ignoreIdx, all) => {
+            // do not save incognito conversations
+            if (c._isIncognito) return false;
+            // do not save empty conversations, begin saving them when they have content
+            return c.messages?.length || c.userTitle || c.autoTitle || all.length <= 1;
+          })
+          .map((conversation: DConversation) => {
+            // remove the converation AbortController (current data structure version)
+            const { _abortController, ...rest } = conversation;
+            return rest;
+          }),
       }),
 
       // Post-Loading: re-add transient properties and cleanup state
@@ -423,6 +446,12 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
 
         // fixup conversations in-memory
         V4ToHeadConverters.inMemHeadCleanDConversations(state.conversations || []);
+
+        // [GC] Chat Image Assets
+        // NOTE: this used to be in 'sherpa', but that caused the storage to be read too early, so we do it here post hydration
+        //       and synchronously, as it's a rather quick operation (most of the times there won't be any effect).
+        void gcChatImageAssets(state.conversations);
+
       },
 
     }),

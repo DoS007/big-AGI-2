@@ -5,7 +5,7 @@ import DoneIcon from '@mui/icons-material/Done';
 import ShareOutlinedIcon from '@mui/icons-material/ShareOutlined';
 
 import { Brand } from '~/common/app.config';
-import { ConfirmationModal } from '~/common/components/ConfirmationModal';
+import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
 import { DataAtRestV1 } from '~/common/stores/chat/chats.converters';
 import { Link } from '~/common/components/Link';
 import { addSnackbar } from '~/common/components/snackbar/useSnackbarsStore';
@@ -15,7 +15,7 @@ import { getConversation } from '~/common/stores/chat/store-chats';
 
 import type { StoragePutSchema, StorageUpdateDeletionKeySchema } from '../server/link';
 import { ChatLinkDetails } from './ChatLinkDetails';
-import { rememberChatLinkItem, updateChatLinkDeletionKey, useLinkStorageOwnerId } from './store-link';
+import { rememberChatLinkItem, updateChatLinkDeletionKey, useLinkStorageOwnerId } from './store-share-link';
 
 
 export function ChatLinkExport(props: {

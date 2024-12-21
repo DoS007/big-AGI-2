@@ -1,8 +1,8 @@
-import { speakText } from '~/modules/elevenlabs/elevenlabs.client';
+import { elevenLabsSpeakText } from '~/modules/elevenlabs/elevenlabs.client';
 
-import { isContentFragment, isTextPart } from '~/common/stores/chat/chat.fragments';
+import { isTextContentFragment } from '~/common/stores/chat/chat.fragments';
 
-import type { AixChatGenerateDMessageUpdate } from '~/modules/aix/client/aix.client';
+import type { AixChatGenerateContent_DMessage } from '~/modules/aix/client/aix.client';
 
 import type { PersonaProcessorInterface } from '../chat-persona';
 
@@ -16,11 +16,11 @@ export class PersonaChatMessageSpeak implements PersonaProcessorInterface {
   constructor(private autoSpeakType: AutoSpeakType) {
   }
 
-  handleMessage(accumulatedMessage: Partial<AixChatGenerateDMessageUpdate>, messageComplete: boolean) {
+  handleMessage(accumulatedMessage: Partial<AixChatGenerateContent_DMessage>, messageComplete: boolean) {
     if (this.autoSpeakType === 'off' || this.spokenLine) return;
 
     // Require a Content.Text first fragment
-    if (!accumulatedMessage.fragments?.length || !isContentFragment(accumulatedMessage.fragments[0]) || !isTextPart(accumulatedMessage.fragments[0].part))
+    if (!accumulatedMessage.fragments?.length || !isTextContentFragment(accumulatedMessage.fragments[0]))
       return;
     const text = accumulatedMessage.fragments[0].part.text;
 
@@ -59,6 +59,6 @@ export class PersonaChatMessageSpeak implements PersonaProcessorInterface {
     console.log('📢 TTS:', text);
     this.spokenLine = true;
     // fire/forget: we don't want to stall this loop
-    void speakText(text);
+    void elevenLabsSpeakText(text, undefined, false, true);
   }
 }

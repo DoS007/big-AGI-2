@@ -14,8 +14,8 @@ import { GoogleSearchSettings } from '~/modules/google/GoogleSearchSettings';
 import { ProdiaSettings } from '~/modules/t2i/prodia/ProdiaSettings';
 import { T2ISettings } from '~/modules/t2i/T2ISettings';
 
-import type { PreferencesTabId } from '~/common/layout/optima/store-optima';
-import { GoodModal } from '~/common/components/GoodModal';
+import type { PreferencesTabId } from '~/common/layout/optima/store-layout-optima';
+import { GoodModal } from '~/common/components/modals/GoodModal';
 import { useIsMobile } from '~/common/components/useMatchMedia';
 
 import { AppChatSettingsAI } from './AppChatSettingsAI';

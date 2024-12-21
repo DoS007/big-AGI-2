@@ -12,6 +12,7 @@ import { ModelVendorOpenPipe } from './openpipe/openpipe.vendor';
 import { ModelVendorOpenRouter } from './openrouter/openrouter.vendor';
 import { ModelVendorPerplexity } from './perplexity/perplexity.vendor';
 import { ModelVendorTogetherAI } from './togetherai/togetherai.vendor';
+import { ModelVendorXAI } from './xai/xai.vendor';
 
 import type { IModelVendor } from './IModelVendor';
 
@@ -19,6 +20,7 @@ import type { IModelVendor } from './IModelVendor';
 export type ModelVendorId =
   | 'anthropic'
   | 'azure'
+  | 'deepseek'
   | 'googleai'
   | 'groq'
   | 'lmstudio'
@@ -30,12 +32,14 @@ export type ModelVendorId =
   | 'openrouter'
   | 'perplexity'
   | 'togetherai'
-  | 'deepseek';
+  | 'xai'
+  ;
 
 /** Global: Vendor Instances Registry **/
 const MODEL_VENDOR_REGISTRY: Record<ModelVendorId, IModelVendor> = {
   anthropic: ModelVendorAnthropic,
   azure: ModelVendorAzure,
+  deepseek: ModelVendorDeepseek,
   googleai: ModelVendorGemini,
   groq: ModelVendorGroq,
   lmstudio: ModelVendorLMStudio,
@@ -47,13 +51,13 @@ const MODEL_VENDOR_REGISTRY: Record<ModelVendorId, IModelVendor> = {
   openrouter: ModelVendorOpenRouter,
   perplexity: ModelVendorPerplexity,
   togetherai: ModelVendorTogetherAI,
-  deepseek: ModelVendorDeepseek,
+  xai: ModelVendorXAI,
 } as Record<string, IModelVendor>;
 
 
 export function findAllModelVendors(): IModelVendor[] {
   const modelVendors = Object.values(MODEL_VENDOR_REGISTRY);
-  modelVendors.sort((a, b) => a.rank - b.rank);
+  modelVendors.sort((a, b) => a.displayRank - b.displayRank);
   return modelVendors;
 }
 

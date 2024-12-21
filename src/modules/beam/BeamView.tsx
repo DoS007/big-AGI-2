@@ -3,8 +3,11 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { Alert, Box, CircularProgress } from '@mui/joy';
 
-import { ConfirmationModal } from '~/common/components/ConfirmationModal';
+import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
+import { ShortcutKey, useGlobalShortcuts } from '~/common/components/shortcuts/useGlobalShortcuts';
 import { animationEnterScaleUp } from '~/common/util/animUtils';
+import { copyToClipboard } from '~/common/util/clipboardUtils';
+import { messageFragmentsReduceText } from '~/common/stores/chat/chat.message';
 import { useUICounter } from '~/common/state/store-ui';
 
 import { BeamExplainer } from './BeamExplainer';
@@ -68,6 +71,22 @@ export function BeamView(props: {
 
   const handleRayIncreaseCount = React.useCallback(() => setRayCount(raysCount + 1), [setRayCount, raysCount]);
 
+  const handleRaysOperation = React.useCallback((operation: 'copy' | 'use') => {
+    const { rays, onSuccessCallback } = props.beamStore.getState();
+    const allFragments = rays.flatMap(ray => ray.message.fragments);
+    if (allFragments.length) {
+      switch (operation) {
+        case 'copy':
+          const combinedText = messageFragmentsReduceText(allFragments, '\n\n\n---\n\n\n');
+          copyToClipboard(combinedText, 'All Beams');
+          break;
+        case 'use':
+          onSuccessCallback?.({ fragments: allFragments });
+          break;
+      }
+    }
+  }, [props.beamStore]);
+
   const handleScatterStart = React.useCallback(() => {
     setHasAutoMerged(false);
     startScatteringAll();
@@ -120,13 +139,20 @@ export function BeamView(props: {
   // }, [bootup, handleRaySetCount]);
 
 
+  // intercept ctrl+enter and esc
+  useGlobalShortcuts('BeamView', React.useMemo(() => [
+    { key: ShortcutKey.Enter, ctrl: true, action: handleScatterStart, disabled: isScattering, level: 1 },
+    ...(isScattering ? [{ key: ShortcutKey.Esc, action: stopScatteringAll, level: 10 + 1 /* becasuse > ChatBarAltBeam */ }] : []),
+  ], [handleScatterStart, isScattering, stopScatteringAll]));
+
+
   // Explainer, if unseen
   if (props.showExplainer && explainerUnseen)
     return <BeamExplainer onWizardComplete={explainerCompleted} />;
 
   return <>
 
-    <Box sx={{
+    <Box role='beam-list' sx={{
       // scroller fill
       minHeight: '100%',
       // ...props.sx,
@@ -176,8 +202,10 @@ export function BeamView(props: {
         isMobile={props.isMobile}
         rayIds={rayIds}
         showRayAdd={cardAdd}
+        showRaysOps={(isScattering || raysReady < 2) ? undefined : raysReady}
         hadImportedRays={hadImportedRays}
         onIncreaseRayCount={handleRayIncreaseCount}
+        onRaysOperation={handleRaysOperation}
         // linkedLlmId={currentGatherLlmId}
       />
 

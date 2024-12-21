@@ -6,10 +6,10 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 
 import { DMessage, MESSAGE_FLAG_AIX_SKIP, messageFragmentsReduceText, messageHasUserFlag } from '~/common/stores/chat/chat.message';
+import { makeMessageAvatarIcon, messageBackground } from '~/common/util/dMessageUtils';
 
 import { TokenBadgeMemo } from '../composer/tokens/TokenBadge';
 import { isErrorChatMessage } from './explainServiceErrors';
-import { makeMessageAvatarIcon, messageBackground } from './messageUtils';
 import { messageSkippedSx } from './ChatMessage';
 
 
@@ -27,7 +27,7 @@ export const MessagesSelectionHeader = (props: { hasSelected: boolean, sumTokens
   }}>
     <Checkbox size='md' onChange={event => props.onSelectAll(event.target.checked)} sx={{ minWidth: 24, justifyContent: 'center' }} />
 
-    <Box>Select all ({props.sumTokens})</Box>
+    <Box>Select all ({props.sumTokens?.toLocaleString()})</Box>
 
     <Box sx={{ mx: 'auto', display: 'flex', gap: 1 }}>
       <Button variant='solid' disabled={!props.hasSelected} onClick={props.onDeleteMessages} sx={{ minWidth: { md: 120 } }} endDecorator={<DeleteOutlineIcon />}>
@@ -75,7 +75,7 @@ export function CleanerMessage(props: { message: DMessage, selected: boolean, re
   const backgroundColor = messageBackground(messageRole, !!messageUpdated, isAssistantError);
 
   const avatarIconEl: React.JSX.Element | null = React.useMemo(() => {
-    return makeMessageAvatarIcon('pro', messageRole, messageGeneratorName, messagePurposeId, !!messagePendingIncomplete, isUserMessageSkipped, false);
+    return makeMessageAvatarIcon('pro', messageRole, messageGeneratorName, messagePurposeId, !!messagePendingIncomplete, isUserMessageSkipped, false, false);
   }, [isUserMessageSkipped, messageGeneratorName, messagePendingIncomplete, messagePurposeId, messageRole]);
 
   const handleCheckedChange = (event: React.ChangeEvent<HTMLInputElement>) =>

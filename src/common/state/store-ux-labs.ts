@@ -1,13 +1,13 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-import { isDevModeLocalhost } from '~/common/util/pwaUtils';
+import { Is } from '~/common/util/pwaUtils';
 
 
 // UX Labs Experiments
 
 // UxLabsSettings.tsx contains the graduated settings, but the following are not stated:
-//  - Text Tools: dinamically shown where applicable
+//  - Text Tools: dynamically shown where applicable
 //  - Chat Mode: Follow-Ups; moved to Chat Advanced UI
 interface UXLabsStore {
 
@@ -104,11 +104,11 @@ export function getUXLabsHighPerformance() {
 }
 
 export function useLabsDevMode() {
-  return useUXLabsStore((state) => state.labsDevMode) && isDevModeLocalhost;
+  return useUXLabsStore((state) => state.labsDevMode) && Is.Deployment.Localhost;
 }
 
 export function getLabsDevMode() {
-  return useUXLabsStore.getState().labsDevMode && isDevModeLocalhost;
+  return useUXLabsStore.getState().labsDevMode && Is.Deployment.Localhost;
 }
 
 export function getLabsDevNoStreaming() {

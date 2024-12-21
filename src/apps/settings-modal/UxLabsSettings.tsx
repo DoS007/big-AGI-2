@@ -3,6 +3,7 @@ import * as React from 'react';
 import { FormControl, Typography } from '@mui/joy';
 import AddAPhotoIcon from '@mui/icons-material/AddAPhoto';
 import CodeIcon from '@mui/icons-material/Code';
+import EngineeringIcon from '@mui/icons-material/Engineering';
 import LocalAtmOutlinedIcon from '@mui/icons-material/LocalAtmOutlined';
 import ScreenshotMonitorIcon from '@mui/icons-material/ScreenshotMonitor';
 import ShortcutIcon from '@mui/icons-material/Shortcut';
@@ -11,11 +12,10 @@ import TitleIcon from '@mui/icons-material/Title';
 
 import { FormLabelStart } from '~/common/components/forms/FormLabelStart';
 import { FormSwitchControl } from '~/common/components/forms/FormSwitchControl';
+import { Is } from '~/common/util/pwaUtils';
 import { Link } from '~/common/components/Link';
 import { useIsMobile } from '~/common/components/useMatchMedia';
 import { useUXLabsStore } from '~/common/state/store-ux-labs';
-import { isDevModeLocalhost } from '~/common/util/pwaUtils';
-import EngineeringIcon from '@mui/icons-material/Engineering';
 
 
 // uncomment for more settings
@@ -42,7 +42,7 @@ export function UxLabsSettings() {
 
     {/* [DEV MODE] Settings */}
 
-    {(isDevModeLocalhost || labsDevMode) && (
+    {(Is.Deployment.Localhost || labsDevMode) && (
       <FormSwitchControl
         title={<><EngineeringIcon color='warning' sx={{ fontSize: 'lg', mr: 0.5, mb: 0.25 }} />Developer Mode</>} description={labsDevMode ? 'Enabled' : 'Disabled'}
         checked={labsDevMode} onChange={setLabsDevMode}
@@ -89,7 +89,7 @@ export function UxLabsSettings() {
     />
 
     {!isMobile && <FormSwitchControl
-      title={<><ShortcutIcon sx={{ fontSize: 'lg', mr: 0.5, mb: 0.25 }} />Pro Shortcuts</>} description={labsShowShortcutBar ? 'Status Bar' : 'Disabled'}
+      title={<><ShortcutIcon sx={{ fontSize: 'lg', mr: 0.5, mb: 0.25 }} />Shortcuts Bar</>} description={labsShowShortcutBar ? 'Status Bar' : 'Disabled'}
       checked={labsShowShortcutBar} onChange={setLabsShowShortcutBar}
     />}
 

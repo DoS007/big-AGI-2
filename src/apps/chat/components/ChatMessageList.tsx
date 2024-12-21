@@ -4,21 +4,25 @@ import { useShallow } from 'zustand/react/shallow';
 import type { SxProps } from '@mui/joy/styles/types';
 import { Box, List } from '@mui/joy';
 
+import type { SystemPurposeExample } from '../../../data';
+
 import type { DiagramConfig } from '~/modules/aifn/digrams/DiagramsModal';
 
 import type { ConversationHandler } from '~/common/chat-overlay/ConversationHandler';
-import type { DConversationId } from '~/common/stores/chat/chat.conversation';
-import type { DMessageFragment, DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
-import { InlineError } from '~/common/components/InlineError';
+import { DConversationId, excludeSystemMessages } from '~/common/stores/chat/chat.conversation';
 import { ShortcutKey, useGlobalShortcuts } from '~/common/components/shortcuts/useGlobalShortcuts';
-import { createDMessageTextContent, DMessage, DMessageId, DMessageUserFlag, DMetaReferenceItem, MESSAGE_FLAG_AIX_SKIP } from '~/common/stores/chat/chat.message';
+import { convertFilesToDAttachmentFragments } from '~/common/attachment-drafts/attachment.pipeline';
+import { createDMessageFromFragments, createDMessageTextContent, DMessage, DMessageId, DMessageUserFlag, DMetaReferenceItem, MESSAGE_FLAG_AIX_SKIP } from '~/common/stores/chat/chat.message';
+import { createTextContentFragment, DMessageFragment, DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
 import { getConversation, useChatStore } from '~/common/stores/chat/store-chats';
+import { openFileForAttaching } from '~/common/components/ButtonAttachFiles';
 import { optimaOpenPreferences } from '~/common/layout/optima/useOptima';
 import { useBrowserTranslationWarning } from '~/common/components/useIsBrowserTranslating';
 import { useCapabilityElevenLabs } from '~/common/components/useCapabilities';
-import { useChatOverlayStore } from '~/common/chat-overlay/store-chat-overlay';
+import { useChatOverlayStore } from '~/common/chat-overlay/store-perchat_vanilla';
 import { useScrollToBottom } from '~/common/scroll-to-bottom/useScrollToBottom';
 
+import { CMLZeroConversation } from './messages-list/CMLZeroConversation';
 import { ChatMessage, ChatMessageMemo } from './message/ChatMessage';
 import { CleanerMessage, MessagesSelectionHeader } from './message/CleanerMessage';
 import { Ephemerals } from './Ephemerals';
@@ -37,11 +41,13 @@ export function ChatMessageList(props: {
   capabilityHasT2I: boolean,
   chatLLMAntPromptCaching: boolean,
   chatLLMContextTokens: number | null,
+  chatLLMSupportsImages: boolean,
   fitScreen: boolean,
   isMobile: boolean,
   isMessageSelectionMode: boolean,
-  onConversationBranch: (conversationId: DConversationId, messageId: string) => void,
+  onConversationBranch: (conversationId: DConversationId, messageId: string, addSplitPane: boolean) => void,
   onConversationExecuteHistory: (conversationId: DConversationId) => Promise<void>,
+  onConversationNew: (forceNoRecycle: boolean, isIncognito: boolean) => void,
   onTextDiagram: (diagramConfig: DiagramConfig | null) => void,
   onTextImagine: (conversationId: DConversationId, selectedText: string) => Promise<void>,
   onTextSpeak: (selectedText: string) => Promise<void>,
@@ -79,12 +85,38 @@ export function ChatMessageList(props: {
 
   // text actions
 
-  const handleRunExample = React.useCallback(async (examplePrompt: string) => {
-    if (conversationId && conversationHandler) {
-      conversationHandler.messageAppend(createDMessageTextContent('user', examplePrompt)); // [chat] append user:persona question
+  const handleRunExample = React.useCallback(async (example: SystemPurposeExample) => {
+    if (!conversationId || !conversationHandler) return;
+
+    // Simple Example Prompt (User text message)
+    if (typeof example === 'string') {
+      conversationHandler.messageAppend(createDMessageTextContent('user', example)); // [chat] append user:persona question
       await onConversationExecuteHistory(conversationId);
+      return;
     }
-  }, [conversationHandler, conversationId, onConversationExecuteHistory]);
+
+    // User-Action Example Prompts (User text message + File attachments)
+    switch (example.action) {
+      case 'require-data-attachment':
+        await openFileForAttaching(true, async (filesWithHandle) => {
+
+          // Retrieve fully-fledged Attachment Fragments (converted/extracted, with sources, mimes, etc.) from the selected files
+          const attachmentFragments = await convertFilesToDAttachmentFragments('file-open', filesWithHandle, {
+            hintAddImages: props.chatLLMSupportsImages,
+          });
+
+          // Create a User message with the prompt and the attachment fragments
+          if (attachmentFragments.length) {
+            conversationHandler.messageAppend(createDMessageFromFragments('user', [ // [chat] append user:persona question + attachment(s)
+              createTextContentFragment(example.prompt),
+              ...attachmentFragments,
+            ]));
+            await onConversationExecuteHistory(conversationId);
+          }
+        });
+        break;
+    }
+  }, [conversationHandler, conversationId, onConversationExecuteHistory, props.chatLLMSupportsImages]);
 
   const handleMessageContinue = React.useCallback(async (_messageId: DMessageId /* Ignored for now */) => {
     if (conversationId && conversationHandler) {
@@ -128,7 +160,7 @@ export function ChatMessageList(props: {
   }, [conversationId, props.conversationHandler]);
 
   const handleMessageBranch = React.useCallback((messageId: DMessageId) => {
-    conversationId && onConversationBranch(conversationId, messageId);
+    conversationId && onConversationBranch(conversationId, messageId, true);
   }, [conversationId, onConversationBranch]);
 
   const handleMessageTruncate = React.useCallback((messageId: DMessageId) => {
@@ -216,7 +248,7 @@ export function ChatMessageList(props: {
   const { isMessageSelectionMode, setIsMessageSelectionMode } = props;
 
   useGlobalShortcuts('ChatMessageList_Selection', React.useMemo(() => !isMessageSelectionMode ? [] : [
-    { key: ShortcutKey.Esc, action: () => setIsMessageSelectionMode(false), description: 'Close' },
+    { key: ShortcutKey.Esc, action: () => setIsMessageSelectionMode(false), description: 'Close Cleanup', level: 10 - 1 },
   ], [isMessageSelectionMode, setIsMessageSelectionMode]));
 
 
@@ -256,18 +288,20 @@ export function ChatMessageList(props: {
   }), [props.sx]);
 
 
+  // no conversation: sine qua non
+  if (!conversationId)
+    return <CMLZeroConversation onConversationNew={props.onConversationNew} />;
+
+
   // no content: show the persona selector
 
-  const filteredMessages = conversationMessages
-    .filter(m => m.role !== 'system' || showSystemMessages); // hide the System message if the user choses to
+  const filteredMessages = excludeSystemMessages(conversationMessages, showSystemMessages);
 
 
   if (!filteredMessages.length)
     return (
       <Box sx={{ ...props.sx }}>
-        {conversationId
-          ? <PersonaSelector conversationId={conversationId} runExample={handleRunExample} />
-          : <InlineError severity='info' error='Select a conversation' sx={{ m: 2 }} />}
+        <PersonaSelector conversationId={conversationId} isMobile={props.isMobile} runExample={handleRunExample} />
       </Box>
     );
 
@@ -314,7 +348,7 @@ export function ChatMessageList(props: {
               isImagining={isImagining}
               isSpeaking={isSpeaking}
               showAntPromptCaching={props.chatLLMAntPromptCaching}
-              showUnsafeHtml={danger_experimentalHtmlWebUi}
+              showUnsafeHtmlCode={danger_experimentalHtmlWebUi}
               onAddInReferenceTo={!composerCanAddInReferenceTo ? undefined : handleAddInReferenceTo}
               onMessageAssistantFrom={handleMessageAssistantFrom}
               onMessageBeam={handleMessageBeam}
@@ -343,7 +377,6 @@ export function ChatMessageList(props: {
           sx={{
             mt: 'auto',
             overflowY: 'auto',
-            minHeight: 64,
           }}
         />
       )}

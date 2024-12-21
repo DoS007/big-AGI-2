@@ -1,6 +1,6 @@
 // noinspection JSUnresolvedReference
 
-import { isBrowser, isVercelFromBackendOrSSR } from './pwaUtils';
+import { Is, isBrowser } from './pwaUtils';
 
 /**
  * Return the base URL for the current environment.
@@ -10,7 +10,8 @@ import { isBrowser, isVercelFromBackendOrSSR } from './pwaUtils';
  */
 export function getBaseUrl(): string {
   if (isBrowser) return ''; // browser should use relative url
-  if (isVercelFromBackendOrSSR) return `https://${process.env.VERCEL_URL}`; // SSR should use vercel url
+  if (Is.Deployment.VercelFromBackendOrSSR) return `https://${process.env.VERCEL_URL}`; // SSR should use vercel url
+  // NOTE: untested with https://localhost:3000
   return `http://localhost:${process.env.PORT ?? 3000}`; // dev SSR should use localhost
 }
 
@@ -20,7 +21,8 @@ export function getBaseUrl(): string {
  */
 export function getOriginUrl(): string {
   if (isBrowser) return window.location.origin;
-  if (isVercelFromBackendOrSSR) return `https://${process.env.VERCEL_URL}`;
+  if (Is.Deployment.VercelFromBackendOrSSR) return `https://${process.env.VERCEL_URL}`;
+  // NOTE: untested with https://localhost:3000
   return `http://localhost:${process.env.PORT ?? 3000}`;
 }
 
@@ -52,15 +54,20 @@ export function fixupHost(host: string, apiPath: string): string {
  * Creates a Blob Object URL (that can be opened in a new tab with window.open, for instance)
  */
 export function createBlobURLFromData(base64Data: string, mimeType: string) {
-  const byteCharacters = atob(base64Data);
-  const byteNumbers = new Array(byteCharacters.length);
-  for (let i = 0; i < byteCharacters.length; i++) {
-    byteNumbers[i] = byteCharacters.charCodeAt(i);
-  }
-  const byteArray = new Uint8Array(byteNumbers);
+  const byteArray = base64ToUint8Array(base64Data);
   const blob = new Blob([byteArray], { type: mimeType });
   return URL.createObjectURL(blob);
 }
+
+export function base64ToUint8Array(base64Data: string) {
+  const binaryString = atob(base64Data);
+  return Uint8Array.from(binaryString, char => char.charCodeAt(0));
+}
+
+export function base64ToArrayBuffer(base64Data: string) {
+  return base64ToUint8Array(base64Data).buffer;
+}
+
 
 /**
  * Creates a Blob Object URL (that can be opened in a new tab with window.open, for instance) from a Data URL

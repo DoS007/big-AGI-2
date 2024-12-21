@@ -1,21 +1,27 @@
+import type { StoreApi } from 'zustand';
+
 import { bareBonesPromptMixer } from '~/modules/persona/pmix/pmix';
 
 import { SystemPurposes } from '../../data';
-import { gcChatImageAssets } from '../../apps/chat/editors/image-generate';
 
-import { createBeamVanillaStore } from '~/modules/beam/store-beam-vanilla';
+import { BeamStore, createBeamVanillaStore } from '~/modules/beam/store-beam_vanilla';
 
 import type { DConversationId } from '~/common/stores/chat/chat.conversation';
 import type { DLLMId } from '~/common/stores/llms/llms.types';
 import { ChatActions, getConversationSystemPurposeId, useChatStore } from '~/common/stores/chat/store-chats';
 import { createDMessageEmpty, createDMessageFromFragments, createDMessagePlaceholderIncomplete, createDMessageTextContent, DMessage, DMessageGenerator, DMessageId, DMessageUserFlag, MESSAGE_FLAG_VND_ANT_CACHE_AUTO, MESSAGE_FLAG_VND_ANT_CACHE_USER, messageHasUserFlag, messageSetUserFlag } from '~/common/stores/chat/chat.message';
 import { createTextContentFragment, DMessageFragment, DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
+import { gcChatImageAssets } from '~/common/stores/chat/chat.gc';
 import { getChatLLMId } from '~/common/stores/llms/store-llms';
 
 import { getChatAutoAI } from '../../apps/chat/store-app-chat';
 
-import { createDEphemeral } from './store-ephemeralsoverlay-slice';
-import { createPerChatVanillaStore } from './store-chat-overlay';
+import { createDEphemeral, EPHEMERALS_DEFAULT_TIMEOUT } from './store-perchat-ephemerals_slice';
+import { createPerChatVanillaStore, PerChatOverlayStore } from './store-perchat_vanilla';
+
+
+// optimization: cache the actions
+const _chatStoreActions = useChatStore.getState() as ChatActions;
 
 
 /**
@@ -25,15 +31,13 @@ import { createPerChatVanillaStore } from './store-chat-overlay';
  *  - Controller classes will call directly methods in this class.
  */
 export class ConversationHandler {
-  private readonly chatActions: ChatActions;
-  private readonly conversationId: DConversationId;
 
-  private readonly beamStore = createBeamVanillaStore();
-  private readonly overlayStore = createPerChatVanillaStore();
+  private readonly beamStore: StoreApi<BeamStore>;
+  private readonly overlayStore: StoreApi<PerChatOverlayStore>;
 
-  constructor(conversationId: DConversationId) {
-    this.chatActions = useChatStore.getState();
-    this.conversationId = conversationId;
+  constructor(private readonly conversationId: DConversationId) {
+    this.beamStore = createBeamVanillaStore();
+    this.overlayStore = createPerChatVanillaStore();
   }
 
 
@@ -93,7 +97,7 @@ export class ConversationHandler {
       }
 
       // when enabled: set the auto flag on the last two user messages
-      const isSystemInstruction = history[i].role === 'system' && i === 0;
+      const isSystemInstruction = i === 0 && history[i].role === 'system';
       if (!isSystemInstruction && history[i].role !== 'user')
         continue;
 
@@ -106,8 +110,16 @@ export class ConversationHandler {
     }
   }
 
-  setAbortController(abortController: AbortController | null): void {
-    this.chatActions.setAbortController(this.conversationId, abortController);
+  setAbortController(abortController: AbortController | null, debugScope: string): void {
+    _chatStoreActions.setAbortController(this.conversationId, abortController, debugScope);
+  }
+
+  clearAbortController(debugScope: string): void {
+    _chatStoreActions.setAbortController(this.conversationId, null, debugScope);
+  }
+
+  isIncognito(): boolean | undefined {
+    return _chatStoreActions.isIncognito(this.conversationId);
   }
 
 
@@ -132,29 +144,35 @@ export class ConversationHandler {
   }
 
   messageAppend(message: DMessage) {
-    this.chatActions.appendMessage(this.conversationId, message);
+    _chatStoreActions.appendMessage(this.conversationId, message);
   }
 
   messageEdit(messageId: string, update: Partial<DMessage> | ((message: DMessage) => Partial<DMessage>), messageComplete: boolean, touch: boolean) {
-    this.chatActions.editMessage(this.conversationId, messageId, update, messageComplete, touch);
+    _chatStoreActions.editMessage(this.conversationId, messageId, update, messageComplete, touch);
   }
 
   messagesDelete(messageIds: DMessageId[]): void {
     for (const messageId of messageIds)
-      this.chatActions.deleteMessage(this.conversationId, messageId);
+      _chatStoreActions.deleteMessage(this.conversationId, messageId);
     void gcChatImageAssets(); // fire/forget
   }
 
   messageFragmentAppend(messageId: string, fragment: DMessageFragment, complete: boolean, touch: boolean) {
-    this.chatActions.appendMessageFragment(this.conversationId, messageId, fragment, complete, touch);
+    _chatStoreActions.appendMessageFragment(this.conversationId, messageId, fragment, complete, touch);
   }
 
   messageFragmentDelete(messageId: string, fragmentId: string, complete: boolean, touch: boolean) {
-    this.chatActions.deleteMessageFragment(this.conversationId, messageId, fragmentId, complete, touch);
+    _chatStoreActions.deleteMessageFragment(this.conversationId, messageId, fragmentId, complete, touch);
   }
 
   messageFragmentReplace(messageId: string, fragmentId: string, newFragment: DMessageFragment, messageComplete: boolean) {
-    this.chatActions.replaceMessageFragment(this.conversationId, messageId, fragmentId, newFragment, messageComplete, true);
+    _chatStoreActions.replaceMessageFragment(this.conversationId, messageId, fragmentId, newFragment, messageComplete, true);
+  }
+
+  messageHasUserFlag(messageId: DMessageId, userFlag: DMessageUserFlag): boolean {
+    const message = _chatStoreActions.historyView(this.conversationId)?.find(m => m.id === messageId);
+    if (!message) return false;
+    return messageHasUserFlag(message, userFlag);
   }
 
   messageSetUserFlag(messageId: DMessageId, userFlag: DMessageUserFlag, on: boolean, touch: boolean): void {
@@ -174,7 +192,7 @@ export class ConversationHandler {
   }
 
   historyReplace(messages: DMessage[]): void {
-    this.chatActions.historyReplace(this.conversationId, messages);
+    _chatStoreActions.historyReplace(this.conversationId, messages);
 
     void gcChatImageAssets(); // fire/forget
 
@@ -184,11 +202,11 @@ export class ConversationHandler {
   }
 
   historyTruncateTo(messageId: DMessageId, offset: number = 0): void {
-    this.chatActions.historyTruncateToIncluded(this.conversationId, messageId, offset);
+    _chatStoreActions.historyTruncateToIncluded(this.conversationId, messageId, offset);
   }
 
   historyViewHead(scope: string): Readonly<DMessage[]> {
-    const messages = this.chatActions.historyView(this.conversationId);
+    const messages = _chatStoreActions.historyView(this.conversationId);
     if (messages === undefined)
       throw new Error(`allMessages: Conversation not found, ${scope}`);
     return messages;
@@ -228,7 +246,7 @@ export class ConversationHandler {
       terminateKeepingSettings();
     };
 
-    beamOpen(viewHistory, getChatLLMId(), onBeamSuccess);
+    beamOpen(viewHistory, getChatLLMId(), !!destReplaceMessageId, onBeamSuccess);
     importMessages.length && beamImportRays(importMessages, getChatLLMId());
   }
 
@@ -236,21 +254,25 @@ export class ConversationHandler {
   // Ephemerals
 
   createEphemeralHandler(title: string, initialText: string) {
-    const { ephemeralsAppend, ephemeralsUpdate, ephemeralsDelete, ephemeralsIsPinned } = this.overlayActions;
+    const { ephemeralsAppend, ephemeralsUpdate, ephemeralsDelete, getEphemeral } = this.overlayActions;
 
     // create and append
     const ephemeral = createDEphemeral(title, initialText);
     const eId = ephemeral.id;
     ephemeralsAppend(ephemeral);
 
+    const deleteIfMinimized = () => {
+      if (getEphemeral(eId)?.minimized)
+        ephemeralsDelete(eId);
+    };
+
     // return a 'handler' (manipulation functions)
     return {
       updateText: (text: string) => ephemeralsUpdate(eId, { text }),
       updateState: (state: object) => ephemeralsUpdate(eId, { state }),
-      markAsDone: () => ephemeralsUpdate(eId, { done: true }),
-      deleteIfNotPinned: () => {
-        if (!ephemeralsIsPinned(eId))
-          ephemeralsDelete(eId);
+      markAsDone: () => {
+        ephemeralsUpdate(eId, { done: true });
+        setTimeout(deleteIfMinimized, EPHEMERALS_DEFAULT_TIMEOUT);
       },
     };
   }
