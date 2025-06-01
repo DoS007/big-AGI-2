@@ -9,6 +9,8 @@ import StopRoundedIcon from '@mui/icons-material/StopRounded';
 import { GoodTooltip } from '~/common/components/GoodTooltip';
 import { TooltipOutlined } from '~/common/components/TooltipOutlined';
 
+import { rayControlsMobileSx, rayControlsSx } from '../scatter/BeamRay';
+
 import type { BFusion } from './beam.gather';
 import type { FusionFactorySpec } from './instructions/beam.gather.factories';
 
@@ -20,20 +22,22 @@ function FusionControls(props: {
   factory: FusionFactorySpec,
   isFusing: boolean,
   isInterrupted: boolean,
+  isMobile: boolean,
   isUsable: boolean,
   llmLabel: string,
   llmVendorIcon?: React.FunctionComponent<SvgIconProps>,
   fusionAvatarTooltip: React.ReactNode,
+  onIconClick: (event: React.MouseEvent) => void,
   onRemove: () => void,
   onToggleGenerate: () => void,
 }) {
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+    <Box sx={props.isMobile ? rayControlsMobileSx : rayControlsSx}>
 
       {/* LLM Icon with Tooltip */}
       {!!props.llmVendorIcon && (
         <TooltipOutlined asLargePane enableInteractive title={props.fusionAvatarTooltip || props.llmLabel} placement='top-start'>
-          <Box sx={{ display: 'flex' }}>
+          <Box sx={{ display: 'flex' }} onClick={props.onIconClick}>
             <props.llmVendorIcon sx={{ fontSize: 'lg', my: 'auto' }} />
           </Box>
         </TooltipOutlined>

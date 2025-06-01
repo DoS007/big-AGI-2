@@ -1,10 +1,9 @@
 import type { DLLMId } from '~/common/stores/llms/llms.types';
 import type { DMessage, DMessageId } from '~/common/stores/chat/chat.message';
 import { ConversationHandler } from '~/common/chat-overlay/ConversationHandler';
-import { createTextContentFragment, DMessageFragment, isTextContentFragment } from '~/common/stores/chat/chat.fragments';
+import { createTextContentFragment, DMessageFragment, isContentOrAttachmentFragment, isImageRefPart, isTextContentFragment } from '~/common/stores/chat/chat.fragments';
 
 import { extractChatCommand, helpPrettyChatCommands } from '../commands/commands.registry';
-import { runBrowseGetPageUpdatingState } from './browse-load';
 import { runImageGenerationUpdatingState } from './image-generate';
 import { runReActUpdatingState } from './react-tangent';
 
@@ -34,11 +33,13 @@ export async function _handleExecuteCommand(lastMessageId: DMessageId, lastMessa
   // Valid /commands are intercepted here, and override chat modes, generally for mechanics or sidebars
   switch (providerId) {
 
-    case 'cmd-ass-browse':
-      return await runBrowseGetPageUpdatingState(cHandler, userText);
-
     case 'cmd-ass-t2i':
-      return await runImageGenerationUpdatingState(cHandler, userText);
+
+      // use additional image fragments as image inputs
+      const imageInputFragments = lastMessage.fragments.slice(1)
+        .filter(fragment => isContentOrAttachmentFragment(fragment) && isImageRefPart(fragment.part));
+
+      return await runImageGenerationUpdatingState(cHandler, userText!, imageInputFragments);
 
     case 'cmd-chat-alter':
       // clear command

@@ -14,9 +14,9 @@ import { workspaceActions } from '~/common/stores/workspace/store-client-workspa
 import { workspaceForConversationIdentity } from '~/common/stores/workspace/workspace.types';
 
 import { DMessage, DMessageId, DMessageMetadata, MESSAGE_FLAG_AIX_SKIP, messageHasUserFlag } from './chat.message';
-import type { DMessageFragment, DMessageFragmentId } from './chat.fragments';
+import { DMessageFragment, DMessageFragmentId, isVoidThinkingFragment } from './chat.fragments';
 import { V3StoreDataToHead, V4ToHeadConverters } from './chats.converters';
-import { conversationTitle, createDConversation, DConversation, DConversationId, duplicateDConversationNoVoid } from './chat.conversation';
+import { conversationTitle, createDConversation, DConversation, DConversationId, duplicateDConversation } from './chat.conversation';
 import { estimateTokensForFragments } from './chat.tokens';
 import { gcChatImageAssets } from '~/common/stores/chat/chat.gc';
 
@@ -41,6 +41,7 @@ export interface ChatActions {
   abortConversationTemp: (cId: DConversationId) => void;
   historyReplace: (cId: DConversationId, messages: DMessage[]) => void;
   historyTruncateToIncluded: (cId: DConversationId, mId: DMessageId, offset: number) => void;
+  historyKeepLastThinkingOnly: (cId: DConversationId) => void;
   historyView: (cId: DConversationId) => Readonly<DMessage[]> | undefined;
   appendMessage: (cId: DConversationId, message: DMessage) => void;
   deleteMessage: (cId: DConversationId, mId: DMessageId) => void;
@@ -53,6 +54,8 @@ export interface ChatActions {
   setAutoTitle: (cId: DConversationId, autoTitle: string) => void;
   setUserTitle: (cId: DConversationId, userTitle: string) => void;
   setUserSymbol: (cId: DConversationId, userSymbol: string | null) => void;
+  setArchived: (cId: DConversationId, isArchived: boolean) => void;
+  title: (cId: DConversationId) => string | undefined;
 
   // utility function
   _editConversation: (cId: DConversationId, update: Partial<DConversation> | ((conversation: DConversation) => Partial<DConversation>)) => void;
@@ -123,7 +126,7 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
         if (!conversation)
           return null;
 
-        const branched = duplicateDConversationNoVoid(conversation, messageId ?? undefined);
+        const branched = duplicateDConversation(conversation, messageId ?? undefined, false);
 
         _set({
           conversations: [branched, ...conversations],
@@ -241,6 +244,47 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
             tokenCount: updateMessagesTokenCounts(truncatedMessages, false, 'historyTruncateToIncluded'),
             updated: Date.now(),
             _abortController: null,
+          };
+        }),
+
+      historyKeepLastThinkingOnly: (conversationId: DConversationId) =>
+        _get()._editConversation(conversationId, ({ messages: _currentMessages }) => {
+          let madeChanges = false;
+          const updatedMessages = [..._currentMessages];
+          let foundLastAssistant = false;
+
+          // reverse iterate
+          for (let i = updatedMessages.length - 1; i >= 0; i--) {
+            const message = updatedMessages[i];
+
+            // skip non-assistant messages
+            if (message.role !== 'assistant') continue;
+
+            // skip the last assistant message
+            if (!foundLastAssistant) {
+              foundLastAssistant = true;
+              continue;
+            }
+
+            // skip if doesn't have thinking blocks
+            const hasThinkingBlocks = message.fragments.some(isVoidThinkingFragment);
+            if (!hasThinkingBlocks) continue;
+
+            // Filter out thinking blocks
+            updatedMessages[i] = {
+              ...message,
+              fragments: message.fragments.filter(fragment => !isVoidThinkingFragment(fragment)),
+            };
+            madeChanges = true;
+          }
+
+          if (!madeChanges) return {};
+
+          return {
+            messages: updatedMessages,
+            // No need to update the following as void fragments don't contribute
+            // tokenCount: updateMessagesTokenCounts(updatedMessages, true, 'historyKeepLastThinkingOnly'),
+            // updated: Date.now(),
           };
         }),
 
@@ -389,10 +433,22 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
             ...(!userTitle && { autoTitle: undefined }), // clear autotitle when clearing usertitle
           }),
 
+      title: (conversationId: DConversationId): string | undefined => {
+        const existing = _get().conversations.find(_c => _c.id === conversationId);
+        return existing ? conversationTitle(existing) : undefined;
+      },
+
       setUserSymbol: (conversationId: DConversationId, userSymbol: string | null) =>
         _get()._editConversation(conversationId,
           {
             userSymbol: userSymbol || undefined,
+          }),
+
+      setArchived: (conversationId: DConversationId, isArchived: boolean) =>
+        _get()._editConversation(conversationId,
+          {
+            isArchived: isArchived,
+            // updated: Date.now(), // don't update this - the 'entity state' shall update, but not this soft time
           }),
 
     }),
@@ -421,6 +477,32 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
         }
 
         return state;
+      },
+
+      /**
+       * Note: default impl:
+       *   merge: (persistedState: unknown, currentState: S) => ({
+       *     ...currentState,
+       *     ...(persistedState as object),
+       *   }),
+       */
+      merge: (persistedState, currentState: ConversationsStore): ConversationsStore => {
+
+        // concatenate-merge conversations reloaded from storage
+        const mergedConversations = [...(currentState?.conversations || [])];
+        if (persistedState && typeof persistedState === 'object' && 'conversations' in persistedState) {
+          const storedConversations = persistedState.conversations as ChatState['conversations'];
+          if (storedConversations.length)
+            mergedConversations.push(...storedConversations);
+        }
+
+        return {
+          // default shallow merge
+          ...currentState,
+          ...(persistedState as object),
+          // ad-hoc concat merge
+          conversations: mergedConversations,
+        };
       },
 
       // Pre-Saving: remove transient properties

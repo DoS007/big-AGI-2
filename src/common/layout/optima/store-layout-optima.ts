@@ -1,4 +1,3 @@
-import * as React from 'react';
 import { create } from 'zustand';
 
 import type { DLLMId } from '~/common/stores/llms/llms.types';
@@ -15,16 +14,14 @@ interface OptimaState {
   // modes
   // isFocusedMode: boolean; // when active, the Mobile App menu is not displayed
 
-  // pluggable UI components
-  menuComponent: React.ReactNode;
-
   // panes
-  appMenuIsOpen: boolean;
   drawerIsOpen: boolean;
   panelIsOpen: boolean;
 
-  // modals that can overlay anything
+  // modals
+  showAIXDebugger: boolean;
   showKeyboardShortcuts: boolean;
+  showLogger: boolean;
   showModelOptions: DLLMId | false;
   showModels: boolean;
   showPreferences: boolean;
@@ -45,38 +42,36 @@ function initialDrawerOpen() {
   return bootNavItem ? !bootNavItem.hideDrawer : false;
 }
 
+const modalsClosedState = {
+  showAIXDebugger: false,
+  showKeyboardShortcuts: false,
+  showLogger: false,
+  showModelOptions: false,
+  showModels: false,
+  showPreferences: false,
+} as const;
+
 const initialState: OptimaState = {
 
   // modes
   // isFocusedMode: false,
 
-  // pluggable UI components
-  menuComponent: null,
-
   // panes
-  appMenuIsOpen: false,
   drawerIsOpen: initialDrawerOpen(),
   panelIsOpen: false,
 
   // modals that can overlay anything
-  showKeyboardShortcuts: false,
-  showModelOptions: false,
-  showModels: false,
-  showPreferences: false,
+  ...modalsClosedState,
   preferencesTab: 'chat',
 
   // timings
   lastDrawerOpenTime: 0,
   lastPanelOpenTime: 0,
-};
+} as const;
 
 export interface OptimaActions {
 
   // setIsFocusedMode: (isFocusedMode: boolean) => void;
-
-  closeAppMenu: () => void;
-  openAppMenu: () => void;
-  toggleAppMenu: () => void;
 
   closeDrawer: () => void;
   openDrawer: () => void;
@@ -86,8 +81,14 @@ export interface OptimaActions {
   openPanel: () => void;
   togglePanel: () => void;
 
+  closeAIXDebugger: () => void;
+  openAIXDebugger: () => void;
+
   closeKeyboardShortcuts: () => void;
   openKeyboardShortcuts: () => void;
+
+  closeLogger: () => void;
+  openLogger: () => void;
 
   closeModelOptions: () => void;
   openModelOptions: (id: DLLMId) => void;
@@ -107,10 +108,6 @@ export const useLayoutOptimaStore = create<OptimaState & OptimaActions>((_set, _
 
   // setIsFocusedMode: (isFocusedMode) => _set({ isFocusedMode }),
 
-  closeAppMenu: () => _set({ appMenuIsOpen: false }),
-  openAppMenu: () => _set({ appMenuIsOpen: true }),
-  toggleAppMenu: () => _set((state) => ({ appMenuIsOpen: !state.appMenuIsOpen })),
-
   closeDrawer: () => {
     // close the drawer, but only if it's been open for 100ms
     if (Date.now() - _get().lastDrawerOpenTime >= 100)
@@ -128,8 +125,14 @@ export const useLayoutOptimaStore = create<OptimaState & OptimaActions>((_set, _
   openPanel: () => _set({ panelIsOpen: true, lastPanelOpenTime: Date.now() }),
   togglePanel: () => _get().panelIsOpen ? _get().closePanel() : _get().openPanel(),
 
+  closeAIXDebugger: () => _set({ showAIXDebugger: false }),
+  openAIXDebugger: () => _set({ ...modalsClosedState, showAIXDebugger: true }),
+
   closeKeyboardShortcuts: () => _set({ showKeyboardShortcuts: false }),
   openKeyboardShortcuts: () => _set({ showKeyboardShortcuts: true }),
+
+  closeLogger: () => _set({ showLogger: false }),
+  openLogger: () => _set({ ...modalsClosedState, showLogger: true }),
 
   closeModelOptions: () => _set({ showModelOptions: false }),
   openModelOptions: (id: DLLMId) => _set({ showModelOptions: id }),

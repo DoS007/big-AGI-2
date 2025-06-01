@@ -2,9 +2,9 @@ import * as React from 'react';
 
 import { Box, MenuItem, Radio, Typography } from '@mui/joy';
 
-import { CloseableMenu } from '~/common/components/CloseableMenu';
+import { CloseablePopup } from '~/common/components/CloseablePopup';
 import { KeyStroke, platformAwareKeystrokes } from '~/common/components/KeyStroke';
-import { useUIPreferencesStore } from '~/common/state/store-ui';
+import { useUIPreferencesStore } from '~/common/stores/store-ui';
 
 import type { ChatExecuteMode } from './execute-mode.types';
 import { ExecuteModeItems } from './execute-mode.items';
@@ -23,10 +23,10 @@ export function ExecuteModeMenu(props: {
   const enterIsNewline = useUIPreferencesStore(state => state.enterIsNewline);
 
   return (
-    <CloseableMenu
+    <CloseablePopup
+      menu anchorEl={props.anchorEl} onClose={props.onClose}
+      minWidth={320}
       placement='top-end'
-      open={true} anchorEl={props.anchorEl} onClose={props.onClose}
-      sx={{ minWidth: 320 }}
     >
 
       {/*<MenuItem color='neutral' selected>*/}
@@ -60,7 +60,7 @@ export function ExecuteModeMenu(props: {
           </MenuItem>,
         )}
 
-    </CloseableMenu>
+    </CloseablePopup>
   );
 }
 

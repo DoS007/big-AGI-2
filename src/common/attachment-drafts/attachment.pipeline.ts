@@ -1,11 +1,12 @@
 import type { FileWithHandle } from 'browser-fs-access';
 
-import { callBrowseFetchPage } from '~/modules/browse/browse.client';
+import { callBrowseFetchPageOrThrow } from '~/modules/browse/browse.client';
 import { extractYoutubeVideoIDFromURL } from '~/modules/youtube/youtube.utils';
 import { youTubeGetVideoData } from '~/modules/youtube/useYouTubeTranscript';
 
 import { Is } from '~/common/util/pwaUtils';
 import { agiCustomId, agiUuid } from '~/common/util/idUtils';
+import { convert_Base64_To_UInt8Array } from '~/common/util/blobUtils';
 import { htmlTableToMarkdown } from '~/common/util/htmlTableToMarkdown';
 import { humanReadableHyphenated } from '~/common/util/textUtils';
 import { pdfToImageDataURLs, pdfToText } from '~/common/util/pdfUtils';
@@ -13,7 +14,7 @@ import { pdfToImageDataURLs, pdfToText } from '~/common/util/pdfUtils';
 import { createDMessageDataInlineText, createDocAttachmentFragment, DMessageAttachmentFragment, DMessageDataInline, DMessageDocPart, DVMimeType, isContentOrAttachmentFragment, isDocPart, specialContentPartToDocAttachmentFragment } from '~/common/stores/chat/chat.fragments';
 
 import type { AttachmentCreationOptions, AttachmentDraft, AttachmentDraftConverter, AttachmentDraftId, AttachmentDraftInput, AttachmentDraftSource, AttachmentDraftSourceOriginFile, DraftEgoFragmentsInputData, DraftWebInputData, DraftYouTubeInputData } from './attachment.types';
-import type { AttachmentsDraftsStore } from './store-perchat-attachment-drafts_slice';
+import type { AttachmentsDraftsStore } from './store-attachment-drafts_slice';
 import { attachmentGetLiveFileId, attachmentSourceSupportsLiveFile } from './attachment.livefile';
 import { guessInputContentTypeFromMime, heuristicMimeTypeFixup, mimeTypeIsDocX, mimeTypeIsPDF, mimeTypeIsPlainText, mimeTypeIsSupportedImage, reverseLookupMimeType } from './attachment.mimetypes';
 import { imageDataToImageAttachmentFragmentViaDBlob } from './attachment.dblobs';
@@ -72,7 +73,7 @@ export async function attachmentLoadInputAsync(source: Readonly<AttachmentDraftS
       // [YouTube] user is attaching a link to a video: try to download this as a transcript rather than a webpage
       const asYoutubeVideoId = extractYoutubeVideoIDFromURL(source.refUrl);
       if (asYoutubeVideoId) {
-        const videoData = await youTubeGetVideoData(asYoutubeVideoId).catch(() => null);
+        const videoData = await youTubeGetVideoData(asYoutubeVideoId).catch(console.warn);
         if (videoData?.videoTitle && videoData?.transcript) {
           edit({
             label: videoData.videoTitle,
@@ -98,29 +99,48 @@ export async function attachmentLoadInputAsync(source: Readonly<AttachmentDraftS
 
       try {
         // fetch the web page
-        const { title, content: { html, markdown, text }, screenshot } = await callBrowseFetchPage(
-          source.url, ['text', 'markdown', 'html'], { width: 512, height: 512, quality: 98 },
+        const { title, content, file, screenshot } = await callBrowseFetchPageOrThrow(
+          source.url, ['text', 'markdown', 'html'], { width: 512, height: 512, quality: 98 }, true,
         );
-        if (html || markdown || text)
-          edit({
-            label: title || source.refUrl,
-            input: {
-              mimeType: INT_MIME_VND_AGI_WEBPAGE,
-              data: {
-                pageText: text ?? undefined,
-                pageMarkdown: markdown ?? undefined,
-                pageCleanedHtml: html ?? undefined,
-                pageTitle: title || undefined,
+        if (content) {
+          const { html, markdown, text } = content;
+          if (html || markdown || text)
+            edit({
+              label: title || source.refUrl,
+              input: {
+                mimeType: INT_MIME_VND_AGI_WEBPAGE,
+                data: {
+                  pageText: text ?? undefined,
+                  pageMarkdown: markdown ?? undefined,
+                  pageCleanedHtml: html ?? undefined,
+                  pageTitle: title || undefined,
+                },
+                urlImage: !screenshot ? undefined : {
+                  ...screenshot,
+                  generator: 'web-capture',
+                  timestamp: Date.now(),
+                },
               },
-              urlImage: !screenshot ? undefined : {
-                ...screenshot,
-                generator: 'web-capture',
-                timestamp: Date.now(),
+            });
+          else
+            edit({ inputError: 'No content found at this link' });
+        } else if (file) {
+          try {
+            const dataArray = convert_Base64_To_UInt8Array(file.data, 'attachment-draft-load-input')
+            edit({
+              label: file.fileName || source.refUrl,
+              // ref: source.refUrl,
+              input: {
+                mimeType: file.mimeType,
+                data: dataArray.buffer,
+                dataSize: dataArray.byteLength,
               },
-            },
-          });
-        else
-          edit({ inputError: 'No content found at this link' });
+            });
+          } catch (error: any) {
+            edit({ inputError: `Issue downloading web file: ${error?.message || (typeof error === 'string' ? error : JSON.stringify(error))}` });
+          }
+        } else
+          edit({ inputError: 'No content or file found at this link' });
       } catch (error: any) {
         edit({ inputError: `Issue downloading page: ${error?.message || (typeof error === 'string' ? error : JSON.stringify(error))}` });
       }
@@ -251,8 +271,8 @@ export function attachmentDefineConverters(source: AttachmentDraftSource, input:
 
       // p3: Html
       if (textOriginHtml) {
-        converters.push({ id: 'rich-text', name: 'HTML' });
-        converters.push({ id: 'rich-text-cleaner', name: 'Clean HTML' });
+        converters.push({ id: 'rich-text-cleaner', name: 'Cleaner HTML' });
+        converters.push({ id: 'rich-text', name: 'HTML · Heavy' });
       }
       break;
 
@@ -264,7 +284,8 @@ export function attachmentDefineConverters(source: AttachmentDraftSource, input:
       converters.push({ id: 'image-original', name: 'Image (original quality)', disabled: !inputImageMimeSupported });
       if (!inputImageMimeSupported)
         converters.push({ id: 'image-to-default', name: `As Image (${DEFAULT_ADRAFT_IMAGE_MIMETYPE})` });
-      converters.push({ id: 'image-ocr', name: 'As Text (OCR)' });
+      converters.push({ id: 'unhandled', name: 'No Image' });
+      converters.push({ id: 'image-ocr', name: 'Add Text (OCR)', isCheckbox: true });
       break;
 
     // PDF

@@ -15,18 +15,19 @@ import MoreVertIcon from '@mui/icons-material/MoreVert';
 import StarOutlineRoundedIcon from '@mui/icons-material/StarOutlineRounded';
 
 import type { DConversationId } from '~/common/stores/chat/chat.conversation';
-import { CloseableMenu } from '~/common/components/CloseableMenu';
+import { CloseablePopup } from '~/common/components/CloseablePopup';
 import { DFolder, useFolderStore } from '~/common/stores/folders/store-chat-folders';
 import { DebouncedInputMemo } from '~/common/components/DebouncedInput';
 import { FoldersToggleOff } from '~/common/components/icons/FoldersToggleOff';
 import { FoldersToggleOn } from '~/common/components/icons/FoldersToggleOn';
+import { OPTIMA_DRAWER_BACKGROUND } from '~/common/layout/optima/optima.config';
 import { OptimaDrawerHeader } from '~/common/layout/optima/drawer/OptimaDrawerHeader';
 import { OptimaDrawerList } from '~/common/layout/optima/drawer/OptimaDrawerList';
 import { capitalizeFirstLetter } from '~/common/util/textUtils';
 import { getIsMobile } from '~/common/components/useMatchMedia';
 import { optimaCloseDrawer } from '~/common/layout/optima/useOptima';
 import { themeScalingMap, themeZIndexOverMobileDrawer } from '~/common/app.theme';
-import { useUIPreferencesStore } from '~/common/state/store-ui';
+import { useUIPreferencesStore } from '~/common/stores/store-ui';
 
 import { ChatDrawerItemMemo, FolderChangeRequest } from './ChatDrawerItem';
 import { ChatFolderList } from './folders/ChatFolderList';
@@ -88,12 +89,13 @@ function ChatDrawer(props: {
     filterHasDocFragments, toggleFilterHasDocFragments,
     filterHasImageAssets, toggleFilterHasImageAssets,
     filterHasStars, toggleFilterHasStars,
+    filterIsArchived, toggleFilterIsArchived,
     showPersonaIcons, toggleShowPersonaIcons,
     showRelativeSize, toggleShowRelativeSize,
   } = useChatDrawerFilters();
   const { activeFolder, allFolders, enableFolders, toggleEnableFolders } = useFolders(props.activeFolderId);
   const { filteredChatsCount, filteredChatIDs, filteredChatsAreEmpty, filteredChatsBarBasis, filteredChatsIncludeActive, renderNavItems } = useChatDrawerRenderItems(
-    props.activeConversationId, props.chatPanesConversationIds, debouncedSearchQuery, activeFolder, allFolders, filterHasStars, filterHasImageAssets, filterHasDocFragments, navGrouping, searchSorting, showRelativeSize, searchDepth,
+    props.activeConversationId, props.chatPanesConversationIds, debouncedSearchQuery, activeFolder, allFolders, filterHasStars, filterHasImageAssets, filterHasDocFragments, filterIsArchived, navGrouping, searchSorting, showRelativeSize, searchDepth,
   );
   const [uiComplexityMode, contentScaling] = useUIPreferencesStore(useShallow((state) => [state.complexityMode, state.contentScaling]));
   const zenMode = uiComplexityMode === 'minimal';
@@ -185,6 +187,10 @@ function ChatDrawer(props: {
           <ListItem>
             <Typography level='body-sm'>Filter</Typography>
           </ListItem>
+          <MenuItem onClick={toggleFilterIsArchived}>
+            <ListItemDecorator>{filterIsArchived && <CheckRoundedIcon />}</ListItemDecorator>
+            Archived
+          </MenuItem>
           <MenuItem onClick={toggleFilterHasStars}>
             <ListItemDecorator>{filterHasStars && <CheckRoundedIcon />}</ListItemDecorator>
             Starred <StarOutlineRoundedIcon />
@@ -245,8 +251,8 @@ function ChatDrawer(props: {
       )}
     </Dropdown>
   ), [
-    filterHasDocFragments, filterHasImageAssets, filterHasStars, isSearching, navGrouping, searchSorting, searchDepth, showPersonaIcons, showRelativeSize,
-    toggleFilterHasDocFragments, toggleFilterHasImageAssets, toggleFilterHasStars, toggleShowPersonaIcons, toggleShowRelativeSize,
+    filterHasDocFragments, filterHasImageAssets, filterHasStars, isSearching, navGrouping, searchSorting, searchDepth, filterIsArchived, showPersonaIcons, showRelativeSize,
+    toggleFilterHasDocFragments, toggleFilterHasImageAssets, toggleFilterHasStars, toggleFilterIsArchived, toggleShowPersonaIcons, toggleShowRelativeSize,
   ]);
 
 
@@ -283,6 +289,7 @@ function ChatDrawer(props: {
           flexGrow: 0, flexShrink: 2, overflow: 'hidden',
           minHeight: '7.5rem',
           p: 2,
+          backgroundColor: 'background.level1',
         }}
       />
     )}
@@ -355,7 +362,7 @@ function ChatDrawer(props: {
               // keeps the group header sticky to the top
               position: 'sticky',
               top: 0,
-              backgroundColor: 'background.popup',
+              backgroundColor: OPTIMA_DRAWER_BACKGROUND,
               zIndex: 1,
             }}>
               {item.title}
@@ -366,7 +373,7 @@ function ChatDrawer(props: {
                 {filterHasStars && <StarOutlineRoundedIcon sx={{ color: 'primary.softColor', fontSize: 'xl', mb: -0.5, mr: 1 }} />}
                 {item.message}
               </Typography>
-              {(filterHasStars || filterHasImageAssets || filterHasDocFragments) && (
+              {(filterHasStars || filterHasImageAssets || filterHasDocFragments || filterIsArchived) && (
                 <Tooltip title='Clear Filters'>
                   <IconButton size='sm' color='primary' onClick={clearFilters}>
                     <ClearIcon />
@@ -410,12 +417,12 @@ function ChatDrawer(props: {
 
     {/* [Menu] Chat Item Folder Change */}
     {!!folderChangeRequest?.anchorEl && (
-      <CloseableMenu
+      <CloseablePopup
+        menu anchorEl={folderChangeRequest.anchorEl} onClose={handleConversationFolderCancel}
         bigIcons
-        open anchorEl={folderChangeRequest.anchorEl} onClose={handleConversationFolderCancel}
+        minWidth={200}
         placement='bottom-start'
         zIndex={themeZIndexOverMobileDrawer /* need to be on top of the Modal on Mobile */}
-        sx={{ minWidth: 200 }}
       >
 
         {/* Folder Assignment Buttons */}
@@ -449,7 +456,7 @@ function ChatDrawer(props: {
           </ListItem>
         )}
 
-      </CloseableMenu>
+      </CloseablePopup>
     )}
 
   </>;

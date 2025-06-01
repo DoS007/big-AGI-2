@@ -1,7 +1,9 @@
 import type { OpenAIDialects } from '~/modules/llms/server/openai/openai.router';
 
-import type { AixAPI_Model, AixAPIChatGenerate_Request, AixMessages_ChatMessage, AixMessages_SystemMessage, AixParts_MetaInReferenceToPart, AixTools_ToolDefinition, AixTools_ToolsPolicy } from '../../../api/aix.wiretypes';
+import type { AixAPI_Model, AixAPIChatGenerate_Request, AixMessages_ChatMessage, AixMessages_SystemMessage, AixParts_DocPart, AixParts_MetaInReferenceToPart, AixTools_ToolDefinition, AixTools_ToolsPolicy } from '../../../api/aix.wiretypes';
 import { OpenAIWire_API_Chat_Completions, OpenAIWire_ContentParts, OpenAIWire_Messages } from '../../wiretypes/openai.wiretypes';
+
+import { approxDocPart_To_String } from './anthropic.messageCreate';
 
 
 //
@@ -21,6 +23,7 @@ const hotFixOnlySupportN1 = true;
 const hotFixPreferArrayUserContent = true;
 const hotFixForceImageContentPartOpenAIDetail: 'auto' | 'low' | 'high' = 'high';
 const hotFixSquashTextSeparator = '\n\n\n---\n\n\n';
+const approxSystemMessageJoiner = '\n\n---\n\n';
 
 
 type TRequest = OpenAIWire_API_Chat_Completions.Request;
@@ -29,25 +32,31 @@ type TRequestMessages = TRequest['messages'];
 export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model: AixAPI_Model, chatGenerate: AixAPIChatGenerate_Request, jsonOutput: boolean, streaming: boolean): TRequest {
 
   // Dialect incompatibilities -> Hotfixes
-  const hotFixAlternateUserAssistantRoles = openAIDialect === 'perplexity';
+  const hotFixAlternateUserAssistantRoles = openAIDialect === 'deepseek' || openAIDialect === 'perplexity';
   const hotFixRemoveEmptyMessages = openAIDialect === 'perplexity';
   const hotFixRemoveStreamOptions = openAIDialect === 'azure' || openAIDialect === 'mistral';
   const hotFixSquashMultiPartText = openAIDialect === 'deepseek';
-  const hotFixThrowCannotFC = openAIDialect === 'deepseek' || openAIDialect === 'openrouter' /* OpenRouter FC support is not good (as of 2024-07-15) */ || openAIDialect === 'perplexity';
+  const hotFixThrowCannotFC = openAIDialect === 'openrouter' /* OpenRouter FC support is not good (as of 2024-07-15) */ || openAIDialect === 'perplexity';
+  const hotFixVndORIncludeReasoning = openAIDialect === 'openrouter'; // [OpenRouter, 2025-01-24] has a special `include_reasoning` field to show the chain of thought
 
   // Model incompatibilities -> Hotfixes
 
   // [OpenAI] - o1 models
   // - o1 models don't support system messages, we could hotfix this here once and for all, but we want to transfer the responsibility to the UI for better messaging to the user
   // - o1 models also use the new 'max_completion_tokens' rather than 'max_tokens', breaking API compatibility, so we have to address it here
-  const hotFixOpenAIo1Family = openAIDialect === 'openai' && (model.id === 'o1' || model.id.startsWith('o1-'));
+  const hotFixOpenAIOFamily = (openAIDialect === 'openai' || openAIDialect === 'azure') && (
+    model.id === 'o1' || model.id.startsWith('o1-') ||
+    model.id === 'o3' || model.id.startsWith('o3-') ||
+    model.id === 'o4' || model.id.startsWith('o4-') ||
+    model.id === 'o5' || model.id.startsWith('o5-')
+  );
 
   // Throw if function support is needed but missing
   if (chatGenerate.tools?.length && hotFixThrowCannotFC)
     throw new Error('This service does not support function calls');
 
   // Convert the chat messages to the OpenAI 4-Messages format
-  let chatMessages = _toOpenAIMessages(chatGenerate.systemMessage, chatGenerate.chatSequence, hotFixOpenAIo1Family);
+  let chatMessages = _toOpenAIMessages(chatGenerate.systemMessage, chatGenerate.chatSequence, hotFixOpenAIOFamily);
 
   // Apply hotfixes
   if (hotFixSquashMultiPartText)
@@ -68,7 +77,7 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
     tool_choice: chatGenerate.toolsPolicy && _toOpenAIToolChoice(openAIDialect, chatGenerate.toolsPolicy),
     parallel_tool_calls: undefined,
     max_tokens: model.maxTokens !== undefined ? model.maxTokens : undefined,
-    temperature: model.temperature !== undefined ? model.temperature : undefined,
+    ...(model.temperature !== null ? { temperature: model.temperature !== undefined ? model.temperature : undefined } : {}),
     top_p: undefined,
     n: hotFixOnlySupportN1 ? undefined : 0, // NOTE: we choose to not support this at the API level - most downstram ecosystem supports 1 only, which is the default
     stream: streaming,
@@ -79,7 +88,39 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
     user: undefined,
   };
 
-  if (hotFixOpenAIo1Family)
+  // [OpenRouter, 2025-01-24]
+  if (hotFixVndORIncludeReasoning)
+    payload.include_reasoning = true;
+
+  // Top-P instead of temperature
+  if (model.topP !== undefined) {
+    delete payload.temperature;
+    payload.top_p = model.topP;
+  }
+
+  // [OpenAI] Vendor-specific reasoning effort, for o1 models only as of 2024-12-24
+  if (model.vndOaiReasoningEffort) {
+    payload.reasoning_effort = model.vndOaiReasoningEffort;
+  }
+  // [OpenAI] Vendor-specific restore markdown, for newer o1 models
+  if (model.vndOaiRestoreMarkdown) {
+    _fixVndOaiRestoreMarkdown_Inline(payload);
+  }
+  // [OpenAI] Vendor-specific web search context and/or geolocation
+  if (model.vndOaiWebSearchContext || model.userGeolocation) {
+    payload.web_search_options = {};
+    if (model.vndOaiWebSearchContext)
+      payload.web_search_options.search_context_size = model.vndOaiWebSearchContext;
+    if (model.userGeolocation)
+      payload.web_search_options.user_location = {
+        type: 'approximate',
+        approximate: {
+          ...model.userGeolocation,
+        },
+      };
+  }
+
+  if (hotFixOpenAIOFamily)
     payload = _fixRequestForOpenAIO1_maxCompletionTokens(payload);
 
   if (hotFixRemoveStreamOptions)
@@ -105,8 +146,8 @@ function _fixAlternateUserAssistantRoles(chatMessages: TRequestMessages): TReque
     // treat intermediate system messages as user messages
     if (acc.length > 0 && historyItem.role === 'system') {
       historyItem = {
+        ...historyItem,
         role: 'user',
-        content: historyItem.content,
       };
     }
 
@@ -166,6 +207,33 @@ function _fixSquashMultiPartText(chatMessages: TRequestMessages): TRequestMessag
   }, [] as TRequestMessages);
 }
 
+function _fixVndOaiRestoreMarkdown_Inline(payload: TRequest) {
+
+  // OpenAI - https://platform.openai.com/docs/guides/reasoning/advice-on-prompting#advice-on-prompting
+  //
+  // As of 2025-01-12, OpenAI states: << Markdown formatting: Starting with o1-2024-12-17,
+  // o1 models in the API will avoid generating responses with markdown formatting.
+  // To signal to the model when you do want markdown formatting in the response,
+  // include the string Formatting re-enabled on the first line of your developer message. >>
+  //
+  // This function prepends "Formatting re-enabled" to the first user message, if not already present
+  if (payload.messages?.length) {
+    const firstMessage = payload.messages[0];
+    const isDevOrSystem = firstMessage.role === 'developer' || firstMessage.role === 'system';
+
+    // update the text of the developer message
+    if (isDevOrSystem && firstMessage.content && !firstMessage.content.split('\n')[0].includes('Formatting re-enabled')) {
+      firstMessage.content = 'Formatting re-enabled\n' + firstMessage.content;
+    }
+    // if the developer message is missing, add it altogether
+    else if (!isDevOrSystem) {
+      // prepend to the first user message
+      payload.messages.unshift({ role: 'developer', content: 'Formatting re-enabled' });
+    }
+  }
+
+}
+
 /*function _fixUseDeprecatedFunctionCalls(payload: OpenaiWire_ChatCompletionRequest): OpenaiWire_ChatCompletionRequest {
   // Hack the request to rename the parameters - without checking or anything - real hack
   const { tools, tool_choice, ...rest } = payload;
@@ -187,16 +255,40 @@ function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | null, chat
   // Transform the chat messages into OpenAI's format (an array of 'system', 'user', 'assistant', and 'tool' messages)
   const chatMessages: TRequestMessages = [];
 
-  // Convert the system message
+  // Convert the system message - single-part stay as-is and multi-part (text or doc) are flattened to a string
+  const msg0TextParts: OpenAIWire_ContentParts.TextContentPart[] = [];
   systemMessage?.parts.forEach((part) => {
-    if (part.pt === 'meta_cache_control') {
-      // ignore this hint - openai doesn't support this yet
-    } else
-      chatMessages.push({
-        role: !hotFixOpenAIo1Family ? 'system' : 'developer', // NOTE: o1Family in this case is not o1-preview as it's sporting the Sys0ToUsr0 hotfix
-        content: part.text, /*, name: _optionalParticipantName */
-      });
+    switch (part.pt) {
+      case 'text':
+        msg0TextParts.push(OpenAIWire_ContentParts.TextContentPart(part.text));
+        break;
+
+      case 'doc':
+        msg0TextParts.push(_toApproximateOpenAIDocPart(part));
+        break;
+
+      case 'meta_cache_control':
+        // ignore this breakpoint hint - Anthropic only
+        break;
+
+      default:
+        const _exhaustiveCheck: never = part;
+        throw new Error(`Unsupported part type in System message: ${(part as any).pt}`);
+    }
   });
+
+  // Add the system message
+  if (msg0TextParts.length)
+    chatMessages.push({
+      /**
+       * Notes:
+       * o1Family in this case is not o1-preview as it's sporting the Sys0ToUsr0 hotfix
+       * o3-mini accepts both system and developer roles, and they seem to have the same effects
+       */
+      role: !hotFixOpenAIo1Family ? 'system' : 'developer',
+      content: _toApproximateOpanAIFlattenSystemMessage(msg0TextParts),
+    });
+
 
   // Convert the messages
   for (const { parts, role } of chatSequence) {
@@ -207,24 +299,24 @@ function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | null, chat
           const currentMessage = chatMessages[chatMessages.length - 1];
           switch (part.pt) {
 
-            case 'doc':
             case 'text':
-              // Implementation notes:
-              // - doc is rendered as a simple text part, but enclosed in a markdow block
-              // - TODO: consider better representation - we use the 'legacy' markdown encoding here,
-              //    but we may as well support different ones (e.g. XML) in the future
-              const textContentString =
-                part.pt === 'text' ? part.text
-                  : /* doc */ part.data.text.startsWith('```') ? part.data.text
-                    : `\`\`\`${part.ref || ''}\n${part.data.text}\n\`\`\`\n`;
-
-              const textContentPart = OpenAIWire_ContentParts.TextContentPart(textContentString);
+              const textContentPart = OpenAIWire_ContentParts.TextContentPart(part.text);
 
               // Append to existing content[], or new message
               if (currentMessage?.role === 'user' && Array.isArray(currentMessage.content))
                 currentMessage.content.push(textContentPart);
               else
                 chatMessages.push({ role: 'user', content: hotFixPreferArrayUserContent ? [textContentPart] : textContentPart.text });
+              break;
+
+            case 'doc':
+              const docContentPart = _toApproximateOpenAIDocPart(part);
+
+              // Append to existing content[], or new message
+              if (currentMessage?.role === 'user' && Array.isArray(currentMessage.content))
+                currentMessage.content.push(docContentPart);
+              else
+                chatMessages.push({ role: 'user', content: hotFixPreferArrayUserContent ? [docContentPart] : docContentPart.text });
               break;
 
             case 'inline_image':
@@ -241,7 +333,7 @@ function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | null, chat
               break;
 
             case 'meta_cache_control':
-              // ignore this hint - openai doesn't support this yet
+              // ignore this breakpoint hint - Anthropic only
               break;
 
             case 'meta_in_reference_to':
@@ -252,6 +344,7 @@ function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | null, chat
               break;
 
             default:
+              const _exhaustiveCheck: never = part;
               throw new Error(`Unsupported part type in User message: ${(part as any).pt}`);
           }
         }
@@ -267,6 +360,34 @@ function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | null, chat
               chatMessages.push({ role: 'assistant', content: part.text });
               break;
 
+            case 'inline_audio':
+              // Implementation notes
+              // - audio parts are not supported on the assistant side, but on the user side, so we
+              //   create a user part instead
+
+              let audioFormat: 'wav' | 'mp3' | undefined = undefined;
+              switch (part.mimeType) {
+                case 'audio/wav':
+                  audioFormat = 'wav';
+                  break;
+                case 'audio/mp3':
+                  audioFormat = 'mp3';
+                  break;
+                default:
+                  throw new Error(`Unsupported inline audio format: ${(part as any).mimeType}`);
+              }
+
+              // create a new OpenAI_AudioContentPart of type User
+              const audioBase64DataUrl = `data:${part.mimeType};base64,${part.base64}`;
+              const audioContentPart = OpenAIWire_ContentParts.OpenAI_AudioContentPart(audioBase64DataUrl, audioFormat);
+
+              // Append to existing content[], or new message
+              if (currentMessage?.role === 'user' && Array.isArray(currentMessage.content))
+                currentMessage.content.push(audioContentPart);
+              else
+                chatMessages.push({ role: 'user', content: [audioContentPart] });
+              break;
+
             case 'inline_image':
               // Implementation notes
               // - image parts are not supported on the assistant side, but on the user side, so we
@@ -274,9 +395,8 @@ function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | null, chat
               // - we use the 'high' detail level for the image content part (how to expose to the user?)
 
               // create a new OpenAIWire_ImageContentPart of type User
-              const { mimeType, base64 } = part;
-              const base64DataUrl = `data:${mimeType};base64,${base64}`;
-              const imageContentPart = OpenAIWire_ContentParts.ImageContentPart(base64DataUrl, hotFixForceImageContentPartOpenAIDetail);
+              const imageBase64DataUrl = `data:${part.mimeType};base64,${part.base64}`;
+              const imageContentPart = OpenAIWire_ContentParts.ImageContentPart(imageBase64DataUrl, hotFixForceImageContentPartOpenAIDetail);
 
               // Append to existing content[], or new message
               if (currentMessage?.role === 'user' && Array.isArray(currentMessage.content))
@@ -302,6 +422,7 @@ function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | null, chat
                   toolCallPart = OpenAIWire_ContentParts.PredictedFunctionCall(part.id, 'execute_code' /* suboptimal */, invocation.code || '');
                   break;
                 default:
+                  const _exhaustiveCheck: never = invocation;
                   throw new Error(`Unsupported tool call type in Model message: ${(part as any).pt}`);
               }
 
@@ -315,11 +436,16 @@ function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | null, chat
                 chatMessages.push({ role: 'assistant', content: null, tool_calls: [toolCallPart] });
               break;
 
+            case 'ma':
+              // ignore this thinking block - Anthropic only
+              break;
+
             case 'meta_cache_control':
-              // ignore this hint - openai doesn't support this yet
+              // ignore this breakpoint hint - Anthropic only
               break;
 
             default:
+              const _exhaustiveCheck: never = part;
               throw new Error(`Unsupported part type in Model message: ${(part as any).pt}`);
           }
 
@@ -338,7 +464,12 @@ function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | null, chat
                 throw new Error(`Unsupported tool response type in Tool message: ${(part as any).pt}`);
               break;
 
+            case 'meta_cache_control':
+              // ignore this breakpoint hint - Anthropic only
+              break;
+
             default:
+              const _exhaustiveCheck: never = part;
               throw new Error(`Unsupported part type in Tool message: ${(part as any).pt}`);
           }
         }
@@ -419,4 +550,20 @@ function _toOpenAIInReferenceToText(irt: AixParts_MetaInReferenceToPart): string
   const allShort = items.every(isShortItem);
   return `CONTEXT: The user is referring to these ${items.length} in particular:\n\n${
     items.map((text, index) => formatItem(text, index)).join(allShort ? '\n' : '\n\n')}`;
+}
+
+
+// Approximate conversions
+
+function _toApproximateOpanAIFlattenSystemMessage(texts: OpenAIWire_ContentParts.TextContentPart[]): string {
+  return texts.map(text => text.text).join(approxSystemMessageJoiner);
+}
+
+function _toApproximateOpenAIDocPart(part: AixParts_DocPart): OpenAIWire_ContentParts.TextContentPart {
+
+  // Corner case, low probability: if the content is already enclosed in triple-backticks, return it as-is
+  if (part.data.text.startsWith('```'))
+    return OpenAIWire_ContentParts.TextContentPart(part.data.text);
+
+  return OpenAIWire_ContentParts.TextContentPart(approxDocPart_To_String(part));
 }

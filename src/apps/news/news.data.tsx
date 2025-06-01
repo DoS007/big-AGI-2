@@ -52,7 +52,7 @@ interface NewsItem {
 
 // news and feature surfaces
 export const NewsItems: NewsItem[] = [
-  {
+  /* {
     versionCode: Release.App.versionCode,
     versionName: Release.App.versionName,
     versionDate: new Date('2024-10-15T01:00:00Z'),
@@ -63,9 +63,22 @@ export const NewsItems: NewsItem[] = [
       { text: <>Please note that this is not the official release.</> },
       { text: <>For stable releases: <ExternalLink href='https://big-agi.com'>big-agi.com</ExternalLink>.</> },
     ],
+  }, */
+  {
+    versionCode: Release.App.versionCode,
+    versionName: Release.App.versionName,
+    versionDate: new Date('2024-10-15T01:00:00Z'),
+    items: [
+      { text: <>You&apos;re running an unsupported <B>develpers build</B> of Big-AGI 2. This branch carries breaking features that are subject to change and may break.</> },
+      { text: <><B>dev-branch:</B> LFS, Apply, MM-reAct, fu-Chart, fu-UI, fu-Diagram, C-fixes</> },
+      { text: <><B>big-agi-2:</B> partial list of changes <ExternalLink href='https://github.com/enricoros/big-AGI/issues/567'>here</ExternalLink></> },
+      { text: <>Please report screenshots of breakages and console error messages.</> },
+      { text: <>2,000+ changes, 60,000+ lines of code changed vs. 1.16</> },
+      { text: <>Do not use, no cloud backups, <ExternalLink href='https://big-agi.com'>stable version here</ExternalLink>.</> },
+    ],
   },
   {
-    versionCode: '1.16.8',
+    versionCode: '1.16.9',
     versionName: 'Crystal Clear',
     versionDate: new Date('2024-06-07T05:00:00Z'),
     // versionDate: new Date('2024-05-13T19:00:00Z'),
@@ -89,7 +102,8 @@ export const NewsItems: NewsItem[] = [
       { text: <>1.16.6: Groq <B>Llama 3.1</B> support</> },
       { text: <>1.16.7: Gpt-4o <B>2024-08-06</B></> },
       { text: <>1.16.8: <B>ChatGPT-4o</B> latest</> },
-      { text: <>OpenAI <B>o1</B> and newer models require Big-AGI 2. <B href='https://y2rjg0zillz.typeform.com/to/ZSADpr5u?utm_source=gh-2&utm_medium=news&utm_campaign=ea2'>Sign up here</B></> },
+      { text: <>1.16.9: <B>Gemini</B> fixes</> },
+      { text: <>OpenAI <B>o1</B>, DeepSeek R1, and newer models require Big-AGI 2. <B href='https://y2rjg0zillz.typeform.com/to/ZSADpr5u?utm_source=gh-2&utm_medium=news&utm_campaign=ea2'>Sign up here</B></> },
     ],
   },
   {
@@ -146,7 +160,7 @@ export const NewsItems: NewsItem[] = [
   {
     versionCode: '1.12',
     versionName: 'AGI Hotline',
-    versionMoji: '✨🗣️',
+    // versionMoji: '✨🗣️',
     versionDate: new Date('2024-01-26T12:30:00Z'),
     versionCoverImage: coverV112,
     items: [

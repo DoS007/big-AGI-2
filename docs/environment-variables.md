@@ -3,7 +3,7 @@
 This document provides an explanation of the environment variables used in the big-AGI application.
 
 **All variables are optional**; and _UI options_ take precedence over _backend environment variables_,
-which take place over _defaults_. This file is kept in sync with [`../src/server/env.mjs`](../src/server/env.mjs).
+which take place over _defaults_. This file is kept in sync with [`../src/server/env.ts`](../src/server/env.ts).
 
 ### Setting Environment Variables
 
@@ -23,6 +23,8 @@ MDB_URI=
 OPENAI_API_KEY=
 OPENAI_API_HOST=
 OPENAI_API_ORG_ID=
+ALIBABA_API_HOST=
+ALIBABA_API_KEY=
 AZURE_OPENAI_API_ENDPOINT=
 AZURE_OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
@@ -62,8 +64,10 @@ HTTP_BASIC_AUTH_USERNAME=
 HTTP_BASIC_AUTH_PASSWORD=
 
 
-# Frontend variables
+# Frontend variables 
+NEXT_PUBLIC_MOTD=
 NEXT_PUBLIC_GA4_MEASUREMENT_ID=
+NEXT_PUBLIC_POSTHOG_KEY=
 NEXT_PUBLIC_PLANTUML_SERVER_URL=
 ```
 
@@ -88,6 +92,8 @@ requiring the user to enter an API key
 | `OPENAI_API_KEY`            | API key for OpenAI                                                                                             | Recommended                                                       |
 | `OPENAI_API_HOST`           | Changes the backend host for the OpenAI vendor, to enable platforms such as Helicone and CloudFlare AI Gateway | Optional                                                          |
 | `OPENAI_API_ORG_ID`         | Sets the "OpenAI-Organization" header field to support organization users                                      | Optional                                                          |
+| `ALIBABA_API_HOST`          | The Alibaba AI OpenAI-compatible endpoint                                                                      | Optional                                                          |
+| `ALIBABA_API_KEY`           | The API key for Alibaba AI                                                                                     | Optional                                                          |
 | `AZURE_OPENAI_API_ENDPOINT` | Azure OpenAI endpoint - host only, without the path                                                            | Optional, but if set `AZURE_OPENAI_API_KEY` must also be set      |
 | `AZURE_OPENAI_API_KEY`      | Azure OpenAI API key, see [config-azure-openai.md](config-azure-openai.md)                                     | Optional, but if set `AZURE_OPENAI_API_ENDPOINT` must also be set |
 | `ANTHROPIC_API_KEY`         | The API key for Anthropic                                                                                      | Optional                                                          |
@@ -142,10 +148,13 @@ Enable the app to Talk, Draw, and Google things up.
 
 The value of these variables are passed to the frontend (Web UI) - make sure they do not contain secrets.
 
-| Variable                          | Description                                                                              |
-|:----------------------------------|:-----------------------------------------------------------------------------------------|
-| `NEXT_PUBLIC_GA4_MEASUREMENT_ID`  | The measurement ID for Google Analytics 4. (see [deploy-analytics](deploy-analytics.md)) |
-| `NEXT_PUBLIC_PLANTUML_SERVER_URL` | The URL of the PlantUML server, used for rendering UML diagrams. (code in RederCode.tsx) |
+| Variable                          | Description                                                                                                                                                                                                                                     |
+|:----------------------------------|:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `NEXT_PUBLIC_DEBUG_BREAKS`        | (optional, development) When set to 'true', enables automatic debugger breaks on DEV/error/critical logs in development builds                                                                                                                  |
+| `NEXT_PUBLIC_MOTD`                | Message of the Day - displays a dismissible banner at the top of the app (see [customizations](customizations.md) for the template variables). Example: 🔔 Welcome to our deployment! Version {{app_build_pkgver}} built on {{app_build_time}}. |
+| `NEXT_PUBLIC_GA4_MEASUREMENT_ID`  | (optional) The measurement ID for Google Analytics 4. (see [deploy-analytics](deploy-analytics.md))                                                                                                                                             |
+| `NEXT_PUBLIC_POSTHOG_KEY`         | (optional) Key for PostHog analytics. (see [deploy-analytics](deploy-analytics.md))                                                                                                                                                             |
+| `NEXT_PUBLIC_PLANTUML_SERVER_URL` | The URL of the PlantUML server, used for rendering UML diagrams. Allows using custom local servers.                                                                                                                                             |
 
 > Important: these variables must be set at build time, which is required by Next.js to pass them to the frontend.
 > This is in contrast to the backend variables, which can be set when starting the local server/container.

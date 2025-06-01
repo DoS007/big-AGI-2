@@ -2,7 +2,7 @@ import { defaultSystemPurposeId, SystemPurposeId } from '../../../data';
 
 import { agiUuid } from '~/common/util/idUtils';
 
-import { DMessage, DMessageId, duplicateDMessageNoVoid } from './chat.message';
+import { DMessage, DMessageId, duplicateDMessage } from './chat.message';
 
 
 /// Conversation
@@ -15,6 +15,8 @@ export interface DConversation {
   // editable
   userTitle?: string;
   autoTitle?: string;
+
+  isArchived?: boolean;               // TODO: this is too simple - convert to improved meta information - for now this will do
 
   // temp flags
   _isIncognito?: boolean;             // simple implementation: won't store this conversation (note: side effects should be evaluated, images seem to be gc'd correctly, but not sure if this is really incognito)
@@ -37,7 +39,7 @@ export interface DConversation {
 
   // future additions:
   // draftUserMessage?: { text: string; attachments: any[] };
-  // isMuted: boolean; isArchived: boolean; isStarred: boolean;
+  // isMuted: boolean; isStarred: boolean;
   // participants: personaIds...[];
 }
 
@@ -56,6 +58,7 @@ export function createDConversation(systemPurposeId?: SystemPurposeId): DConvers
     // userTitle: undefined,
     // autoTitle: undefined,
     // userSymbol: undefined,
+    // isArchived: undefined,
 
     // @deprecated
     systemPurposeId: systemPurposeId || defaultSystemPurposeId,
@@ -69,7 +72,7 @@ export function createDConversation(systemPurposeId?: SystemPurposeId): DConvers
   };
 }
 
-export function duplicateDConversationNoVoid(conversation: DConversation, lastMessageId?: DMessageId): DConversation {
+export function duplicateDConversation(conversation: DConversation, lastMessageId: undefined | DMessageId, skipVoid: boolean): DConversation {
 
   // cut short messages, if requested
   let messagesToKeep = conversation.messages.length; // By default, include all messages if messageId is null
@@ -87,11 +90,12 @@ export function duplicateDConversationNoVoid(conversation: DConversation, lastMe
 
     messages: conversation.messages
       .slice(0, messagesToKeep)
-      .map(duplicateDMessageNoVoid), // [*] duplicate conversation - see downstream
+      .map(message => duplicateDMessage(message, skipVoid)), // [*] duplicate conversation - see downstream
 
     // userTitle: conversation.userTitle, // undefined
     autoTitle: newTitle,
     userSymbol: conversation.userSymbol,
+    ...(conversation.isArchived !== undefined ? { isArchived: conversation.isArchived } : {}), // copy archival state if set
 
     systemPurposeId: conversation.systemPurposeId,
     tokenCount: conversation.tokenCount,

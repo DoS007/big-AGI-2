@@ -1,5 +1,7 @@
 import * as React from 'react';
 
+import { useModuleBeamStore } from '~/modules/beam/store-module-beam';
+
 import type { DFolder } from '~/common/stores/folders/store-chat-folders';
 import { DMessage, DMessageUserFlag, MESSAGE_FLAG_STARRED, messageFragmentsReduceText, messageHasUserFlag, messageUserFlagToEmoji } from '~/common/stores/chat/chat.message';
 import { conversationTitle, DConversationId } from '~/common/stores/chat/chat.conversation';
@@ -85,15 +87,34 @@ export function useChatDrawerRenderItems(
   filterHasStars: boolean,
   filterHasImageAssets: boolean,
   filterHasDocFragments: boolean,
+  filterIsArchived: boolean,
   grouping: ChatNavGrouping,
   searchSorting: ChatSearchSorting,
   showRelativeSize: boolean,
   searchDepth: ChatSearchDepth,
 ): ChatDrawerRenderItems {
 
-  const stabilizeRenderItems = React.useRef<ChatDrawerRenderItems>();
+  // state
+  const [_, setJustAMinuteCounter] = React.useState(0);
 
-  return useChatStore(({ conversations }) => {
+  // external state
+  const openBeamConversationIds = useModuleBeamStore(state => state.openBeamConversationIds);
+
+
+  // [effect] Refresh every minute because the `getTimeBucketEn` function uses the current time
+  React.useEffect(() => {
+    const interval = setInterval(() => setJustAMinuteCounter(c => c + 1), 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+
+  const stabilizeRenderItems = React.useRef<ChatDrawerRenderItems>(undefined);
+
+  return useChatStore(({ conversations: convPreFilter }) => {
+
+      // filter 0: archival status
+      const conversations = filterIsArchived ? convPreFilter.filter(c => !!c.isArchived)
+        : convPreFilter.filter(c => !c.isArchived);
 
       // filter 1: select all conversations or just the ones in the active folder
       const conversationsInFolder = !activeFolder ? conversations
@@ -152,6 +173,7 @@ export function useChatDrawerRenderItems(
             isIncognito: !!_c._isIncognito,
             isEmpty: !messageCount && !_c.userTitle,
             title,
+            isArchived: !!_c.isArchived,
             userSymbol: _c.userSymbol || undefined,
             userFlagsSummary: userFlagsUnique,
             containsDocAttachments: hasDocs && filterHasDocFragments, // special case: only show this icon when filtering - too many icons otherwise
@@ -162,6 +184,7 @@ export function useChatDrawerRenderItems(
                 ? allFolders.find(folder => folder.conversationIds.includes(_c.id)) ?? null
                 : null,
             updatedAt: _c.updated || _c.created || 0,
+            hasBeamOpen: !!openBeamConversationIds?.[_c.id],
             messageCount,
             beingGenerated: !!_c._abortController, // FIXME: when the AbortController is moved at the message level, derive the state in the conv
             systemPurposeId: _c.systemPurposeId,
@@ -265,15 +288,21 @@ export function useChatDrawerRenderItems(
             : filterHasDocFragments ? 'No attachment results'
               : filterHasImageAssets ? 'No image results'
                 : filterHasStars ? 'No starred results'
-                  : isSearching ? 'Text not found'
-                    : 'No conversations in folder',
+                  : filterIsArchived ? 'No archived conversations'
+                    : isSearching ? 'Text not found'
+                      : 'No conversations in folder',
         });
       } else {
         // filtering reminder (will be rendered with a clear button too)
-        if (filterHasStars || filterHasImageAssets || filterHasDocFragments) {
+        if (filterHasStars || filterHasImageAssets || filterHasDocFragments || filterIsArchived) {
           renderNavItems.unshift({
             type: 'nav-item-info-message',
-            message: `Filtering by ${filterHasStars ? 'stars' : ''}${filterHasStars && filterHasImageAssets ? ', ' : ''}${filterHasImageAssets ? 'images' : ''}${(filterHasStars || filterHasImageAssets) && filterHasDocFragments ? ', ' : ''}${filterHasDocFragments ? 'attachments' : ''}`,
+            message: `${filterIsArchived ? 'Showing' : 'Filtering by'} ${[
+              filterHasStars && 'stars',
+              filterHasImageAssets && 'images',
+              filterHasDocFragments && 'attachments',
+              filterIsArchived && 'archived',
+            ].filter(Boolean).join(', ')}`,
           });
         }
       }

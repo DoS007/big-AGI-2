@@ -35,6 +35,8 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
   let hasBegun = false;
   let hasWarned = false;
   let timeToFirstEvent: number | undefined;
+  let progressiveCitationNumber = 1;
+  let perplexityAlreadyCited = false;
   // NOTE: could compute rate (tok/s) from the first textful event to the last (to ignore the prefill time)
 
   // Supporting structure to accumulate the assistant message
@@ -132,14 +134,34 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
       if (!delta)
         throw new Error(`server response missing content (finish_reason: ${finish_reason})`);
 
+      // delta: Reasoning Content [Deepseek, 2025-01-20]
+      let deltaHasReasoning = false;
+      if (typeof delta.reasoning_content === 'string') {
+
+        pt.appendReasoningText(delta.reasoning_content);
+        deltaHasReasoning = true;
+
+      }
+      // delta: Reasoning [OpenRouter, 2025-01-24]
+      else if (typeof delta.reasoning === 'string') {
+
+        pt.appendReasoningText(delta.reasoning);
+        deltaHasReasoning = true;
+
+      }
+
       // delta: Text
-      if (typeof delta.content === 'string') {
+      if (typeof delta.content === 'string' &&
+        (!deltaHasReasoning || delta.content) // suppress if reasoning and empty
+      ) {
 
         accumulator.content = (accumulator.content || '') + delta.content;
-        pt.appendText(delta.content);
+        pt.appendAutoText_weak(delta.content);
 
-      } else if (delta.content !== undefined && delta.content !== null)
-        throw new Error(`unexpected delta content type: ${typeof delta.content}`);
+      }
+      // 2025-03-26: we don't have the full concurrency combinations of content/reasoning/reasoning_content yet
+      // if (delta.content !== undefined && delta.content !== null)
+      //   throw new Error(`unexpected delta content type: ${typeof delta.content}`);
 
       // delta: Tool Calls
       for (const deltaToolCall of (delta.tool_calls || [])) {
@@ -180,6 +202,22 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
 
       } // .choices.tool_calls[]
 
+      // [OpenAI, 2025-03-11] delta: Annotations[].url_citation
+      if (delta.annotations !== undefined) {
+
+        if (Array.isArray(delta.annotations)) {
+          for (const { type: annotationType, url_citation: urlCitation } of delta.annotations) {
+            if (annotationType !== 'url_citation')
+              throw new Error(`unexpected annotation type: ${annotationType}`);
+            pt.appendUrlCitation(urlCitation.title, urlCitation.url, undefined, urlCitation.start_index, urlCitation.end_index, undefined);
+          }
+        } else {
+          // we don't abort for this issue - for our users
+          console.log('AIX: OpenAI-dispatch: unexpected annotations:', delta.annotations);
+        }
+
+      }
+
       // Token Stop Reason - usually missing in all but the last chunk, but we don't rely on it
       if (finish_reason) {
         const tokenStopReason = _fromOpenAIFinishReason(finish_reason);
@@ -193,6 +231,20 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
 
     } // .choices[]
 
+
+    // [Perplexity] .citations
+    if (json.citations && !perplexityAlreadyCited && Array.isArray(json.citations)) {
+
+      for (const citationUrl of json.citations)
+        if (typeof citationUrl === 'string')
+          pt.appendUrlCitation('', citationUrl, progressiveCitationNumber++, undefined, undefined, undefined);
+
+      // Perplexity detection: streaming of full objects, hence we don't re-send the citations at every chunk
+      if (json.object === 'chat.completion')
+        perplexityAlreadyCited = true;
+
+    }
+
   };
 }
 
@@ -201,6 +253,7 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
 
 export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction {
   const parserCreationTimestamp = Date.now();
+  let progressiveCitationNumber = 1;
 
   return function(pt: IParticleTransmitter, eventData: string) {
 
@@ -245,8 +298,10 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
 
       // message: Text
       if (typeof message.content === 'string') {
-        if (message.content)
+        if (message.content) {
+          // we will return the EXACT content for non-streaming calls, hence we don't call `appendAutoText_weak` here
           pt.appendText(message.content);
+        }
       } else if (message.content !== undefined && message.content !== null)
         throw new Error(`unexpected message content type: ${typeof message.content}`);
 
@@ -268,7 +323,32 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
       if (tokenStopReason !== null)
         pt.setTokenStopReason(tokenStopReason);
 
+      // [OpenAI, 2025-03-11] message: Annotations[].url_citation
+      if (message.annotations !== undefined) {
+
+        if (Array.isArray(message.annotations)) {
+          for (const { type: annotationType, url_citation: urlCitation } of message.annotations) {
+            if (annotationType !== 'url_citation')
+              throw new Error(`unexpected annotation type: ${annotationType}`);
+            pt.appendUrlCitation(urlCitation.title, urlCitation.url, undefined, urlCitation.start_index, urlCitation.end_index, undefined);
+          }
+        } else {
+          // we don't abort for this issue
+          console.log('AIX: OpenAI-dispatch-NS unexpected annotations:', message.annotations);
+        }
+
+      }
+
     } // .choices[]
+
+    // [Perplexity] .citations
+    if (json.citations && Array.isArray(json.citations)) {
+
+      for (const citationUrl of json.citations)
+        if (typeof citationUrl === 'string')
+          pt.appendUrlCitation('', citationUrl, progressiveCitationNumber++, undefined, undefined, undefined);
+
+    }
 
   };
 }
@@ -313,7 +393,7 @@ function _fromOpenAIUsage(usage: OpenAIWire_API_Chat_Completions.Response['usage
     return undefined;
 
   // Require at least the completion tokens, or issue a DEV warning otherwise
-  if (!usage.completion_tokens) {
+  if (usage.completion_tokens === undefined) {
     // Warn, so we may adjust this usage parsing for Non-OpenAI APIs
     console.log('[DEV] AIX: OpenAI-dispatch missing completion tokens in usage', { usage });
     return undefined;
@@ -336,6 +416,16 @@ function _fromOpenAIUsage(usage: OpenAIWire_API_Chat_Completions.Response['usage
       metricsUpdate.TCacheRead = TCacheRead;
       if (metricsUpdate.TIn !== undefined)
         metricsUpdate.TIn -= TCacheRead;
+    }
+  }
+
+  // [DeepSeek] Input redistribution: Cache Read
+  if (usage.prompt_cache_hit_tokens !== undefined) {
+    const TCacheRead = usage.prompt_cache_hit_tokens;
+    if (TCacheRead > 0) {
+      metricsUpdate.TCacheRead = TCacheRead;
+      if (usage.prompt_cache_miss_tokens !== undefined)
+        metricsUpdate.TIn = usage.prompt_cache_miss_tokens;
     }
   }
 

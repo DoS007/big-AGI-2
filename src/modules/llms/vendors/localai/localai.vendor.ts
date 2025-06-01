@@ -3,8 +3,7 @@ import { LocalAIIcon } from '~/common/components/icons/vendors/LocalAIIcon';
 import type { IModelVendor } from '../IModelVendor';
 import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
 
-import { DOpenAILLMOptions, ModelVendorOpenAI } from '../openai/openai.vendor';
-import { OpenAILLMOptions } from '../openai/OpenAILLMOptions';
+import { ModelVendorOpenAI } from '../openai/openai.vendor';
 
 import { LocalAIServiceSetup } from './LocalAIServiceSetup';
 
@@ -14,14 +13,14 @@ interface DLocalAIServiceSettings {
   localAIKey: string;   // use OpenAI-compatible API keys
 }
 
-export const ModelVendorLocalAI: IModelVendor<DLocalAIServiceSettings, OpenAIAccessSchema, DOpenAILLMOptions> = {
+export const ModelVendorLocalAI: IModelVendor<DLocalAIServiceSettings, OpenAIAccessSchema> = {
   id: 'localai',
   name: 'LocalAI',
   displayRank: 50,
   location: 'local',
   instanceLimit: 4,
-  hasBackendCapKey: 'hasLlmLocalAIHost',
-  hasBackendCapFn: (backendCapabilities) => {
+  hasServerConfigKey: 'hasLlmLocalAIHost',
+  hasServerConfigFn: (backendCapabilities) => {
     // this is to show the green mark on the vendor icon in the setup screen
     return backendCapabilities.hasLlmLocalAIHost || backendCapabilities.hasLlmLocalAIKey;
   },
@@ -29,7 +28,6 @@ export const ModelVendorLocalAI: IModelVendor<DLocalAIServiceSettings, OpenAIAcc
   // components
   Icon: LocalAIIcon,
   ServiceSetupComponent: LocalAIServiceSetup,
-  LLMOptionsComponent: OpenAILLMOptions,
 
   // functions
   initializeSetup: () => ({

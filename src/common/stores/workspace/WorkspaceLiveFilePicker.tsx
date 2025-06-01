@@ -5,11 +5,11 @@ import ClearIcon from '@mui/icons-material/Clear';
 import CodeIcon from '@mui/icons-material/Code';
 
 import type { LiveFileId, LiveFileMetadata } from '~/common/livefile/liveFile.types';
-import { CloseableMenu } from '~/common/components/CloseableMenu';
+import { CloseablePopup } from '~/common/components/CloseablePopup';
 import { LiveFileChooseIcon, LiveFileIcon } from '~/common/livefile/liveFile.icons';
 import { TooltipOutlined } from '~/common/components/TooltipOutlined';
 import { getFirstFileSystemFileHandle } from '~/common/util/fileSystemUtils';
-import { useDragDropDataTransfer } from '~/common/components/useDragDropDataTransfer';
+import { useDragDropDataTransfer } from '~/common/components/dnd-dt/useDragDropDataTransfer';
 
 import type { DWorkspaceId } from './workspace.types';
 import { useContextWorkspaceId } from './WorkspaceIdProvider';
@@ -146,14 +146,10 @@ export function WorkspaceLiveFilePicker(props: {
 
     {/* Select/Upload file menu */}
     {!!menuAnchor && (
-      <CloseableMenu
-        open
-        anchorEl={menuAnchor}
-        onClose={handleCloseMenu}
-        noTopPadding
-        noBottomPadding
-        placement='bottom-start'
-        sx={{ minWidth: 240 }}
+      <CloseablePopup
+        menu anchorEl={menuAnchor} onClose={handleCloseMenu}
+        placement='bottom-end'
+        sx={{ '--ListItem-paddingRight': '1.5rem' }}
       >
 
         {/* Workspace Files (if any) */}
@@ -198,7 +194,7 @@ export function WorkspaceLiveFilePicker(props: {
           </MenuItem>
         )}
 
-      </CloseableMenu>
+      </CloseablePopup>
     )}
 
   </>;

@@ -15,7 +15,7 @@ import { copyToClipboard } from '~/common/util/clipboardUtils';
 import { useFormEditTextArray } from '~/common/components/forms/useFormEditTextArray';
 import { useLLMSelect, useLLMSelectLocalState } from '~/common/components/forms/useLLMSelect';
 import { useToggleableBoolean } from '~/common/util/hooks/useToggleableBoolean';
-import { useUIContentScaling } from '~/common/state/store-ui';
+import { useUIContentScaling } from '~/common/stores/store-ui';
 
 import { FromText } from './FromText';
 import { FromYouTube } from './FromYouTube';
@@ -108,7 +108,7 @@ export function Creator(props: { display: boolean }) {
   // external state
   const contentScaling = useUIContentScaling();
   const [personaLlmId, setPersonaLlmId] = useLLMSelectLocalState(true);
-  const [personaLlm, llmComponent] = useLLMSelect(personaLlmId, setPersonaLlmId, 'Persona Creation Model');
+  const [personaLlm, llmComponent] = useLLMSelect(personaLlmId, setPersonaLlmId, { label: 'Persona Creation Model', larger: true });
 
 
   // editable prompts
@@ -145,9 +145,9 @@ export function Creator(props: { display: boolean }) {
     creationChainSteps,
     personaLlm?.id,
     chainInputText ?? undefined,
-    savePersona,
     'persona-extract',
     chainId,
+    savePersona,
   );
 
 

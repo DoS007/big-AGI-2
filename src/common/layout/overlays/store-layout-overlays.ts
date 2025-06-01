@@ -17,10 +17,12 @@ interface OverlayItem {
 }
 
 export type GlobalOverlayId = // string - disabled so we keep an orderliness
+  | 'app-recent-changes'                  // Recent changes in the app, only private branch
   | 'chat-attachments-clear'
   | 'chat-delete-confirmation'
   | 'chat-reset-confirmation'
   | 'chat-message-delete-confirmation'
+  | 'chat-message-inline-aux'
   | 'livefile-overwrite'
   | 'shortcuts-confirm-close'
   | 'blocks-off-enhance-code'

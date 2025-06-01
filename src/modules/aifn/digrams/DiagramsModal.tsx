@@ -1,10 +1,7 @@
 import * as React from 'react';
 
-import { Box, Button, ButtonGroup, CircularProgress, Divider, FormControl, FormLabel, Grid, IconButton, Input } from '@mui/joy';
+import { Box, Button, ButtonGroup, CircularProgress, Divider, FormControl, FormLabel, Grid, Input } from '@mui/joy';
 import AccountTreeTwoToneIcon from '@mui/icons-material/AccountTreeTwoTone';
-import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ReplayIcon from '@mui/icons-material/Replay';
 import StopOutlinedIcon from '@mui/icons-material/StopOutlined';
 import TelegramIcon from '@mui/icons-material/Telegram';
@@ -12,6 +9,8 @@ import TelegramIcon from '@mui/icons-material/Telegram';
 import { AutoBlocksRenderer } from '~/modules/blocks/AutoBlocksRenderer';
 import { aixChatGenerateText_Simple } from '~/modules/aix/client/aix.client';
 
+import { AppBreadcrumbs } from '~/common/components/AppBreadcrumbs';
+import { ChipToggleButton } from '~/common/components/ChipToggleButton';
 import { ConversationsManager } from '~/common/chat-overlay/ConversationsManager';
 import { GoodModal } from '~/common/components/modals/GoodModal';
 import { InlineError } from '~/common/components/InlineError';
@@ -21,7 +20,8 @@ import { splitSystemMessageFromHistory } from '~/common/stores/chat/chat.convers
 import { useFormRadio } from '~/common/components/forms/useFormRadio';
 import { useFormRadioLlmType } from '~/common/components/forms/useFormRadioLlmType';
 import { useIsMobile } from '~/common/components/useMatchMedia';
-import { useUIContentScaling } from '~/common/state/store-ui';
+import { useModelDomain } from '~/common/stores/llms/hooks/useModelDomain';
+import { useUIContentScaling } from '~/common/stores/store-ui';
 
 import { bigDiagramPrompt, DiagramLanguage, diagramLanguages, DiagramType, diagramTypes } from './diagrams.data';
 
@@ -67,7 +67,8 @@ export function DiagramsModal(props: { config: DiagramConfig, onClose: () => voi
   // external state
   const isMobile = useIsMobile();
   const contentScaling = useUIContentScaling();
-  const [diagramLlm, llmComponent] = useFormRadioLlmType('Generator', 'chat');
+  const { domainModelId: runModelId } = useModelDomain('primaryChat');
+  const [diagramLlm, llmComponent] = useFormRadioLlmType('Generator', runModelId ?? null, 'run');
 
   // derived state
   const { messageId, text: subject } = props.config;
@@ -95,7 +96,7 @@ export function DiagramsModal(props: { config: DiagramConfig, onClose: () => voi
     setAbortController(stepAbortController);
     // cHandler.setAbortController(stepAbortController);
 
-    const reChatHistory = cHandler.historyViewHead('diagrams-modal');
+    const reChatHistory = cHandler.historyViewHeadOrThrow('diagrams-modal');
     const { chatSystemInstruction } = splitSystemMessageFromHistory(reChatHistory);
     if (!chatSystemInstruction)
       return setErrorMessage('No System instruction in this conversation');
@@ -114,7 +115,9 @@ export function DiagramsModal(props: { config: DiagramConfig, onClose: () => voi
         messages,
         'ai-diagram', messageId,
         { abortSignal: stepAbortController.signal },
-        (text) => !!text && setDiagramCode(diagramCode = text.trim()),
+        (text) => {
+          !!text && setDiagramCode(diagramCode = text.trim());
+        },
       );
     } catch (error: any) {
       setDiagramCode(null);
@@ -175,18 +178,26 @@ export function DiagramsModal(props: { config: DiagramConfig, onClose: () => voi
 
   return (
     <GoodModal
-      titleStartDecorator={<AutoFixHighIcon sx={{ fontSize: 'md', mr: 1 }} />}
-      title={<>
-        Auto-Diagram
-        <IconButton
-          aria-label={showOptions ? 'Hide Options' : 'Show Options'}
-          size='sm'
-          onClick={() => setShowOptions(options => !options)}
-          sx={{ ml: 1, my: -0.5 }}
-        >
-          {showOptions ? <ExpandMoreIcon /> : <ExpandLessIcon />}
-        </IconButton>
-      </>}
+      // titleStartDecorator={<AutoFixHighIcon sx={{ fontSize: 'md', mr: 1 }} />}
+      title={<Box sx={{ flex: 1, display: 'flex', alignItems: 'center' }}>
+        <AppBreadcrumbs size='md' rootTitle='Create'>
+          <AppBreadcrumbs.Leaf><b>Diagram</b></AppBreadcrumbs.Leaf>
+        </AppBreadcrumbs>
+        <Box sx={{ ml: 1.25 }}>
+          <ChipToggleButton
+            text={showOptions ? 'show less' : 'show more'}
+            onClick={() => setShowOptions(options => !options)}
+          />
+        </Box>
+        {/*<IconButton*/}
+        {/*  aria-label={showOptions ? 'Hide Options' : 'Show Options'}*/}
+        {/*  size='sm'*/}
+        {/*  onClick={() => setShowOptions(options => !options)}*/}
+        {/*  sx={{ ml: 1, my: -0.5 }}*/}
+        {/*>*/}
+        {/*  {showOptions ? <ExpandMoreIcon /> : <ExpandLessIcon />}*/}
+        {/*</IconButton>*/}
+      </Box>}
       hideBottomClose
       open onClose={props.onClose}
       sx={{ maxWidth: { xs: '100vw', md: '95vw', lg: '88vw' } }}

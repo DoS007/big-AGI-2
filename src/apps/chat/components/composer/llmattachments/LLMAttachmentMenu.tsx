@@ -15,15 +15,15 @@ import ReadMoreIcon from '@mui/icons-material/ReadMore';
 import VerticalAlignBottomIcon from '@mui/icons-material/VerticalAlignBottom';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 
-import { CloseableMenu } from '~/common/components/CloseableMenu';
+import { CloseablePopup } from '~/common/components/CloseablePopup';
 import { DMessageAttachmentFragment, DMessageDocPart, DMessageImageRefPart, isDocPart, isImageRefPart } from '~/common/stores/chat/chat.fragments';
 import { LiveFileIcon } from '~/common/livefile/liveFile.icons';
 import { copyToClipboard } from '~/common/util/clipboardUtils';
 import { showImageDataURLInNewTab } from '~/common/util/imageUtils';
-import { useUIPreferencesStore } from '~/common/state/store-ui';
+import { useUIPreferencesStore } from '~/common/stores/store-ui';
 
 import type { AttachmentDraftId } from '~/common/attachment-drafts/attachment.types';
-import type { AttachmentDraftsStoreApi } from '~/common/attachment-drafts/store-perchat-attachment-drafts_slice';
+import type { AttachmentDraftsStoreApi } from '~/common/attachment-drafts/store-attachment-drafts_slice';
 import type { LLMAttachmentDraft } from './useLLMAttachmentDrafts';
 import type { LLMAttachmentDraftsAction } from './LLMAttachmentsList';
 
@@ -49,7 +49,7 @@ export function LLMAttachmentMenu(props: {
   isPositionFirst: boolean,
   isPositionLast: boolean,
   onClose: () => void,
-  onDraftAction: (attachmentDraftId: AttachmentDraftId, actionId: LLMAttachmentDraftsAction) => void,
+  onDraftAction?: (attachmentDraftId: AttachmentDraftId, actionId: LLMAttachmentDraftsAction) => void,
   onViewDocPart: (docPart: DMessageDocPart) => void,
   onViewImageRefPart: (imageRefPart: DMessageImageRefPart) => void
 }) {
@@ -151,11 +151,13 @@ export function LLMAttachmentMenu(props: {
   const showInputs = uiComplexityMode !== 'minimal';
 
   return (
-    <CloseableMenu
-      dense placement='top'
+    <CloseablePopup
+      menu anchorEl={props.menuAnchor} onClose={props.onClose}
+      dense
+      maxWidth={460}
+      minWidth={260}
       noTopPadding
-      open anchorEl={props.menuAnchor} onClose={props.onClose}
-      sx={{ minWidth: 260, maxWidth: 460 }}
+      placement='top'
     >
 
       {/* Move Arrows */}
@@ -221,15 +223,15 @@ export function LLMAttachmentMenu(props: {
         <LinearProgress determinate value={100 * draft.outputsConversionProgress} sx={{ mx: 1 }} />
       )}
 
-      {SHOW_INLINING_OPERATIONS && <ListDivider />}
-      {SHOW_INLINING_OPERATIONS && (
-        <MenuItem onClick={() => onDraftAction(draftId, 'inline-text')} disabled={!llmSupportsTextFragments || isConverting}>
+      {SHOW_INLINING_OPERATIONS && !!onDraftAction && <ListDivider />}
+      {SHOW_INLINING_OPERATIONS && !!onDraftAction && (
+        <MenuItem onClick={() => onDraftAction?.(draftId, 'inline-text')} disabled={!llmSupportsTextFragments || isConverting}>
           <ListItemDecorator><VerticalAlignBottomIcon /></ListItemDecorator>
           Inline text
         </MenuItem>
       )}
-      {SHOW_INLINING_OPERATIONS && (
-        <MenuItem onClick={() => onDraftAction(draftId, 'copy-text')} disabled={!llmSupportsTextFragments || isConverting}>
+      {SHOW_INLINING_OPERATIONS && !!onDraftAction && (
+        <MenuItem onClick={() => onDraftAction?.(draftId, 'copy-text')} disabled={!llmSupportsTextFragments || isConverting}>
           <ListItemDecorator><ContentCopyIcon /></ListItemDecorator>
           Copy text
         </MenuItem>
@@ -312,7 +314,7 @@ export function LLMAttachmentMenu(props: {
                 <Link onClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  showImageDataURLInNewTab(draftInput?.urlImage?.imgDataUrl || '');
+                  void showImageDataURLInNewTab(draftInput?.urlImage?.imgDataUrl || '');
                 }}>
                   open <LaunchIcon sx={{ mx: 0.5, fontSize: 16 }} />
                 </Link>
@@ -388,6 +390,6 @@ export function LLMAttachmentMenu(props: {
         Remove
       </MenuItem>
 
-    </CloseableMenu>
+    </CloseablePopup>
   );
 }

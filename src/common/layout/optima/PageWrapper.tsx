@@ -4,7 +4,7 @@ import { Box, Container } from '@mui/joy';
 
 import type { NavItemApp } from '~/common/app.nav';
 import { isPwa } from '~/common/util/pwaUtils';
-import { useUIPreferencesStore } from '~/common/state/store-ui';
+import { useUIPreferencesStore } from '~/common/stores/store-ui';
 
 import { PageCore } from './PageCore';
 import { useOptimaDrawerOpen, useOptimaPanelOpen } from './useOptima';
@@ -19,7 +19,7 @@ export function PageWrapper(props: { component: React.ElementType, currentApp?: 
 
   // external state
   const isDrawerOpen = useOptimaDrawerOpen();
-  const isPanelOpen = useOptimaPanelOpen();
+  const { panelShownAsPanel } = useOptimaPanelOpen(props.isMobile, props.currentApp);
   const amplitude = useUIPreferencesStore(state =>
     (isPwa() || props.isMobile || props.currentApp?.fullWidth) ? 'full' : state.centerMode,
   );
@@ -29,12 +29,14 @@ export function PageWrapper(props: { component: React.ElementType, currentApp?: 
     return (
       <Box>
         <Container id='app-page-container' disableGutters maxWidth={false}>
-          <PageCore component={props.component} currentApp={props.currentApp} isMobile={true}>
+          <PageCore component={props.component} currentApp={props.currentApp} isFull isMobile>
             {props.children}
           </PageCore>
         </Container>
       </Box>
     );
+
+  const isFull = amplitude === 'full';
 
   return (
 
@@ -51,7 +53,7 @@ export function PageWrapper(props: { component: React.ElementType, currentApp?: 
         marginLeft: !isDrawerOpen
           ? 'calc(-1 * var(--AGI-Desktop-Drawer-width))'
           : 0,
-        marginRight: !isPanelOpen
+        marginRight: !panelShownAsPanel
           ? 'calc(-1 * var(--AGI-Desktop-Panel-width))'
           : 0,
         transition: 'margin-left 0.42s cubic-bezier(.17,.84,.44,1), margin-right 0.42s cubic-bezier(.17,.84,.44,1)',
@@ -62,17 +64,17 @@ export function PageWrapper(props: { component: React.ElementType, currentApp?: 
       <Container
         id='app-page-container'
         disableGutters
-        maxWidth={amplitude === 'full' ? false : amplitude === 'narrow' ? 'md' : 'xl'}
+        maxWidth={isFull ? false : amplitude === 'narrow' ? 'md' : 'xl'}
         sx={{
           boxShadow: {
             xs: 'none',
             md: amplitude === 'narrow' ? '0px 0px 4px 0 rgba(50 56 62 / 0.12)' : 'none',
-            xl: amplitude !== 'full' ? '0px 0px 4px 0 rgba(50 56 62 / 0.12)' : 'none',
+            xl: !isFull ? '0px 0px 4px 0 rgba(50 56 62 / 0.12)' : 'none',
           },
         }}
       >
 
-        <PageCore component={props.component} currentApp={props.currentApp} isMobile={false}>
+        <PageCore component={props.component} currentApp={props.currentApp} isFull={isFull} isMobile={false}>
           {props.children}
         </PageCore>
 

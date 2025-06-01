@@ -3,14 +3,7 @@ import { apiAsync } from '~/common/util/trpc.client';
 
 import type { IModelVendor } from '../IModelVendor';
 import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
-
-import { OpenAILLMOptions } from './OpenAILLMOptions';
 import { OpenAIServiceSetup } from './OpenAIServiceSetup';
-
-
-// shared constants
-export const FALLBACK_LLM_RESPONSE_TOKENS = 1024;
-export const FALLBACK_LLM_TEMPERATURE = 0.5;
 
 
 // special symbols
@@ -24,24 +17,17 @@ export interface DOpenAIServiceSettings {
   moderationCheck: boolean;
 }
 
-export interface DOpenAILLMOptions {
-  llmRef: string;
-  llmTemperature: number;
-  llmResponseTokens: number | null;
-}
-
-export const ModelVendorOpenAI: IModelVendor<DOpenAIServiceSettings, OpenAIAccessSchema, DOpenAILLMOptions> = {
+export const ModelVendorOpenAI: IModelVendor<DOpenAIServiceSettings, OpenAIAccessSchema> = {
   id: 'openai',
   name: 'OpenAI',
   displayRank: 10,
   location: 'cloud',
   instanceLimit: 5,
-  hasBackendCapKey: 'hasLlmOpenAI',
+  hasServerConfigKey: 'hasLlmOpenAI',
 
   // components
   Icon: OpenAIIcon,
   ServiceSetupComponent: OpenAIServiceSetup,
-  LLMOptionsComponent: OpenAILLMOptions,
 
   // functions
   getTransportAccess: (partialSetup): OpenAIAccessSchema => ({

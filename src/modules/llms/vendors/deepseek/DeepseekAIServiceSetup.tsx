@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import type { DModelsServiceId } from '~/common/stores/llms/modelsservice.types';
+import type { DModelsServiceId } from '~/common/stores/llms/llms.service.types';
 import { AlreadySet } from '~/common/components/AlreadySet';
 import { FormInputKey } from '~/common/components/forms/FormInputKey';
 import { InlineError } from '~/common/components/InlineError';
@@ -25,13 +25,13 @@ export function DeepseekAIServiceSetup(props: { serviceId: DModelsServiceId }) {
 
   // external state
   const {
-    service, serviceAccess, serviceHasBackendCap, serviceHasLLMs,
+    service, serviceAccess, serviceHasCloudTenantConfig, serviceHasLLMs,
     serviceSetupValid, updateSettings,
   } = useServiceSetup(props.serviceId, ModelVendorDeepseek);
 
   // derived state
   const { oaiKey: deepseekKey } = serviceAccess;
-  const needsUserKey = !serviceHasBackendCap;
+  const needsUserKey = !serviceHasCloudTenantConfig;
 
   // validate if url is a well formed proper url with zod
   const shallFetchSucceed = !needsUserKey || (!!deepseekKey && serviceSetupValid);

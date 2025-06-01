@@ -1,14 +1,12 @@
-import { sendGAEvent } from '@next/third-parties/google';
+import { hasGoogleAnalytics, sendGAEvent } from '~/common/components/3rdparty/GoogleAnalytics';
 
-import { hasGoogleAnalytics } from '~/common/components/GoogleAnalytics';
-
-import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/modelsservice.types';
-import { DLLM, LLM_IF_OAI_Chat } from '~/common/stores/llms/llms.types';
+import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/llms.service.types';
+import { DLLM, LLM_IF_HOTFIX_NoTemperature, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn } from '~/common/stores/llms/llms.types';
+import { applyModelParameterInitialValues, FALLBACK_LLM_PARAM_TEMPERATURE } from '~/common/stores/llms/llms.parameters';
 import { isModelPricingFree } from '~/common/stores/llms/llms.pricing';
 import { llmsStoreActions } from '~/common/stores/llms/store-llms';
 
 import type { ModelDescriptionSchema } from './server/llm.server.types';
-import { DOpenAILLMOptions, FALLBACK_LLM_TEMPERATURE } from './vendors/openai/openai.vendor';
 import { findServiceAccessOrThrow } from './vendors/vendor.helpers';
 
 
@@ -23,11 +21,11 @@ export async function llmsUpdateModelsForServiceOrThrow(serviceId: DModelsServic
   const data = await vendor.rpcUpdateModelsOrThrow(transportAccess);
 
   // update the global models store
-  llmsStoreActions().setLLMs(
-    data.models.map(model => _createDLLMFromModelDescription(model, service)),
+  llmsStoreActions().setServiceLLMs(
     service.id,
-    true,
+    data.models.map(model => _createDLLMFromModelDescription(model, service)),
     keepUserEdits,
+    false,
   );
 
   // figure out which vendors are actually used and useful
@@ -43,7 +41,9 @@ export async function llmsUpdateModelsForServiceOrThrow(serviceId: DModelsServic
   return data;
 }
 
-function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DModelsService): DLLM<DOpenAILLMOptions> {
+const _fallbackInterfaces = [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn];
+
+function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DModelsService): DLLM {
 
   // null means unknown contenxt/output tokens
   const contextTokens = d.contextWindow || null;
@@ -51,9 +51,12 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
   const llmResponseTokensRatio = d.maxCompletionTokens ? 1 : 1 / 4;
   const llmResponseTokens = maxOutputTokens ? Math.round(maxOutputTokens * llmResponseTokensRatio) : null;
 
-  // create the object
-  const dllm: DLLM<DOpenAILLMOptions> = {
-    id: `${service.id}-${d.id}`,
+  // DLLM is a fundamental type in our application
+  const dllm: DLLM = {
+
+    // this id is Big-AGI specific, not the vendor's
+    id: !d.idVariant ? `${service.id}-${d.id}`
+      : `${service.id}-${d.id}-${d.idVariant}`,
 
     // editable properties
     label: d.label,
@@ -61,29 +64,36 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
     updated: d.updated || 0,
     description: d.description,
     hidden: !!d.hidden,
-    // isEdited: false, // NOTE: this is set by the store on user edits
 
     // hard properties
     contextTokens,
     maxOutputTokens,
     trainingDataCutoff: d.trainingDataCutoff,
-    interfaces: d.interfaces?.length ? d.interfaces : [LLM_IF_OAI_Chat],
-    // inputTypes: ...
+    interfaces: d.interfaces?.length ? d.interfaces : _fallbackInterfaces,
     benchmark: d.benchmark,
-    // pricing: undefined,
+    // pricing: undefined, // set below, since it needs some adaptation
+
+    // parameters system (spec and initial values)
+    parameterSpecs: d.parameterSpecs?.length ? d.parameterSpecs : [],
+    initialParameters: {
+      llmRef: d.id, // this is the vendor model id
+      llmTemperature: d.interfaces.includes(LLM_IF_HOTFIX_NoTemperature) ? null : FALLBACK_LLM_PARAM_TEMPERATURE,
+      llmResponseTokens: llmResponseTokens,
+    },
 
     // references
     sId: service.id,
     vId: service.vId,
 
-    // llm-specific
-    options: {
-      llmRef: d.id,
-      // @ts-ignore FIXME: large assumption that this is LLMOptionsOpenAI object
-      llmTemperature: FALLBACK_LLM_TEMPERATURE,
-      llmResponseTokens,
-    },
+    // user edited properties: not set
+    // userLabel: undefined,
+    // userHidden: undefined,
+    // userParameters: undefined,
   };
+
+  // set other params from spec
+  if (dllm.parameterSpecs?.length)
+    applyModelParameterInitialValues(dllm.initialParameters, dllm.parameterSpecs, false);
 
   // set the pricing
   if (d.chatPrice && typeof d.chatPrice === 'object') {

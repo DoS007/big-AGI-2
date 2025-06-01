@@ -2,20 +2,18 @@ import * as React from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { FileWithHandle } from 'browser-fs-access';
 
-import { Box, Button, ButtonGroup, Card, Dropdown, Grid, IconButton, Menu, MenuButton, MenuItem, Textarea, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, ButtonGroup, Card, Dropdown, Grid, IconButton, Menu, MenuButton, MenuItem, Textarea, Typography } from '@mui/joy';
 import { ColorPaletteProp, SxProps, VariantProp } from '@mui/joy/styles/types';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
-import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import FormatPaintTwoToneIcon from '@mui/icons-material/FormatPaintTwoTone';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import SendIcon from '@mui/icons-material/Send';
 import StopOutlinedIcon from '@mui/icons-material/StopOutlined';
 import TelegramIcon from '@mui/icons-material/Telegram';
 
+import type { AppChatIntent } from '../../AppChat';
 import { useChatAutoSuggestAttachmentPrompts, useChatMicTimeoutMsValue } from '../../store-app-chat';
 
-import type { DOpenAILLMOptions } from '~/modules/llms/vendors/openai/openai.vendor';
 import { useAgiAttachmentPrompts } from '~/modules/aifn/agiattachmentprompts/useAgiAttachmentPrompts';
 import { useBrowseCapability } from '~/modules/browse/store-module-browsing';
 
@@ -26,27 +24,27 @@ import { ButtonAttachFilesMemo, openFileForAttaching } from '~/common/components
 import { ChatBeamIcon } from '~/common/components/icons/ChatBeamIcon';
 import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
 import { ConversationsManager } from '~/common/chat-overlay/ConversationsManager';
-import { DMessageMetadata, DMetaReferenceItem, messageFragmentsReduceText } from '~/common/stores/chat/chat.message';
+import { DMessageId, DMessageMetadata, DMetaReferenceItem, messageFragmentsReduceText } from '~/common/stores/chat/chat.message';
 import { ShortcutKey, ShortcutObject, useGlobalShortcuts } from '~/common/components/shortcuts/useGlobalShortcuts';
 import { addSnackbar } from '~/common/components/snackbar/useSnackbarsStore';
 import { animationEnterBelow } from '~/common/util/animUtils';
 import { browserSpeechRecognitionCapability, PLACEHOLDER_INTERIM_TRANSCRIPT, SpeechResult, useSpeechRecognition } from '~/common/components/speechrecognition/useSpeechRecognition';
-import { conversationTitle, DConversationId } from '~/common/stores/chat/chat.conversation';
+import { DConversationId } from '~/common/stores/chat/chat.conversation';
 import { copyToClipboard, supportsClipboardRead } from '~/common/util/clipboardUtils';
-import { createTextContentFragment, DMessageAttachmentFragment, DMessageContentFragment, duplicateDMessageFragmentsNoVoid } from '~/common/stores/chat/chat.fragments';
-import { estimateTextTokens, glueForMessageTokens, marshallWrapDocFragments } from '~/common/stores/chat/chat.tokens';
-import { getConversation, isValidConversation, useChatStore } from '~/common/stores/chat/store-chats';
-import { launchAppCall } from '~/common/app.routes';
-import { lineHeightTextareaMd } from '~/common/app.theme';
+import { createTextContentFragment, DMessageAttachmentFragment, DMessageContentFragment, duplicateDMessageFragments } from '~/common/stores/chat/chat.fragments';
+import { glueForMessageTokens, marshallWrapDocFragments } from '~/common/stores/chat/chat.tokens';
+import { isValidConversation, useChatStore } from '~/common/stores/chat/store-chats';
+import { getModelParameterValueOrThrow } from '~/common/stores/llms/llms.parameters';
+import { launchAppCall, removeQueryParam, useRouterQuery } from '~/common/app.routes';
+import { lineHeightTextareaMd, themeBgAppChatComposer } from '~/common/app.theme';
 import { optimaOpenPreferences } from '~/common/layout/optima/useOptima';
 import { platformAwareKeystrokes } from '~/common/components/KeyStroke';
 import { supportsScreenCapture } from '~/common/util/screenCaptureUtils';
 import { useChatComposerOverlayStore } from '~/common/chat-overlay/store-perchat_vanilla';
 import { useComposerStartupText, useLogicSherpaStore } from '~/common/logic/store-logic-sherpa';
-import { useDebouncer } from '~/common/components/useDebouncer';
 import { useOverlayComponents } from '~/common/layout/overlays/useOverlayComponents';
-import { useUICounter, useUIPreferencesStore } from '~/common/state/store-ui';
-import { useUXLabsStore } from '~/common/state/store-ux-labs';
+import { useUICounter, useUIPreferencesStore } from '~/common/stores/store-ui';
+import { useUXLabsStore } from '~/common/stores/store-ux-labs';
 
 import type { ActileItem } from './actile/ActileProvider';
 import { providerAttachmentLabels } from './actile/providerAttachmentLabels';
@@ -56,29 +54,38 @@ import { useActileManager } from './actile/useActileManager';
 
 import type { AttachmentDraftId } from '~/common/attachment-drafts/attachment.types';
 import { LLMAttachmentDraftsAction, LLMAttachmentsList } from './llmattachments/LLMAttachmentsList';
+import { PhPaintBrush } from '~/common/components/icons/phosphor/PhPaintBrush';
 import { useAttachmentDrafts } from '~/common/attachment-drafts/useAttachmentDrafts';
 import { useLLMAttachmentDrafts } from './llmattachments/useLLMAttachmentDrafts';
 
 import type { ChatExecuteMode } from '../../execute-mode/execute-mode.types';
 import { chatExecuteModeCanAttach, useChatExecuteMode } from '../../execute-mode/useChatExecuteMode';
 
-import { ButtonAttachCameraMemo, useCameraCaptureModal } from './buttons/ButtonAttachCamera';
+import { ButtonAttachCameraMemo, useCameraCaptureModalDialog } from './buttons/ButtonAttachCamera';
 import { ButtonAttachClipboardMemo } from './buttons/ButtonAttachClipboard';
 import { ButtonAttachScreenCaptureMemo } from './buttons/ButtonAttachScreenCapture';
+import { ButtonAttachWebMemo } from './buttons/ButtonAttachWeb';
 import { ButtonBeamMemo } from './buttons/ButtonBeam';
 import { ButtonCallMemo } from './buttons/ButtonCall';
+import { ButtonGroupDrawRepeat } from './buttons/ButtonGroupDrawRepeat';
 import { ButtonMicContinuationMemo } from './buttons/ButtonMicContinuation';
 import { ButtonMicMemo } from './buttons/ButtonMic';
 import { ButtonMultiChatMemo } from './buttons/ButtonMultiChat';
 import { ButtonOptionsDraw } from './buttons/ButtonOptionsDraw';
 import { ComposerTextAreaActions } from './textarea/ComposerTextAreaActions';
-import { StatusBar } from '../StatusBar';
+import { ComposerTextAreaDrawActions } from './textarea/ComposerTextAreaDrawActions';
+import { StatusBarMemo } from '../StatusBar';
 import { TokenBadgeMemo } from './tokens/TokenBadge';
 import { TokenProgressbarMemo } from './tokens/TokenProgressbar';
 import { useComposerDragDrop } from './useComposerDragDrop';
+import { useTextTokenCount } from './tokens/useTextTokenCounter';
+import { useWebInputModal } from './WebInputModal';
 
 
+// configuration
 const zIndexComposerOverlayMic = 10;
+const SHOW_TIPS_AFTER_RELOADS = 25;
+
 
 
 const paddingBoxSx: SxProps = {
@@ -98,12 +105,14 @@ const minimizedSx: SxProps = {
 export function Composer(props: {
   isMobile: boolean;
   chatLLM: DLLM | null;
-  composerTextAreaRef: React.RefObject<HTMLTextAreaElement>;
+  composerTextAreaRef: React.RefObject<HTMLTextAreaElement | null>;
   targetConversationId: DConversationId | null;
   capabilityHasT2I: boolean;
+  capabilityHasT2IEdit: boolean;
   isMulticast: boolean | null;
   isDeveloperMode: boolean;
   onAction: (conversationId: DConversationId, chatExecuteMode: ChatExecuteMode, fragments: (DMessageContentFragment | DMessageAttachmentFragment)[], metadata?: DMessageMetadata) => boolean;
+  onConversationBeamEdit: (conversationId: DConversationId, editMessageId?: DMessageId) => Promise<void>;
   onConversationsImportFromFiles: (files: File[]) => Promise<void>;
   onTextImagine: (conversationId: DConversationId, text: string) => void;
   setIsMulticast: (on: boolean) => void;
@@ -111,7 +120,8 @@ export function Composer(props: {
 }) {
 
   // state
-  const [composeText, debouncedText, setComposeText] = useDebouncer('', 300, 1200, true);
+  const [composeText, setComposeText] = React.useState('');
+  const [drawRepeat, setDrawRepeat] = React.useState(1);
   const [micContinuation, setMicContinuation] = React.useState(false);
   const [speechInterimResult, setSpeechInterimResult] = React.useState<SpeechResult | null>(null);
   const [sendStarted, setSendStarted] = React.useState(false);
@@ -125,18 +135,20 @@ export function Composer(props: {
 
   // external state
   const { showPromisedOverlay } = useOverlayComponents();
+  const { newChat: appChatNewChatIntent } = useRouterQuery<Partial<AppChatIntent>>();
   const { labsAttachScreenCapture, labsCameraDesktop, labsShowCost, labsShowShortcutBar } = useUXLabsStore(useShallow(state => ({
     labsAttachScreenCapture: state.labsAttachScreenCapture,
     labsCameraDesktop: state.labsCameraDesktop,
     labsShowCost: state.labsShowCost,
     labsShowShortcutBar: state.labsShowShortcutBar,
   })));
-  const timeToShowTips = useLogicSherpaStore(state => state.usageCount >= 5);
+  const timeToShowTips = useLogicSherpaStore(state => state.usageCount >= SHOW_TIPS_AFTER_RELOADS);
   const { novel: explainShiftEnter, touch: touchShiftEnter } = useUICounter('composer-shift-enter');
   const { novel: explainAltEnter, touch: touchAltEnter } = useUICounter('composer-alt-enter');
   const { novel: explainCtrlEnter, touch: touchCtrlEnter } = useUICounter('composer-ctrl-enter');
   const [startupText, setStartupText] = useComposerStartupText();
   const enterIsNewline = useUIPreferencesStore(state => state.enterIsNewline);
+  const composerQuickButton = useUIPreferencesStore(state => state.composerQuickButton);
   const chatMicTimeoutMs = useChatMicTimeoutMsValue();
   const { assistantAbortible, systemPurposeId, tokenCount: _historyTokenCount, abortConversationTemp } = useChatStore(useShallow(state => {
     const conversation = state.conversations.find(_c => _c.id === props.targetConversationId);
@@ -166,7 +178,7 @@ export function Composer(props: {
   const enableLoadURLsInComposer = hasComposerBrowseCapability && !composeText.startsWith('/');
 
   // user message for attachments
-  const { onConversationsImportFromFiles } = props;
+  const { onConversationBeamEdit, onConversationsImportFromFiles } = props;
   const handleFilterAGIFile = React.useCallback(async (file: File): Promise<boolean> =>
     await showPromisedOverlay('composer-open-or-attach', { rejectWithValue: false }, ({ onResolve, onUserReject }) => (
       <ConfirmationModal
@@ -182,11 +194,12 @@ export function Composer(props: {
     )), [onConversationsImportFromFiles, showPromisedOverlay]);
 
   // attachments-overlay: comes from the attachments slice of the conversation overlay
+  const showChatAttachments = chatExecuteModeCanAttach(chatExecuteMode, props.capabilityHasT2IEdit);
   const {
     /* items */ attachmentDrafts,
-    /* append */ attachAppendClipboardItems, attachAppendDataTransfer, attachAppendEgoFragments, attachAppendFile,
+    /* append */ attachAppendClipboardItems, attachAppendDataTransfer, attachAppendEgoFragments, attachAppendFile, attachAppendUrl,
     /* take */ attachmentsRemoveAll, attachmentsTakeAllFragments, attachmentsTakeFragmentsByType,
-  } = useAttachmentDrafts(conversationOverlayStore, enableLoadURLsInComposer, chatLLMSupportsImages, handleFilterAGIFile);
+  } = useAttachmentDrafts(conversationOverlayStore, enableLoadURLsInComposer, chatLLMSupportsImages, handleFilterAGIFile, showChatAttachments === 'only-images');
 
   // attachments derived state
   const llmAttachmentDraftsCollection = useLLMAttachmentDrafts(attachmentDrafts, props.chatLLM, chatLLMSupportsImages);
@@ -204,7 +217,8 @@ export function Composer(props: {
   const isMobile = props.isMobile;
   const isDesktop = !props.isMobile;
   const noConversation = !targetConversationId;
-  const showChatAttachments = chatExecuteModeCanAttach(chatExecuteMode);
+
+  const composerTextSuffix = chatExecuteMode === 'generate-image' && isDesktop && drawRepeat > 1 ? ` x${drawRepeat}` : '';
 
   const micIsRunning = !!speechInterimResult;
   // more mic way below, as we use complex hooks
@@ -212,16 +226,12 @@ export function Composer(props: {
 
   // tokens derived state
 
-  const tokensComposerTextDebounced = React.useMemo(() => {
-    return (debouncedText && props.chatLLM)
-      ? estimateTextTokens(debouncedText, props.chatLLM, 'composer text')
-      : 0;
-  }, [props.chatLLM, debouncedText]);
-  let tokensComposer = tokensComposerTextDebounced + (llmAttachmentDraftsCollection.llmTokenCountApprox || 0);
+  const tokensComposerTextDebounced = useTextTokenCount(composeText, props.chatLLM, 800, 1600);
+  let tokensComposer = (tokensComposerTextDebounced ?? 0) + (llmAttachmentDraftsCollection.llmTokenCountApprox || 0);
   if (props.chatLLM && tokensComposer > 0)
     tokensComposer += glueForMessageTokens(props.chatLLM);
   const tokensHistory = _historyTokenCount;
-  const tokensResponseMax = (props.chatLLM?.options as DOpenAILLMOptions /* FIXME: BIG ASSUMPTION */)?.llmResponseTokens || 0;
+  const tokensResponseMax = getModelParameterValueOrThrow('llmResponseTokens', props.chatLLM?.initialParameters, props.chatLLM?.userParameters, 0) ?? 0;
   const tokenLimit = props.chatLLM?.contextTokens || 0;
   const tokenChatPricing = props.chatLLM?.pricing?.chat;
 
@@ -294,9 +304,9 @@ export function Composer(props: {
     // prepare the fragments: content (if any) and attachments (if allowed, and any)
     const fragments: (DMessageContentFragment | DMessageAttachmentFragment)[] = [];
     if (composerText)
-      fragments.push(createTextContentFragment(composerText));
+      fragments.push(createTextContentFragment(composerText + composerTextSuffix));
 
-    const canAttach = chatExecuteModeCanAttach(_chatExecuteMode);
+    const canAttach = chatExecuteModeCanAttach(_chatExecuteMode, props.capabilityHasT2IEdit);
     if (canAttach) {
       const attachmentFragments = await attachmentsTakeAllFragments('global', 'app-chat');
       fragments.push(...attachmentFragments);
@@ -315,7 +325,7 @@ export function Composer(props: {
     if (enqueued)
       _handleClearText();
     return enqueued;
-  }, [attachmentsTakeAllFragments, confirmProceedIfAttachmentsNotSupported, _handleClearText, inReferenceTo, onAction, targetConversationId]);
+  }, [targetConversationId, confirmProceedIfAttachmentsNotSupported, composerTextSuffix, props.capabilityHasT2IEdit, inReferenceTo, onAction, _handleClearText, attachmentsTakeAllFragments]);
 
   const handleSendAction = React.useCallback(async (chatExecuteMode: ChatExecuteMode, composerText: string): Promise<boolean> => {
     setSendStarted(true);
@@ -398,6 +408,14 @@ export function Composer(props: {
     });
   }, [speechInterimResult]);
 
+  React.useEffect(() => {
+    // auto-start the microphone if appChat was created with a particular intent
+    if (appChatNewChatIntent === 'voiceInput') {
+      toggleRecognition();
+      void removeQueryParam('newChat');
+    }
+  }, [appChatNewChatIntent, toggleRecognition]);
+
 
   // Other send actins
 
@@ -433,8 +451,13 @@ export function Composer(props: {
       addSnackbar({ key: 'chat-mic-running', message: 'Please wait for the microphone to finish.', type: 'info' });
       return;
     }
-    await handleSendAction('beam-content', composeText); // 'beam' button
-  }, [composeText, handleSendAction, micIsRunning]);
+    if (composeText) {
+      await handleSendAction('beam-content', composeText); // 'beam' button
+    } else {
+      if (targetConversationId)
+        void onConversationBeamEdit(targetConversationId); // beam-edit conversation
+    }
+  }, [composeText, handleSendAction, micIsRunning, onConversationBeamEdit, targetConversationId]);
 
   const handleStopClicked = React.useCallback(() => {
     targetConversationId && abortConversationTemp(targetConversationId);
@@ -478,12 +501,12 @@ export function Composer(props: {
 
   const onActileEmbedMessage = React.useCallback(async ({ conversationId, messageId }: StarredMessageItem) => {
     // get the message
-    const conversation = getConversation(conversationId);
-    const messageToEmbed = conversation?.messages.find(m => m.id === messageId);
-    if (conversation && messageToEmbed) {
-      const fragmentsCopy = duplicateDMessageFragmentsNoVoid(messageToEmbed.fragments); // [attach] deep copy a message's fragments to attach to ego
+    const cHandler = ConversationsManager.getHandler(conversationId);
+    const messageToEmbed = cHandler.historyFindMessageOrThrow(messageId);
+    if (messageToEmbed) {
+      const fragmentsCopy = duplicateDMessageFragments(messageToEmbed.fragments, true); // [attach] deep copy a message's fragments to attach to ego
       if (fragmentsCopy.length) {
-        const chatTitle = conversationTitle(conversation);
+        const chatTitle = cHandler.title() ?? '';
         const messageText = messageFragmentsReduceText(fragmentsCopy);
         const label = `${chatTitle} > ${messageText.slice(0, 10)}...`;
         await attachAppendEgoFragments(fragmentsCopy, label, chatTitle, conversationId, messageId);
@@ -570,7 +593,7 @@ export function Composer(props: {
     void attachAppendFile('camera', file);
   }, [attachAppendFile]);
 
-  const { openCamera, cameraCaptureComponent } = useCameraCaptureModal(handleAttachCameraImage);
+  const { openCamera, cameraCaptureComponent } = useCameraCaptureModalDialog(handleAttachCameraImage);
 
   const handleAttachScreenCapture = React.useCallback((file: File) => {
     void attachAppendFile('screencapture', file);
@@ -583,6 +606,12 @@ export function Composer(props: {
       await attachAppendFile('file-open', file)
         .catch((error: any) => addSnackbar({ key: 'attach-file-open-fail', message: `Unable to attach the file "${file.name}" (${error?.message || error?.toString() || 'unknown error'})`, type: 'issue' }));
   }, [attachAppendFile]);
+
+  const handleAttachWebLinks = React.useCallback(async (links: { url: string }[]) => {
+    links.forEach(link => void attachAppendUrl('input-link', link.url));
+  }, [attachAppendUrl]);
+
+  const { openWebInputDialog, webInputDialogComponent } = useWebInputModal(handleAttachWebLinks, composeText);
 
 
   // Attachments Down
@@ -612,8 +641,12 @@ export function Composer(props: {
     const composerShortcuts: ShortcutObject[] = [];
     if (showChatAttachments) {
       composerShortcuts.push({ key: 'f', ctrl: true, shift: true, action: () => openFileForAttaching(true, handleAttachFiles), description: 'Attach File' });
+      composerShortcuts.push({ key: 'l', ctrl: true, shift: true, action: openWebInputDialog, description: 'Attach Link' });
       if (supportsClipboardRead())
         composerShortcuts.push({ key: 'v', ctrl: true, shift: true, action: attachAppendClipboardItems, description: 'Attach Clipboard' });
+      // Future: keep reactive state here to support Live Screen Capture and more
+      // if (labsAttachScreenCapture && supportsScreenCapture)
+      //   composerShortcuts.push({ key: 's', ctrl: true, shift: true, action: openScreenCaptureDialog, description: 'Attach Screen Capture' });
     }
     if (recognitionState.isActive) {
       composerShortcuts.push({ key: 'm', ctrl: true, action: handleFinishMicAndSend, description: 'Mic · Send', disabled: !recognitionState.hasSpeech || sendStarted, endDecoratorIcon: TelegramIcon as any, level: 4 });
@@ -632,7 +665,7 @@ export function Composer(props: {
         }, description: 'Microphone',
       });
     return composerShortcuts;
-  }, [attachAppendClipboardItems, handleAttachFiles, handleFinishMicAndSend, recognitionState.hasSpeech, recognitionState.isActive, sendStarted, showChatAttachments, toggleRecognition]));
+  }, [attachAppendClipboardItems, handleAttachFiles, handleFinishMicAndSend, openWebInputDialog, recognitionState.hasSpeech, recognitionState.isActive, sendStarted, showChatAttachments, toggleRecognition]));
 
 
   // ...
@@ -644,7 +677,7 @@ export function Composer(props: {
   const isDraw = chatExecuteMode === 'generate-image';
 
   const showChatInReferenceTo = !!inReferenceTo?.length;
-  const showChatExtras = isText && !showChatInReferenceTo;
+  const showChatExtras = isText && !showChatInReferenceTo && !assistantAbortible && composerQuickButton !== 'off';
 
   const sendButtonVariant: VariantProp = (isAppend || (isMobile && isTextBeam)) ? 'outlined' : 'solid';
 
@@ -660,20 +693,21 @@ export function Composer(props: {
       : isAppend ? <SendIcon sx={{ fontSize: 18 }} />
         : isReAct ? <PsychologyIcon />
           : isTextBeam ? <ChatBeamIcon /> /* <GavelIcon /> */
-            : isDraw ? <FormatPaintTwoToneIcon />
+            : isDraw ? <PhPaintBrush />
               : <TelegramIcon />;
 
   const beamButtonColor: ColorPaletteProp | undefined =
     !llmAttachmentDraftsCollection.canAttachAllFragments ? 'warning'
       : undefined;
 
-  // stable randomization of the /verb, between '/draw', '/react', '/browse'
+  const showTint: ColorPaletteProp | undefined = isDraw ? 'warning' : isReAct ? 'success' : undefined;
+
+  // stable randomization of the /verb, between '/draw', '/react'
   const placeholderAction = React.useMemo(() => {
     const actions: string[] = ['/react'];
     if (props.capabilityHasT2I) actions.push('/draw');
-    if (hasComposerBrowseCapability) actions.push('/browse');
     return actions[Math.floor(Math.random() * actions.length)];
-  }, [hasComposerBrowseCapability, props.capabilityHasT2I]);
+  }, [props.capabilityHasT2I]);
 
   let textPlaceholder: string =
     isDraw ? 'Describe what you would like to see...'
@@ -687,7 +721,7 @@ export function Composer(props: {
             + (recognitionState.isAvailable ? ' · ramble' : '')
             + '...';
 
-  if (isDesktop && timeToShowTips) {
+  if (isDesktop && timeToShowTips && !isDraw) {
     if (explainShiftEnter)
       textPlaceholder += !enterIsNewline ? '\n\n💡 Shift + Enter to add a new line' : '\n\n💡 Shift + Enter to send';
     else if (explainAltEnter)
@@ -704,9 +738,14 @@ export function Composer(props: {
   }), [dragContainerSx]);
 
   return (
-    <Box aria-label='User Message' component='section' sx={props.sx}>
+    <Box
+      aria-label='New Message'
+      component='section'
+      bgcolor={showTint ? `var(--joy-palette-${showTint}-softBg)` : themeBgAppChatComposer}
+      sx={props.sx}
+    >
 
-      {!isMobile && labsShowShortcutBar && <StatusBar toggleMinimized={handleToggleMinimized} isMinimized={isMinimized} />}
+      {!isMobile && labsShowShortcutBar && <StatusBarMemo toggleMinimized={handleToggleMinimized} isMinimized={isMinimized} />}
 
       {/* This container is here just to let the potential statusbar fill the whole space, so we moved the padding here and not in the parent */}
       <Box sx={(!isMinimized || isMobile || !labsShowShortcutBar) ? paddingBoxSx : minimizedSx}>
@@ -724,16 +763,19 @@ export function Composer(props: {
 
             {/* [Mobile, Col1] Mic, Insert Multi-modal content, and Broadcast buttons */}
             {isMobile && (
-              <Box sx={{ flexGrow: 0, display: 'grid', gap: 1 }}>
+              <Box sx={{ flexGrow: 0, display: 'grid', gap: 1, alignSelf: 'flex-start' }}>
 
                 {/* [mobile] Mic button */}
-                {recognitionState.isAvailable && <ButtonMicMemo variant={micVariant} color={micColor} errorMessage={recognitionState.errorMessage} onClick={handleToggleMic} />}
+                {recognitionState.isAvailable && <ButtonMicMemo variant={micVariant} color={micColor === 'danger' ? 'danger' : showTint || micColor} errorMessage={recognitionState.errorMessage} onClick={handleToggleMic} />}
 
                 {/* Responsive Camera OCR button */}
-                {showChatAttachments && <ButtonAttachCameraMemo isMobile onOpenCamera={openCamera} />}
+                {showChatAttachments && <ButtonAttachCameraMemo color={showTint} isMobile onOpenCamera={openCamera} />}
+
+                {/* [mobile] Attach file button (in draw with image mode)  */}
+                {showChatAttachments === 'only-images' && <ButtonAttachFilesMemo color={showTint} isMobile onAttachFiles={handleAttachFiles} fullWidth multiple />}
 
                 {/* [mobile] [+] button */}
-                {showChatAttachments && (
+                {showChatAttachments === true && (
                   <Dropdown>
                     <MenuButton slots={{ root: IconButton }}>
                       <AddCircleOutlineIcon />
@@ -745,9 +787,14 @@ export function Composer(props: {
                         <ButtonAttachFilesMemo onAttachFiles={handleAttachFiles} fullWidth multiple />
                       </MenuItem>
 
+                      {/* Responsive Web button */}
+                      <MenuItem>
+                        <ButtonAttachWebMemo disabled={!hasComposerBrowseCapability} onOpenWebInput={openWebInputDialog} />
+                      </MenuItem>
+
                       {/* Responsive Paste button */}
                       {supportsClipboardRead() && <MenuItem>
-                        <ButtonAttachClipboardMemo onClick={attachAppendClipboardItems} />
+                        <ButtonAttachClipboardMemo onAttachClipboard={attachAppendClipboardItems} />
                       </MenuItem>}
 
                     </Menu>
@@ -762,23 +809,26 @@ export function Composer(props: {
 
             {/* [Desktop, Col1] Insert Multi-modal content buttons */}
             {isDesktop && showChatAttachments && (
-              <Box sx={{ flexGrow: 0, display: 'grid', gap: (labsAttachScreenCapture && labsCameraDesktop) ? 0.5 : 1 }}>
+              <Box sx={{ flexGrow: 0, display: 'grid', gap: (labsAttachScreenCapture && labsCameraDesktop) ? 0.5 : 1, alignSelf: 'flex-start' }}>
 
                 {/*<FormHelperText sx={{ mx: 'auto' }}>*/}
                 {/*  Attach*/}
                 {/*</FormHelperText>*/}
 
                 {/* Responsive Open Files button */}
-                <ButtonAttachFilesMemo onAttachFiles={handleAttachFiles} fullWidth multiple />
+                <ButtonAttachFilesMemo color={showTint} onAttachFiles={handleAttachFiles} fullWidth multiple />
+
+                {/* Responsive Web button */}
+                {showChatAttachments !== 'only-images' && <ButtonAttachWebMemo color={showTint} disabled={!hasComposerBrowseCapability} onOpenWebInput={openWebInputDialog} />}
 
                 {/* Responsive Paste button */}
-                {supportsClipboardRead() && <ButtonAttachClipboardMemo onClick={attachAppendClipboardItems} />}
+                {supportsClipboardRead() && showChatAttachments !== 'only-images' && <ButtonAttachClipboardMemo color={showTint} onAttachClipboard={attachAppendClipboardItems} />}
 
                 {/* Responsive Screen Capture button */}
-                {labsAttachScreenCapture && supportsScreenCapture && <ButtonAttachScreenCaptureMemo onAttachScreenCapture={handleAttachScreenCapture} />}
+                {labsAttachScreenCapture && supportsScreenCapture && <ButtonAttachScreenCaptureMemo color={showTint} onAttachScreenCapture={handleAttachScreenCapture} />}
 
                 {/* Responsive Camera OCR button */}
-                {labsCameraDesktop && <ButtonAttachCameraMemo onOpenCamera={openCamera} />}
+                {labsCameraDesktop && <ButtonAttachCameraMemo color={showTint} onOpenCamera={openCamera} />}
 
               </Box>)}
 
@@ -794,16 +844,16 @@ export function Composer(props: {
             }}>
 
               {/* Text Edit + Mic buttons + MicOverlay */}
-              <Box sx={{ position: 'relative' /* for Mic overlay */ }}>
+              <Box sx={{ position: 'relative' /* for Mic overlay */, height: '100%' }}>
 
                 {/* Edit box with inner Token Progress bar */}
-                <Box sx={{ position: 'relative' /* for TokenBadge & TokenProgress */ }}>
+                <Box sx={{ position: 'relative' /* for TokenBadge & TokenProgress */, height: '100%' }}>
 
                   <Textarea
                     variant='outlined'
                     color={isDraw ? 'warning' : isReAct ? 'success' : undefined}
                     autoFocus
-                    minRows={isMobile ? 4 : agiAttachmentPrompts.hasData ? 3 : showChatInReferenceTo ? 4 : 5}
+                    minRows={isMobile ? 4 : isDraw ? 4 : agiAttachmentPrompts.hasData ? 3 : showChatInReferenceTo ? 4 : 5}
                     maxRows={isMobile ? 8 : 10}
                     placeholder={textPlaceholder}
                     value={composeText}
@@ -812,8 +862,12 @@ export function Composer(props: {
                     onPasteCapture={handleAttachCtrlV}
                     // onFocusCapture={handleFocusModeOn}
                     // onBlurCapture={handleFocusModeOff}
-                    endDecorator={
-                      <ComposerTextAreaActions
+                    endDecorator={isDraw
+                      ? <ComposerTextAreaDrawActions
+                        composerText={composeText}
+                        onReplaceText={setComposeText}
+                      />
+                      : <ComposerTextAreaActions
                         agiAttachmentPrompts={agiAttachmentPrompts}
                         inReferenceTo={inReferenceTo}
                         onAppendAndSend={handleAppendTextAndSend}
@@ -822,6 +876,8 @@ export function Composer(props: {
                     }
                     slotProps={{
                       textarea: {
+                        tabIndex: !recognitionState.isActive ? undefined : -1,
+                        height: '100%',
                         enterKeyHint: enterIsNewline ? 'enter' : 'send',
                         sx: {
                           ...(recognitionState.isAvailable && { pr: { md: 5 } }),
@@ -831,16 +887,17 @@ export function Composer(props: {
                       },
                     }}
                     sx={{
-                      backgroundColor: 'background.level1',
+                      height: '100%',
+                      backgroundColor: showTint ? undefined : 'background.level1',
                       '&:focus-within': { backgroundColor: 'background.popup', '.within-composer-focus': { backgroundColor: 'background.popup' } },
                       lineHeight: lineHeightTextareaMd,
                     }} />
 
-                  {!showChatInReferenceTo && tokenLimit > 0 && (tokensComposer > 0 || (tokensHistory + tokensResponseMax) > 0) && (
+                  {!showChatInReferenceTo && !isDraw && tokenLimit > 0 && (tokensComposer > 0 || (tokensHistory + tokensResponseMax) > 0) && (
                     <TokenProgressbarMemo chatPricing={tokenChatPricing} direct={tokensComposer} history={tokensHistory} responseMax={tokensResponseMax} limit={tokenLimit} />
                   )}
 
-                  {!showChatInReferenceTo && tokenLimit > 0 && (
+                  {!showChatInReferenceTo && !isDraw && tokenLimit > 0 && (
                     <TokenBadgeMemo hideBelowDollars={0.0001} chatPricing={tokenChatPricing} direct={tokensComposer} history={tokensHistory} responseMax={tokensResponseMax} limit={tokenLimit} showCost={labsShowCost} enableHover={!isMobile} showExcess absoluteBottomRight />
                   )}
 
@@ -909,7 +966,7 @@ export function Composer(props: {
                         fontStyle: 'italic',
                       },
                     }}>
-                      {!!debouncedText && <span className='preceding'>{debouncedText.endsWith(' ') ? debouncedText : debouncedText + ' '}</span>}
+                      {!!composeText && <span className='preceding'>{composeText.endsWith(' ') ? composeText : composeText + ' '}</span>}
                       {speechInterimResult.transcript}
                       <span className={speechInterimResult.interimTranscript === PLACEHOLDER_INTERIM_TRANSCRIPT ? 'placeholder' : 'interim'}>{speechInterimResult.interimTranscript}</span>
                     </Typography>
@@ -944,7 +1001,9 @@ export function Composer(props: {
 
                 {/* [mobile] bottom-corner secondary button */}
                 {isMobile && (showChatExtras
-                    ? <ButtonCallMemo isMobile disabled={noConversation || noLLM} onClick={handleCallClicked} />
+                    ? (composerQuickButton === 'call'
+                      ? <ButtonCallMemo isMobile disabled={noConversation || noLLM} onClick={handleCallClicked} />
+                      : <ButtonBeamMemo isMobile disabled={noConversation /*|| noLLM*/} color={beamButtonColor} hasContent={!!composeText} onClick={handleSendTextBeamClicked} />)
                     : isDraw
                       ? <ButtonOptionsDraw isMobile onClick={handleDrawOptionsClicked} sx={{ mr: { xs: 1, md: 2 } }} />
                       : <IconButton disabled sx={{ mr: { xs: 1, md: 2 } }} />
@@ -964,7 +1023,7 @@ export function Composer(props: {
                     <Button
                       key='composer-act'
                       fullWidth
-                      disabled={noConversation || noLLM}
+                      disabled={noConversation /* || noLLM*/}
                       loading={sendStarted}
                       loadingPosition='end'
                       onClick={handleSendClicked}
@@ -995,16 +1054,17 @@ export function Composer(props: {
                   {/*</Tooltip>}*/}
 
                   {/* [Draw] Imagine */}
-                  {isDraw && !!composeText && <Tooltip title='Generate an image prompt'>
-                    <IconButton variant='outlined' disabled={noConversation || noLLM} onClick={handleTextImagineClicked}>
-                      <AutoAwesomeIcon />
-                    </IconButton>
-                  </Tooltip>}
+                  {/* NOTE: disabled: as we have prompt enhancement in the TextArea (Draw Mode) already */}
+                  {/*{isDraw && !!composeText && <Tooltip title='Generate an image prompt'>*/}
+                  {/*  <IconButton variant='outlined' disabled={noConversation || noLLM} onClick={handleTextImagineClicked}>*/}
+                  {/*    <AutoAwesomeIcon />*/}
+                  {/*  </IconButton>*/}
+                  {/*</Tooltip>}*/}
 
                   {/* Mode expander */}
                   <IconButton
-                    variant={assistantAbortible ? 'soft' : isDraw ? undefined : undefined}
-                    disabled={noConversation || noLLM || chatExecuteMenuShown}
+                    variant={chatExecuteMenuShown ? 'outlined' : assistantAbortible ? 'soft' : isDraw ? undefined : undefined}
+                    disabled={noConversation /*|| chatExecuteMenuShown*/}
                     onClick={showChatExecuteMenu}
                   >
                     <ExpandLessIcon />
@@ -1015,13 +1075,16 @@ export function Composer(props: {
                 {isDesktop && showChatExtras && !assistantAbortible && (
                   <ButtonBeamMemo
                     color={beamButtonColor}
-                    disabled={noConversation || noLLM}
+                    disabled={noConversation /*|| noLLM*/}
                     hasContent={!!composeText}
                     onClick={handleSendTextBeamClicked}
                   />
                 )}
 
               </Box>
+
+              {/* [desktop] Draw mode N buttons */}
+              {isDesktop && isDraw && <ButtonGroupDrawRepeat drawRepeat={drawRepeat} setDrawRepeat={setDrawRepeat} />}
 
               {/* [desktop] Multicast switch (under the Chat button) */}
               {isDesktop && props.isMulticast !== null && <ButtonMultiChatMemo multiChat={props.isMulticast} onSetMultiChat={props.setIsMulticast} />}
@@ -1052,6 +1115,9 @@ export function Composer(props: {
 
       {/* Camera (when open) */}
       {cameraCaptureComponent}
+
+      {/* Web Input Dialog (when open) */}
+      {webInputDialogComponent}
 
       {/* Actile (when open) */}
       {actileComponent}

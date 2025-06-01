@@ -85,6 +85,11 @@ export function Fusion(props: {
       onSuccessCallback(fusion.outputDMessage);
   }, [props.beamStore, props.fusionId]);
 
+  const handleDebugPrint = React.useCallback((event: React.MouseEvent) => {
+    if (!event.shiftKey) return;
+    const fusion = props.beamStore.getState().fusions.find(fusion => fusion.fusionId === props.fusionId);
+    console.log({ fusion });
+  }, [props.beamStore, props.fusionId]);
 
   const handleFusionRemove = React.useCallback(() => {
     removeFusion(props.fusionId);
@@ -117,10 +122,12 @@ export function Fusion(props: {
         factory={factory}
         isFusing={isFusing}
         isInterrupted={isStopped}
+        isMobile={props.isMobile}
         isUsable={isUsable}
         llmLabel={llmLabel}
         llmVendorIcon={llmVendorIcon}
         fusionAvatarTooltip={fusionAvatarTooltip}
+        onIconClick={handleDebugPrint}
         onRemove={handleFusionRemove}
         onToggleGenerate={handleToggleFusionGather}
       />

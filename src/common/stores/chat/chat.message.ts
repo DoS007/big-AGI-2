@@ -1,6 +1,6 @@
 import { agiUuid } from '~/common/util/idUtils';
 
-import { createPlaceholderVoidFragment, createTextContentFragment, DMessageFragment, duplicateDMessageFragmentsNoVoid, isAttachmentFragment, isContentFragment, isVoidFragment } from './chat.fragments';
+import { createPlaceholderVoidFragment, createTextContentFragment, DMessageFragment, duplicateDMessageFragments, isAttachmentFragment, isContentFragment, isVoidFragment } from './chat.fragments';
 
 import type { ModelVendorId } from '~/modules/llms/vendors/vendors.registry';
 
@@ -81,6 +81,7 @@ export type DMessageGenerator = ({
   // A named generator is a simple string, presented as-is
   mgt: 'named';
   name: 'web' | 'issue' | 'help' | string;
+  // xeOpCode?: 'op-draw-text',
 } | {
   // An AIX generator preserves information about original model and vendor:
   // - vendor ids will be stable across time
@@ -112,7 +113,7 @@ export function createDMessageTextContent(role: DMessageRole, text: string): DMe
 }
 
 export function createDMessagePlaceholderIncomplete(role: DMessageRole, placeholderText: string): DMessage {
-  const placeholderFragment = createPlaceholderVoidFragment(placeholderText);
+  const placeholderFragment = createPlaceholderVoidFragment(placeholderText, undefined);
   const message = createDMessageFromFragments(role, [placeholderFragment]);
   message.pendingIncomplete = true;
   return message;
@@ -145,12 +146,12 @@ export function createDMessageFromFragments(role: DMessageRole, fragments: DMess
 
 // helpers - duplication
 
-export function duplicateDMessageNoVoid(message: Readonly<DMessage>): DMessage {
+export function duplicateDMessage(message: Readonly<DMessage>, skipVoid: boolean): DMessage {
   return {
     id: agiUuid('chat-dmessage'),
 
     role: message.role,
-    fragments: duplicateDMessageFragmentsNoVoid(message.fragments), // [*] full message duplication (see downstream)
+    fragments: duplicateDMessageFragments(message.fragments, skipVoid), // [*] full message duplication (see downstream)
 
     ...(message.pendingIncomplete ? { pendingIncomplete: true } : {}),
 
@@ -178,6 +179,7 @@ export function duplicateDMessageGenerator(generator: Readonly<DMessageGenerator
       return {
         mgt: 'named',
         name: generator.name,
+        // ...(generator.xeOpCode ? { xeOpCode: generator.xeOpCode } : {}),
         ...(generator.metrics ? { metrics: { ...generator.metrics } } : {}),
         ...(generator.tokenStopReason ? { tokenStopReason: generator.tokenStopReason } : {}),
       };
@@ -198,6 +200,10 @@ export function duplicateDMessageGenerator(generator: Readonly<DMessageGenerator
 export function messageWasInterruptedAtStart(message: Pick<DMessage, 'generator' | 'fragments'>): boolean {
   return message.generator?.tokenStopReason === 'client-abort' && message.fragments.length === 0;
 }
+
+// export function messageOnlyContainsPlaceholder(message: Pick<DMessage, 'fragments'>): boolean {
+//   return message.fragments.length === 1 && isVoidFragment(message.fragments[0]) && isPlaceholderPart(message.fragments[0].part);
+// }
 
 
 // helpers - user flags
@@ -234,6 +240,10 @@ export function messageSetUserFlag(message: Pick<DMessage, 'userFlags'>, flag: D
 // helpers during the transition from V3
 
 export function messageFragmentsReduceText(fragments: DMessageFragment[], fragmentSeparator: string = '\n\n', excludeAttachmentFragments?: boolean): string {
+
+  // quick path for empty fragments
+  if (!fragments.length)
+    return '';
 
   return fragments
     .map(fragment => {

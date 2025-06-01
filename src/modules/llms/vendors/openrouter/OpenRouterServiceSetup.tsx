@@ -4,14 +4,14 @@ import { Box, Button, Typography } from '@mui/joy';
 import VisibilityOffOutlinedIcon from '@mui/icons-material/VisibilityOffOutlined';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 
-import type { DModelsServiceId } from '~/common/stores/llms/modelsservice.types';
+import type { DModelsServiceId } from '~/common/stores/llms/llms.service.types';
 import { AlreadySet } from '~/common/components/AlreadySet';
 import { FormInputKey } from '~/common/components/forms/FormInputKey';
 import { InlineError } from '~/common/components/InlineError';
 import { Link } from '~/common/components/Link';
 import { SetupFormRefetchButton } from '~/common/components/forms/SetupFormRefetchButton';
 import { getCallbackUrl } from '~/common/app.routes';
-import { llmsStoreState } from '~/common/stores/llms/store-llms';
+import { llmsStoreActions, llmsStoreState } from '~/common/stores/llms/store-llms';
 
 import { ApproximateCosts } from '../ApproximateCosts';
 import { useLlmUpdateModels } from '../../llm.client.hooks';
@@ -23,12 +23,12 @@ import { isValidOpenRouterKey, ModelVendorOpenRouter } from './openrouter.vendor
 export function OpenRouterServiceSetup(props: { serviceId: DModelsServiceId }) {
 
   // external state
-  const { service, serviceAccess, serviceHasBackendCap, serviceHasLLMs, serviceHasVisibleLLMs, updateSettings } =
+  const { service, serviceAccess, serviceHasCloudTenantConfig, serviceHasLLMs, serviceHasVisibleLLMs, updateSettings } =
     useServiceSetup(props.serviceId, ModelVendorOpenRouter);
 
   // derived state
   const { oaiKey } = serviceAccess;
-  const needsUserKey = !serviceHasBackendCap;
+  const needsUserKey = !serviceHasCloudTenantConfig;
 
   const keyValid = isValidOpenRouterKey(oaiKey);
   const keyError = (/*needsUserKey ||*/ !!oaiKey) && !keyValid;
@@ -36,7 +36,7 @@ export function OpenRouterServiceSetup(props: { serviceId: DModelsServiceId }) {
 
   // fetch models
   const { isFetching, refetch, isError, error } =
-    useLlmUpdateModels(!serviceHasLLMs && shallFetchSucceed, service, true);
+    useLlmUpdateModels(!serviceHasLLMs && shallFetchSucceed, service);
 
 
   const handleOpenRouterLogin = () => {
@@ -49,7 +49,8 @@ export function OpenRouterServiceSetup(props: { serviceId: DModelsServiceId }) {
 
   const handleRemoveNonFreeLLMs = () => {
     // A bit of a hack
-    const { llms, removeLLM } = llmsStoreState();
+    const { llms } = llmsStoreState();
+    const { removeLLM } = llmsStoreActions();
     llms
       .filter(llm => llm.sId === props.serviceId)
       .filter(llm => llm.pricing?.chat?._isFree === false)
@@ -58,7 +59,8 @@ export function OpenRouterServiceSetup(props: { serviceId: DModelsServiceId }) {
   };
 
   const handleSetVisibilityAll = React.useCallback((visible: boolean) => {
-    const { llms, updateLLM } = llmsStoreState();
+    const { llms } = llmsStoreState();
+    const { updateLLM } = llmsStoreActions();
     llms
       .filter(llm => llm.sId === props.serviceId)
       .forEach(llm => updateLLM(llm.id, { hidden: !visible }));

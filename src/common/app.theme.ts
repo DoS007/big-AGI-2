@@ -1,9 +1,9 @@
-import createCache from '@emotion/cache';
+import createCache, { StylisElement, StylisPlugin } from '@emotion/cache';
 
 import { Inter, JetBrains_Mono } from 'next/font/google';
 import { extendTheme } from '@mui/joy';
 
-import { animationEnterModal } from '~/common/util/animUtils';
+import { animationEnterBelow } from '~/common/util/animUtils';
 
 
 // Definitions
@@ -110,6 +110,20 @@ export const createAppTheme = (uiComplexityMinimal: boolean) => extendTheme({
       },
     },
 
+    /**
+     * Badge
+     * - add a 'color-feature' color, to be used with the FeatureBadge component
+     */
+    JoyBadge: {
+      styleOverrides: {
+        badge: ({ ownerState }) =>
+          // HACK: we set this to 'color-feature' to force the theming to our liking
+          (ownerState.color as any) !== 'color-feature' ? undefined : ({
+            backgroundColor: '#0288D1',
+          }),
+      },
+    },
+
     // JoyMenuItem: {
     //   styleOverrides: {
     //     root: {
@@ -126,7 +140,7 @@ export const createAppTheme = (uiComplexityMinimal: boolean) => extendTheme({
         },
         root: uiComplexityMinimal ? undefined : {
           '& .agi-animate-enter': {
-            animation: `${animationEnterModal} 0.2s`,
+            animation: `${animationEnterBelow} 0.16s ease-out`,
           },
         },
       },
@@ -164,6 +178,7 @@ export const themeZIndexDesktopDrawer = 26;
 export const themeZIndexDesktopPanel = 27;
 export const themeZIndexDesktopNav = 30;
 export const themeZIndexChatBubble = 50;
+export const themeZIndexDragOverlay = 60;
 export const themeZIndexOverMobileDrawer = 1301;
 
 
@@ -190,6 +205,8 @@ interface ContentScalingOptions {
   // ChatDrawer
   chatDrawerItemSx: { '--ListItem-minHeight': string, fontSize: string };
   chatDrawerItemFolderSx: { '--ListItem-minHeight': string, fontSize: string };
+  // OptimaPanelGroup
+  optimaPanelGroupSize: 'sm' | 'md';
 }
 
 export const themeScalingMap: Record<ContentScaling, ContentScalingOptions> = {
@@ -203,6 +220,7 @@ export const themeScalingMap: Record<ContentScaling, ContentScalingOptions> = {
     fragmentButtonFontSize: 'xs',
     chatDrawerItemSx: { '--ListItem-minHeight': '2.25rem', fontSize: 'sm' },          // 36px
     chatDrawerItemFolderSx: { '--ListItem-minHeight': '2.5rem', fontSize: 'sm' },     // 40px
+    optimaPanelGroupSize: 'sm',
   },
   sm: {
     blockCodeFontSize: '0.75rem',
@@ -214,6 +232,7 @@ export const themeScalingMap: Record<ContentScaling, ContentScalingOptions> = {
     fragmentButtonFontSize: 'sm',
     chatDrawerItemSx: { '--ListItem-minHeight': '2.25rem', fontSize: 'sm' },
     chatDrawerItemFolderSx: { '--ListItem-minHeight': '2.5rem', fontSize: 'sm' },
+    optimaPanelGroupSize: 'sm',
   },
   md: {
     blockCodeFontSize: '0.875rem',
@@ -225,6 +244,7 @@ export const themeScalingMap: Record<ContentScaling, ContentScalingOptions> = {
     fragmentButtonFontSize: 'sm',
     chatDrawerItemSx: { '--ListItem-minHeight': '2.5rem', fontSize: 'md' },           // 40px
     chatDrawerItemFolderSx: { '--ListItem-minHeight': '2.75rem', fontSize: 'md' },    // 44px
+    optimaPanelGroupSize: 'md',
   },
   // lg: {
   //   chatDrawerFoldersLineHeight: '3rem',
@@ -235,6 +255,35 @@ export const themeScalingMap: Record<ContentScaling, ContentScalingOptions> = {
 // Emotion Cache (with insertion point on the SSR pass)
 
 const isBrowser = typeof document !== 'undefined';
+
+const emotionStylisPlugins: StylisPlugin[] = [
+
+  /**
+   * 1. remove the default prefixer plugin: probably not needed and bloating
+   */
+  // prefixer,
+
+  /**
+   * 2. add a function to remove wide-matching CSS rules from Joy UI.
+   * Culprit: https://github.com/mui/material-ui/blob/a705e1f15075b2deb59263868bfa7b1d9f84cdd4/packages/mui-joy/src/Checkbox/Checkbox.tsx#L59
+   * These '~ *' rules are slow and cause a lot of reflows.
+   *
+   * To validate, search the Elements tab for JoyCheckbox-root, and see if there's the '~ *' rule.
+   */
+  function removeSlowCSS(element: StylisElement /*, index, children, callback*/) {
+    if (
+      element.type === 'rule' // only operate on rules
+      && element.value.endsWith('~*')  // where the selector is broad reaching
+      && Array.isArray(element.children)  // and there are children (rules)
+    ) {
+      // console.log('✓ Filtering out problematic selector:', element);
+      element.return = ' ';  // removes the selector (empirical)
+      element.children = []; // removes the rule (empirical)
+    }
+  },
+
+];
+
 
 export function createEmotionCache() {
   let insertionPoint: HTMLElement | undefined;
@@ -248,7 +297,7 @@ export function createEmotionCache() {
     insertionPoint = emotionInsertionPoint ?? undefined;
   }
 
-  return createCache({ key: 'mui-style', insertionPoint: insertionPoint });
+  return createCache({ key: 'mui-style', insertionPoint: insertionPoint, stylisPlugins: emotionStylisPlugins });
 }
 
 // MISC

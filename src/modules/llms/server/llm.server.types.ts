@@ -62,15 +62,42 @@ const PricingChatGenerate_schema = z.object({
 
 
 /// Model Description (out)
+const ModelParameterSpec_schema = z.object({
+  /**
+   * User-changeable parameters for this LLM.
+   *
+   * Uncommon idiosyncratic parameters for this model
+   * - we have only the 'extra' params here, as `llmRef`, `llmResponseTokens` and `llmTemperature` are common
+   * - see `llms.parameters.ts` for the full list
+   *
+   * NOTE: (!) keep this in sync with `DModelParameterId` (llms.parameters.ts) which is also used in AixAPI_Model when making the request
+   */
+  paramId: z.enum([
+    'llmTopP',
+    'llmForceNoStream',
+    'llmVndAntThinkingBudget',
+    'llmVndGeminiShowThoughts',
+    'llmVndGeminiThinkingBudget',
+    'llmVndOaiReasoningEffort',
+    'llmVndOaiRestoreMarkdown',
+    'llmVndOaiWebSearchContext',
+    'llmVndOaiWebSearchGeolocation',
+  ]),
+  required: z.boolean().optional(),
+  hidden: z.boolean().optional(),
+  initialValue: z.number().or(z.string()).nullable().optional(),
+});
 
 export const ModelDescription_schema = z.object({
   id: z.string(),
+  idVariant: z.string().optional(),
   label: z.string(),
   created: z.number().optional(),
   updated: z.number().optional(),
   description: z.string(),
   contextWindow: z.number().nullable(),
   interfaces: z.array(z.enum(LLMS_ALL_INTERFACES)),
+  parameterSpecs: z.array(ModelParameterSpec_schema).optional(),
   maxCompletionTokens: z.number().optional(),
   // rateLimits: rateLimitsSchema.optional(),
   trainingDataCutoff: z.string().optional(),

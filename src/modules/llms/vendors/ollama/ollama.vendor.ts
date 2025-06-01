@@ -4,9 +4,6 @@ import { apiAsync } from '~/common/util/trpc.client';
 import type { IModelVendor } from '../IModelVendor';
 import type { OllamaAccessSchema } from '../../server/ollama/ollama.router';
 
-import type { DOpenAILLMOptions } from '../openai/openai.vendor';
-import { OpenAILLMOptions } from '../openai/OpenAILLMOptions';
-
 import { OllamaServiceSetup } from './OllamaServiceSetup';
 
 
@@ -16,18 +13,17 @@ interface DOllamaServiceSettings {
 }
 
 
-export const ModelVendorOllama: IModelVendor<DOllamaServiceSettings, OllamaAccessSchema, DOpenAILLMOptions> = {
+export const ModelVendorOllama: IModelVendor<DOllamaServiceSettings, OllamaAccessSchema> = {
   id: 'ollama',
   name: 'Ollama',
   displayRank: 54,
   location: 'local',
   instanceLimit: 2,
-  hasBackendCapKey: 'hasLlmOllama',
+  hasServerConfigKey: 'hasLlmOllama',
 
   // components
   Icon: OllamaIcon,
   ServiceSetupComponent: OllamaServiceSetup,
-  LLMOptionsComponent: OpenAILLMOptions,
 
   // functions
   getTransportAccess: (partialSetup): OllamaAccessSchema => ({

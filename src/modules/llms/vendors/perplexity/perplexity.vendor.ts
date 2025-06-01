@@ -3,8 +3,7 @@ import { PerplexityIcon } from '~/common/components/icons/vendors/PerplexityIcon
 import type { IModelVendor } from '../IModelVendor';
 import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
 
-import { DOpenAILLMOptions, ModelVendorOpenAI } from '../openai/openai.vendor';
-import { OpenAILLMOptions } from '../openai/OpenAILLMOptions';
+import { ModelVendorOpenAI } from '../openai/openai.vendor';
 
 import { PerplexityServiceSetup } from './PerplexityServiceSetup';
 
@@ -13,18 +12,17 @@ interface DPerpexityServiceSettings {
   perplexityKey: string;
 }
 
-export const ModelVendorPerplexity: IModelVendor<DPerpexityServiceSettings, OpenAIAccessSchema, DOpenAILLMOptions> = {
+export const ModelVendorPerplexity: IModelVendor<DPerpexityServiceSettings, OpenAIAccessSchema> = {
   id: 'perplexity',
   name: 'Perplexity',
   displayRank: 20,
   location: 'cloud',
   instanceLimit: 1,
-  hasBackendCapKey: 'hasLlmPerplexity',
+  hasServerConfigKey: 'hasLlmPerplexity',
 
   // components
   Icon: PerplexityIcon,
   ServiceSetupComponent: PerplexityServiceSetup,
-  LLMOptionsComponent: OpenAILLMOptions,
 
   // functions
   initializeSetup: () => ({

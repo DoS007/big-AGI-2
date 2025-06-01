@@ -21,7 +21,8 @@ import { useElevenLabsVoiceDropdown } from '~/modules/elevenlabs/useElevenLabsVo
 import type { OptimaBarControlMethods } from '~/common/layout/optima/bar/OptimaBarDropdown';
 import { AudioPlayer } from '~/common/util/audio/AudioPlayer';
 import { Link } from '~/common/components/Link';
-import { OptimaToolbarIn } from '~/common/layout/optima/portals/OptimaPortalsIn';
+import { OptimaPanelGroupedList } from '~/common/layout/optima/panel/OptimaPanelGroupedList';
+import { OptimaPanelIn, OptimaToolbarIn } from '~/common/layout/optima/portals/OptimaPortalsIn';
 import { SpeechResult, useSpeechRecognition } from '~/common/components/speechrecognition/useSpeechRecognition';
 import { conversationTitle, remapMessagesSysToUsr } from '~/common/stores/chat/chat.conversation';
 import { createDMessageFromFragments, createDMessageTextContent, DMessage, messageFragmentsReduceText } from '~/common/stores/chat/chat.message';
@@ -30,7 +31,6 @@ import { launchAppChat, navigateToIndex } from '~/common/app.routes';
 import { useChatStore } from '~/common/stores/chat/store-chats';
 import { useGlobalShortcuts } from '~/common/components/shortcuts/useGlobalShortcuts';
 import { usePlayUrl } from '~/common/util/audio/usePlayUrl';
-import { useSetOptimaAppMenu } from '~/common/layout/optima/useOptima';
 
 import type { AppCallIntent } from './AppCall';
 import { CallAvatar } from './components/CallAvatar';
@@ -40,7 +40,7 @@ import { CallStatus } from './components/CallStatus';
 import { useAppCallStore } from './state/store-app-call';
 
 
-function CallMenuItems(props: {
+function CallMenu(props: {
   pushToTalk: boolean,
   setPushToTalk: (pushToTalk: boolean) => void,
   override: boolean,
@@ -55,7 +55,7 @@ function CallMenuItems(props: {
 
   const handleChangeVoiceToggle = () => props.setOverride(!props.override);
 
-  return <>
+  return <OptimaPanelGroupedList title='Call'>
 
     <MenuItem onClick={handlePushToTalkToggle}>
       <ListItemDecorator>{props.pushToTalk ? <MicNoneIcon /> : <MicIcon />}</ListItemDecorator>
@@ -85,7 +85,7 @@ function CallMenuItems(props: {
       Voice Calls Feedback
     </MenuItem>
 
-  </>;
+  </OptimaPanelGroupedList>;
 }
 
 
@@ -106,7 +106,7 @@ export function Telephone(props: {
   const responseAbortController = React.useRef<AbortController | null>(null);
 
   // external state
-  const { chatLLMId, chatLLMDropdown } = useChatLLMDropdown(llmDropdownRef);
+  const { chatLLMId: modelId, chatLLMDropdown: modelDropdown } = useChatLLMDropdown(llmDropdownRef);
   const { chatTitle, reMessages } = useChatStore(useShallow(state => {
     const conversation = props.callIntent.conversationId
       ? state.conversations.find(conversation => conversation.id === props.callIntent.conversationId) ?? null
@@ -225,7 +225,7 @@ export function Telephone(props: {
     }
 
     // bail if no llm selected
-    if (!chatLLMId) return;
+    if (!modelId) return;
 
 
     // Call Message Generation Prompt
@@ -248,7 +248,7 @@ export function Telephone(props: {
     setPersonaTextInterim('💭...');
 
     aixChatGenerateContent_DMessage_FromConversation(
-      chatLLMId,
+      modelId,
       callSystemInstruction,
       callGenerationInputHistory,
       'call',
@@ -284,7 +284,7 @@ export function Telephone(props: {
       responseAbortController.current?.abort();
       responseAbortController.current = null;
     };
-  }, [isConnected, callMessages, chatLLMId, personaVoiceId, personaSystemMessage, reMessages]);
+  }, [isConnected, callMessages, modelId, personaVoiceId, personaSystemMessage, reMessages]);
 
   // [E] Message interrupter
   const abortTrigger = isConnected && recognitionState.hasSpeech;
@@ -312,20 +312,17 @@ export function Telephone(props: {
   const isEnabled = isMicEnabled && isTTSEnabled;
 
 
-  // pluggable UI
-
-  const menuItems = React.useMemo(() =>
-      <CallMenuItems
-        pushToTalk={pushToTalk} setPushToTalk={setPushToTalk}
-        override={overridePersonaVoice} setOverride={setOverridePersonaVoice} />
-    , [overridePersonaVoice, pushToTalk],
-  );
-
-  useSetOptimaAppMenu(menuItems, 'CallUI-Call');
-
-
   return <>
-    <OptimaToolbarIn>{chatLLMDropdown}</OptimaToolbarIn>
+
+    {/* -> Toolbar */}
+    <OptimaToolbarIn>{modelDropdown}</OptimaToolbarIn>
+    {/* -> Panel */}
+    <OptimaPanelIn>
+      <CallMenu
+        pushToTalk={pushToTalk} setPushToTalk={setPushToTalk}
+        override={overridePersonaVoice} setOverride={setOverridePersonaVoice}
+      />
+    </OptimaPanelIn>
 
     <Typography
       level='h1'

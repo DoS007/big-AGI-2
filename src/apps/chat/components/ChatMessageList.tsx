@@ -12,14 +12,14 @@ import type { ConversationHandler } from '~/common/chat-overlay/ConversationHand
 import { DConversationId, excludeSystemMessages } from '~/common/stores/chat/chat.conversation';
 import { ShortcutKey, useGlobalShortcuts } from '~/common/components/shortcuts/useGlobalShortcuts';
 import { convertFilesToDAttachmentFragments } from '~/common/attachment-drafts/attachment.pipeline';
-import { createDMessageFromFragments, createDMessageTextContent, DMessage, DMessageId, DMessageUserFlag, DMetaReferenceItem, MESSAGE_FLAG_AIX_SKIP } from '~/common/stores/chat/chat.message';
+import { createDMessageFromFragments, createDMessageTextContent, DMessage, DMessageId, DMessageUserFlag, DMetaReferenceItem, MESSAGE_FLAG_AIX_SKIP, messageHasUserFlag } from '~/common/stores/chat/chat.message';
 import { createTextContentFragment, DMessageFragment, DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
-import { getConversation, useChatStore } from '~/common/stores/chat/store-chats';
 import { openFileForAttaching } from '~/common/components/ButtonAttachFiles';
 import { optimaOpenPreferences } from '~/common/layout/optima/useOptima';
 import { useBrowserTranslationWarning } from '~/common/components/useIsBrowserTranslating';
 import { useCapabilityElevenLabs } from '~/common/components/useCapabilities';
 import { useChatOverlayStore } from '~/common/chat-overlay/store-perchat_vanilla';
+import { useChatStore } from '~/common/stores/chat/store-chats';
 import { useScrollToBottom } from '~/common/scroll-to-bottom/useScrollToBottom';
 
 import { CMLZeroConversation } from './messages-list/CMLZeroConversation';
@@ -118,9 +118,9 @@ export function ChatMessageList(props: {
     }
   }, [conversationHandler, conversationId, onConversationExecuteHistory, props.chatLLMSupportsImages]);
 
-  const handleMessageContinue = React.useCallback(async (_messageId: DMessageId /* Ignored for now */) => {
+  const handleMessageContinue = React.useCallback(async (_messageId: DMessageId /* Ignored for now */, continueText: null | string) => {
     if (conversationId && conversationHandler) {
-      conversationHandler.messageAppend(createDMessageTextContent('user', 'Continue')); // [chat] append user:Continue
+      conversationHandler.messageAppend(createDMessageTextContent('user', continueText || 'Continue')); // [chat] append user:Continue (or custom text, likely from an 'option')
       await onConversationExecuteHistory(conversationId);
     }
   }, [conversationHandler, conversationId, onConversationExecuteHistory]);
@@ -136,64 +136,67 @@ export function ChatMessageList(props: {
   }, [conversationHandler, conversationId, onConversationExecuteHistory]);
 
   const handleMessageBeam = React.useCallback(async (messageId: DMessageId) => {
-    // Right-click menu Beam
-    if (!conversationId || !props.conversationHandler) return;
-    const messages = getConversation(conversationId)?.messages;
-    if (messages?.length) {
-      const truncatedHistory = messages.slice(0, messages.findIndex(m => m.id === messageId) + 1);
-      const lastMessage = truncatedHistory[truncatedHistory.length - 1];
-      if (lastMessage) {
-        // assistant: do an in-place beam
-        if (lastMessage.role === 'assistant') {
-          if (truncatedHistory.length >= 2)
-            props.conversationHandler.beamInvoke(truncatedHistory.slice(0, -1), [lastMessage], lastMessage.id);
-        } else {
-          // user: truncate and append (but if the next message is an assistant message, import it)
-          const nextMessage = messages[truncatedHistory.length];
-          if (nextMessage?.role === 'assistant')
-            props.conversationHandler.beamInvoke(truncatedHistory, [nextMessage], null);
-          else
-            props.conversationHandler.beamInvoke(truncatedHistory, [], null);
-        }
-      }
+    // Message option menu Beam
+    if (!conversationId || !conversationHandler || !conversationHandler.isValid()) return;
+    const inputHistory = conversationHandler.historyViewHeadOrThrow('chat-beam-message');
+    if (!inputHistory.length) return;
+
+    // TODO: replace the Persona and Auto-Cache-hint in the history?
+
+    // truncate the history to the given message (may or may not have more after)
+    const truncatedHistory = inputHistory.slice(0, inputHistory.findIndex(m => m.id === messageId) + 1);
+    const lastTruncatedMessage = truncatedHistory[truncatedHistory.length - 1];
+    if (!lastTruncatedMessage) return;
+
+    // assistant: do an in-place beam
+    if (lastTruncatedMessage.role === 'assistant') {
+      if (truncatedHistory.length >= 2)
+        conversationHandler.beamInvoke(truncatedHistory.slice(0, -1), [lastTruncatedMessage], lastTruncatedMessage.id);
+    } else if (lastTruncatedMessage.role === 'user') {
+      // user: truncate and append (but if the next message is an assistant message, import it)
+      const possibleNextMessage = inputHistory[truncatedHistory.length];
+      if (possibleNextMessage?.role === 'assistant')
+        conversationHandler.beamInvoke(truncatedHistory, [possibleNextMessage], null);
+      else
+        conversationHandler.beamInvoke(truncatedHistory, [], null);
     }
-  }, [conversationId, props.conversationHandler]);
+  }, [conversationHandler, conversationId]);
 
   const handleMessageBranch = React.useCallback((messageId: DMessageId) => {
     conversationId && onConversationBranch(conversationId, messageId, true);
   }, [conversationId, onConversationBranch]);
 
   const handleMessageTruncate = React.useCallback((messageId: DMessageId) => {
-    props.conversationHandler?.historyTruncateTo(messageId, 0);
-  }, [props.conversationHandler]);
+    conversationHandler?.historyTruncateTo(messageId, 0);
+  }, [conversationHandler]);
 
   const handleMessageDelete = React.useCallback((messageId: DMessageId) => {
-    props.conversationHandler?.messagesDelete([messageId]);
-  }, [props.conversationHandler]);
+    conversationHandler?.messagesDelete([messageId]);
+  }, [conversationHandler]);
 
   const handleMessageAppendFragment = React.useCallback((messageId: DMessageId, fragment: DMessageFragment) => {
-    props.conversationHandler?.messageFragmentAppend(messageId, fragment, false, false);
-  }, [props.conversationHandler]);
+    conversationHandler?.messageFragmentAppend(messageId, fragment, false, false);
+  }, [conversationHandler]);
 
   const handleMessageDeleteFragment = React.useCallback((messageId: DMessageId, fragmentId: DMessageFragmentId) => {
-    props.conversationHandler?.messageFragmentDelete(messageId, fragmentId, false, true);
-  }, [props.conversationHandler]);
+    conversationHandler?.messageFragmentDelete(messageId, fragmentId, false, true);
+  }, [conversationHandler]);
 
   const handleMessageReplaceFragment = React.useCallback((messageId: DMessageId, fragmentId: DMessageFragmentId, newFragment: DMessageFragment) => {
-    props.conversationHandler?.messageFragmentReplace(messageId, fragmentId, newFragment, false);
-  }, [props.conversationHandler]);
+    conversationHandler?.messageFragmentReplace(messageId, fragmentId, newFragment, false);
+  }, [conversationHandler]);
 
   const handleMessageToggleUserFlag = React.useCallback((messageId: DMessageId, userFlag: DMessageUserFlag, _maxPerConversation?: number) => {
-    props.conversationHandler?.messageToggleUserFlag(messageId, userFlag, true /* touch */);
+    conversationHandler?.messageToggleUserFlag(messageId, userFlag, true /* touch */);
     // Note: we don't support 'maxPerConversation' yet, which is supposed to turn off the flag from the beginning if it's too numerous
     // if (_maxPerConversation) {
     //   ...
     // }
-  }, [props.conversationHandler]);
+  }, [conversationHandler]);
 
   const handleAddInReferenceTo = React.useCallback((item: DMetaReferenceItem) => {
-    props.conversationHandler?.overlayActions.addInReferenceTo(item);
-  }, [props.conversationHandler]);
+    conversationHandler?.overlayActions.addInReferenceTo(item);
+  }, [conversationHandler]);
 
   const handleTextDiagram = React.useCallback(async (messageId: DMessageId, text: string) => {
     conversationId && onTextDiagram({ conversationId: conversationId, messageId, text });
@@ -220,6 +223,16 @@ export function ChatMessageList(props: {
 
   // operate on the local selection set
 
+  const areAllSelectedMessagesHidden = React.useMemo(() => {
+    if (selectedMessages.size === 0) return false;
+    for (const messageId of selectedMessages) {
+      const message = conversationMessages.find(m => m.id === messageId);
+      if (message && !messageHasUserFlag(message, MESSAGE_FLAG_AIX_SKIP))
+        return false;
+    }
+    return true;
+  }, [selectedMessages, conversationMessages]);
+
   const handleSelectAll = (selected: boolean) => {
     const newSelected = new Set<string>();
     if (selected)
@@ -235,15 +248,15 @@ export function ChatMessageList(props: {
   };
 
   const handleSelectionDelete = React.useCallback(() => {
-    props.conversationHandler?.messagesDelete(Array.from(selectedMessages));
+    conversationHandler?.messagesDelete(Array.from(selectedMessages));
     setSelectedMessages(new Set());
-  }, [props.conversationHandler, selectedMessages]);
+  }, [conversationHandler, selectedMessages]);
 
-  const handleSelectionHide = React.useCallback(() => {
+  const handleSelectionToggleVisibility = React.useCallback(() => {
     for (let selectedMessage of Array.from(selectedMessages))
-      props.conversationHandler?.messageSetUserFlag(selectedMessage, MESSAGE_FLAG_AIX_SKIP, true, true);
+      conversationHandler?.messageSetUserFlag(selectedMessage, MESSAGE_FLAG_AIX_SKIP, !areAllSelectedMessagesHidden, true);
     setSelectedMessages(new Set());
-  }, [props.conversationHandler, selectedMessages]);
+  }, [conversationHandler, selectedMessages, areAllSelectedMessagesHidden]);
 
   const { isMessageSelectionMode, setIsMessageSelectionMode } = props;
 
@@ -278,6 +291,10 @@ export function ChatMessageList(props: {
   const listSx: SxProps = React.useMemo(() => ({
     p: 0,
     ...props.sx,
+
+    // we added these after removing the minSize={20} (%) from the containing panel.
+    minWidth: '18rem',
+    // minHeight: '180px', // not need for this, as it's already an overflow scrolling container, so one can reduce it to a pixel
 
     // fix for the double-border on the last message (one by the composer, one to the bottom of the message)
     // marginBottom: '-1px',
@@ -317,7 +334,8 @@ export function ChatMessageList(props: {
           onClose={() => props.setIsMessageSelectionMode(false)}
           onSelectAll={handleSelectAll}
           onDeleteMessages={handleSelectionDelete}
-          onHideMessages={handleSelectionHide}
+          onToggleVisibility={handleSelectionToggleVisibility}
+          areAllMessagesHidden={areAllSelectedMessagesHidden}
         />
       )}
 

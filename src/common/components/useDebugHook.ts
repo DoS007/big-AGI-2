@@ -17,13 +17,13 @@ export const useDebugHook = (app: string) => {
   // test behavior of React.useRef with instance counter
   const testRef = React.useRef<number>(_increment(app));
 
-  console.log(app, 'render', hookId, testRef.current);
+  console.log(app + ' render', hookId, testRef.current);
 
   React.useEffect(() => {
-    console.log(app, 'effect', hookId, testRef.current);
+    console.log(app + ' effect start', hookId, testRef.current);
     return () => {
       // eslint-disable-next-line react-hooks/exhaustive-deps
-      console.log(app, 'cleanup', hookId, testRef?.current);
+      console.log(app + ' effect cleanup', hookId, testRef?.current);
     };
   }, [app, hookId]);
 
@@ -48,7 +48,7 @@ function _getRandom1000() {
 /**
  * Detects what changes within an array of dependencies between renders.
  */
-export function useDebugHookChanges(deps: React.DependencyList, debugLocation: string) {
+export function useDebugHookChanges(debugLocation: string, deps: React.DependencyList) {
   const prevDeps = React.useRef<React.DependencyList>(deps);
 
   /* eslint-disable react-hooks/exhaustive-deps */

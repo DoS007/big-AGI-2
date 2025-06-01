@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import { Alert } from '@mui/joy';
 
-import type { DModelsServiceId } from '~/common/stores/llms/modelsservice.types';
+import type { DModelsServiceId } from '~/common/stores/llms/llms.service.types';
 import { AlreadySet } from '~/common/components/AlreadySet';
 import { Brand } from '~/common/app.config';
 import { FormInputKey } from '~/common/components/forms/FormInputKey';
@@ -30,12 +30,12 @@ export function OpenAIServiceSetup(props: { serviceId: DModelsServiceId }) {
   const advanced = useToggleableBoolean(!!props.serviceId?.includes('-'));
 
   // external state
-  const { service, serviceAccess, serviceHasBackendCap, serviceHasLLMs, updateSettings } =
+  const { service, serviceAccess, serviceHasCloudTenantConfig, serviceHasLLMs, updateSettings } =
     useServiceSetup(props.serviceId, ModelVendorOpenAI);
 
   // derived state
   const { oaiKey, oaiOrg, oaiHost, heliKey, moderationCheck } = serviceAccess;
-  const needsUserKey = !serviceHasBackendCap;
+  const needsUserKey = !serviceHasCloudTenantConfig;
 
   const keyValid = true; //isValidOpenAIApiKey(oaiKey);
   const keyError = (/*needsUserKey ||*/ !!oaiKey) && !keyValid;

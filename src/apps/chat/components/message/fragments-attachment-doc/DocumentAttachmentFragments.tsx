@@ -2,8 +2,8 @@ import * as React from 'react';
 import { Box } from '@mui/joy';
 
 import type { ContentScaling } from '~/common/app.theme';
-import type { DMessageAttachmentFragment, DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
 import type { DMessageRole } from '~/common/stores/chat/chat.message';
+import { DMessageAttachmentFragment, DMessageFragmentId, isDocPart, updateFragmentWithEditedText } from '~/common/stores/chat/chat.fragments';
 
 import type { ChatMessageTextPartEditState } from '../ChatMessage';
 import { DocAttachmentFragmentButton } from './DocAttachmentFragmentButton';
@@ -23,8 +23,8 @@ export function DocumentAttachmentFragments(props: {
   zenMode: boolean,
   allowSelection: boolean,
   disableMarkdownText: boolean,
-  onFragmentDelete: (fragmentId: DMessageFragmentId) => void,
-  onFragmentReplace: (fragmentId: DMessageFragmentId, newFragment: DMessageAttachmentFragment) => void,
+  onFragmentDelete?: (fragmentId: DMessageFragmentId) => void,
+  onFragmentReplace?: (fragmentId: DMessageFragmentId, newFragment: DMessageAttachmentFragment) => void,
 }) {
 
   // state
@@ -49,18 +49,41 @@ export function DocumentAttachmentFragments(props: {
 
   // editing
 
-  const handleEditSetText = React.useCallback((fragmentId: DMessageFragmentId, value: string) => setEditState(prevState => ({ ...prevState, [fragmentId]: value })), []);
-
+  const controlledEditor = false;
   const { onFragmentReplace } = props;
+
+  const handleEditSetText = React.useCallback((fragmentId: DMessageFragmentId, value: string) => {
+    if (!onFragmentReplace || !selectedFragment) return;
+
+    // uncontrolled: store edits as overlay state
+    if (!controlledEditor) {
+      setEditState(prevState => ({ ...prevState, [fragmentId]: value }));
+      return;
+    }
+
+    // edited text fragment
+    const updatedFragment = updateFragmentWithEditedText(selectedFragment, value);
+    if (!updatedFragment) return;
+
+    // alter parent state
+    onFragmentReplace(fragmentId, updatedFragment);
+  }, [controlledEditor, onFragmentReplace, selectedFragment]);
+
   const handleFragmentReplace = React.useCallback((fragmentId: DMessageFragmentId, newFragment: DMessageAttachmentFragment) => {
-    // the purpose of this function is to reset the edit state and then call the parent handler
-    setEditState(prevState => {
-      const newState = { ...prevState };
-      delete newState[fragmentId];
-      return newState;
-    });
+    if (!onFragmentReplace) return;
+
+    // reset the edit overlay state
+    if (!controlledEditor) {
+      setEditState(prevState => {
+        const newState = { ...prevState };
+        delete newState[fragmentId];
+        return newState;
+      });
+    }
+
+    // alter parent state
     onFragmentReplace(fragmentId, newFragment);
-  }, [onFragmentReplace]);
+  }, [controlledEditor, onFragmentReplace]);
 
 
   // [effect] clear edits on onmount
@@ -102,19 +125,20 @@ export function DocumentAttachmentFragments(props: {
       </Box>
 
       {/* Document Viewer & Editor */}
-      {!!selectedFragment && (
+      {!!selectedFragment && isDocPart(selectedFragment.part) && (
         <DocAttachmentFragment
           key={selectedFragment.fId /* this is here for the useLiveFile hook which otherwise would migrate state across fragments */}
           fragment={selectedFragment}
+          controlledEditor={controlledEditor}
           messageRole={props.messageRole}
-          editedText={editState?.[selectedFragment.fId]}
+          editedText={controlledEditor ? undefined : editState?.[selectedFragment.fId]}
           setEditedText={handleEditSetText}
           contentScaling={props.contentScaling}
           isMobile={props.isMobile}
           zenMode={props.zenMode}
           disableMarkdownText={props.disableMarkdownText}
           onFragmentDelete={props.onFragmentDelete}
-          onFragmentReplace={handleFragmentReplace}
+          onFragmentReplace={!props.onFragmentReplace ? undefined : handleFragmentReplace}
         />
       )}
 

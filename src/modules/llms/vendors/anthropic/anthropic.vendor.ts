@@ -4,9 +4,6 @@ import { apiAsync } from '~/common/util/trpc.client';
 import type { AnthropicAccessSchema } from '../../server/anthropic/anthropic.router';
 import type { IModelVendor } from '../IModelVendor';
 
-import type { DOpenAILLMOptions } from '../openai/openai.vendor';
-import { OpenAILLMOptions } from '../openai/OpenAILLMOptions';
-
 import { AnthropicServiceSetup } from './AnthropicServiceSetup';
 
 
@@ -19,19 +16,18 @@ interface DAnthropicServiceSettings {
   heliconeKey: string;
 }
 
-export const ModelVendorAnthropic: IModelVendor<DAnthropicServiceSettings, AnthropicAccessSchema, DOpenAILLMOptions> = {
+export const ModelVendorAnthropic: IModelVendor<DAnthropicServiceSettings, AnthropicAccessSchema> = {
   id: 'anthropic',
   name: 'Anthropic',
   displayRank: 12,
   location: 'cloud',
   brandColor: '#cc785c',
   instanceLimit: 1,
-  hasBackendCapKey: 'hasLlmAnthropic',
+  hasServerConfigKey: 'hasLlmAnthropic',
 
   // components
   Icon: AnthropicIcon,
   ServiceSetupComponent: AnthropicServiceSetup,
-  LLMOptionsComponent: OpenAILLMOptions,
 
   // functions
   getTransportAccess: (partialSetup): AnthropicAccessSchema => ({

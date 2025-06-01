@@ -25,11 +25,11 @@ import { getLLMsDebugInfo } from '~/common/stores/llms/store-llms';
 import { useChatStore } from '~/common/stores/chat/store-chats';
 import { useFolderStore } from '~/common/stores/folders/store-chat-folders';
 import { useLogicSherpaStore } from '~/common/logic/store-logic-sherpa';
-import { useUXLabsStore } from '~/common/state/store-ux-labs';
+import { useUXLabsStore } from '~/common/stores/store-ux-labs';
 
 // utils access
 import { BrowserLang, clientHostName, Is, isPwa } from '~/common/util/pwaUtils';
-import { getGA4MeasurementId } from '~/common/components/GoogleAnalytics';
+import { getGA4MeasurementId } from '~/common/components/3rdparty/GoogleAnalytics';
 import { prettyTimestampForFilenames } from '~/common/util/timeUtils';
 import { supportsClipboardRead } from '~/common/util/clipboardUtils';
 import { supportsScreenCapture } from '~/common/util/screenCaptureUtils';

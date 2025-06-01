@@ -3,8 +3,7 @@ import { AzureIcon } from '~/common/components/icons/vendors/AzureIcon';
 import type { IModelVendor } from '../IModelVendor';
 import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
 
-import { DOpenAILLMOptions, ModelVendorOpenAI } from '../openai/openai.vendor';
-import { OpenAILLMOptions } from '../openai/OpenAILLMOptions';
+import { ModelVendorOpenAI } from '../openai/openai.vendor';
 
 import { AzureServiceSetup } from './AzureServiceSetup';
 
@@ -33,18 +32,17 @@ interface DAzureServiceSettings {
  *
  * Work in progress...
  */
-export const ModelVendorAzure: IModelVendor<DAzureServiceSettings, OpenAIAccessSchema, DOpenAILLMOptions> = {
+export const ModelVendorAzure: IModelVendor<DAzureServiceSettings, OpenAIAccessSchema> = {
   id: 'azure',
-  name: 'Azure',
+  name: 'Azure OpenAI',
   displayRank: 30,
   location: 'cloud',
   instanceLimit: 2,
-  hasBackendCapKey: 'hasLlmAzureOpenAI',
+  hasServerConfigKey: 'hasLlmAzureOpenAI',
 
   // components
   Icon: AzureIcon,
   ServiceSetupComponent: AzureServiceSetup,
-  LLMOptionsComponent: OpenAILLMOptions,
 
   // functions
   getTransportAccess: (partialSetup): OpenAIAccessSchema => ({

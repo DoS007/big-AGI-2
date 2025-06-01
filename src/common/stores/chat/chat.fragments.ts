@@ -59,6 +59,8 @@ export type DMessageAttachmentFragment = _DMessageFragmentWrapper<'attachment',
  * Void Fragments: no meaning, pure cosmetic, not stored, not processed
  */
 export type DMessageVoidFragment = _DMessageFragmentWrapper<'void',
+  | DVoidModelAnnotationsPart     // (non submitted) model references, citations, etc.
+  | DVoidModelAuxPart             // (non submitted) model auxiliary information, from the model itself
   | DVoidPlaceholderPart          // (non submitted) placeholder to be replaced by another part
   | _SentinelPart
 >;
@@ -150,7 +152,31 @@ export type DMessageToolResponsePart = {
 };
 type DMessageToolEnvironment = 'upstream' | 'server' | 'client';
 
-type DVoidPlaceholderPart = { pt: 'ph', pText: string };
+
+type DVoidModelAnnotationsPart = {
+  pt: 'annotations',
+  annotations: readonly DVoidWebCitation[],
+};
+
+export type DVoidWebCitation = {
+  type: 'citation',
+  url: string,
+  title: string,
+  refNumber?: number,
+  ranges: readonly { startIndex: number, endIndex: number, textSnippet?: string }[],
+};
+
+
+export type DVoidModelAuxPart = {
+  pt: 'ma',
+  aType: 'reasoning', // note, we don't specialize to 'ant-thinking' here, as we can infer it from the presence of textSignature or redactedData
+  aText: string,
+  // [Anthropic] attributes, if present, they imply "Extended Thinking" object(s)
+  textSignature?: string,
+  redactedData?: readonly string[],
+};
+
+type DVoidPlaceholderPart = { pt: 'ph', pText: string, pType?: 'chat-gen-follow-up', /* 2025-02-23: added for non-pure-text placeholders */ };
 
 type _SentinelPart = { pt: '_pt_sentinel' };
 
@@ -172,24 +198,33 @@ export type DMessageDataRef =
 
 /// Helpers - Fragment Type Guards - (we don't need 'fragment is X' since TypeScript 5.5.2)
 
-export function isContentFragment(fragment: DMessageFragment) {
-  return fragment.ft === 'content';
+export function isContentFragment(fragment: DMessageFragment): fragment is DMessageContentFragment {
+  return fragment.ft === 'content' && !!fragment.part?.pt;
 }
 
 export function isTextContentFragment(fragment: DMessageFragment): fragment is DMessageContentFragment & { part: DMessageTextPart } {
   return fragment.ft === 'content' && fragment.part.pt === 'text';
 }
 
-export function isAttachmentFragment(fragment: DMessageFragment) {
-  return fragment.ft === 'attachment';
+export function isAttachmentFragment(fragment: DMessageFragment): fragment is DMessageAttachmentFragment {
+  return fragment.ft === 'attachment' && !!fragment.part?.pt;
 }
 
 export function isContentOrAttachmentFragment(fragment: DMessageFragment) {
   return fragment.ft === 'content' || fragment.ft === 'attachment';
 }
 
-export function isVoidFragment(fragment: DMessageFragment) {
-  return fragment.ft === 'void';
+
+export function isVoidFragment(fragment: DMessageFragment): fragment is DMessageVoidFragment {
+  return fragment.ft === 'void' && !!fragment.part?.pt;
+}
+
+export function isVoidAnnotationsFragment(fragment: DMessageFragment): fragment is DMessageVoidFragment & { part: DVoidModelAnnotationsPart } {
+  return fragment.ft === 'void' && fragment.part.pt === 'annotations';
+}
+
+export function isVoidThinkingFragment(fragment: DMessageFragment): fragment is DMessageVoidFragment & { part: DVoidModelAuxPart } {
+  return fragment.ft === 'void' && fragment.part.pt === 'ma' && fragment.part.aType === 'reasoning';
 }
 
 
@@ -211,6 +246,14 @@ export function isErrorPart(part: DMessageContentFragment['part']) {
 
 export function isToolResponseFunctionCallPart(part: DMessageContentFragment['part']): part is DMessageToolResponsePart & { response: { type: 'function_call' } } {
   return part.pt === 'tool_response' && part.response.type === 'function_call';
+}
+
+export function isAnnotationsPart(part: DMessageVoidFragment['part']) {
+  return part.pt === 'annotations';
+}
+
+export function isModelAuxPart(part: DMessageVoidFragment['part']) {
+  return part.pt === 'ma';
 }
 
 export function isPlaceholderPart(part: DMessageVoidFragment['part']) {
@@ -281,8 +324,16 @@ function _createAttachmentFragment(title: string, caption: string, part: DMessag
 
 /// Void Fragments - Creation & Duplication
 
-export function createPlaceholderVoidFragment(placeholderText: string): DMessageVoidFragment {
-  return _createVoidFragment(_create_Placeholder_Part(placeholderText));
+export function createAnnotationsVoidFragment(annotations: DVoidWebCitation[]): DMessageVoidFragment {
+  return _createVoidFragment(_create_Annotations_Part(annotations));
+}
+
+export function createModelAuxVoidFragment(aType: DVoidModelAuxPart['aType'], aText: string, textSignature?: string, redactedData?: string[]): DMessageVoidFragment {
+  return _createVoidFragment(_create_ModelAux_Part(aType, aText, textSignature, redactedData));
+}
+
+export function createPlaceholderVoidFragment(placeholderText: string, placeholderType?: DVoidPlaceholderPart['pType']): DMessageVoidFragment {
+  return _createVoidFragment(_create_Placeholder_Part(placeholderText, placeholderType));
 }
 
 function _createVoidFragment(part: DMessageVoidFragment['part']): DMessageVoidFragment {
@@ -297,8 +348,9 @@ function _createSentinelFragment(): _SentinelFragment {
 }
 
 
-export function duplicateDMessageFragmentsNoVoid(fragments: Readonly<DMessageFragment[]>): DMessageFragment[] {
-  return fragments.map(_duplicateFragment).filter(f => f.ft !== 'void');
+export function duplicateDMessageFragments(fragments: Readonly<DMessageFragment[]>, skipVoid: boolean): DMessageFragment[] {
+  return !skipVoid ? fragments.map(_duplicateFragment)
+    : fragments.map(_duplicateFragment).filter(f => f.ft !== 'void');
 }
 
 function _duplicateFragment(fragment: DMessageFragment): DMessageFragment {
@@ -356,8 +408,31 @@ function _create_CodeExecutionResponse_Part(id: string, error: boolean | string,
   return { pt: 'tool_response', id, error, response: { type: 'code_execution', result, executor }, environment };
 }
 
-function _create_Placeholder_Part(placeholderText: string): DVoidPlaceholderPart {
-  return { pt: 'ph', pText: placeholderText };
+export function createDVoidWebCitation(url: string, title: string, refNumber?: number, rangeStartIndex?: number, rangeEndIndex?: number, rangeTextSnippet?: string): DVoidWebCitation {
+  return {
+    type: 'citation', url, title, ...(refNumber !== undefined ? { refNumber } : {}),
+    ranges: (rangeStartIndex !== undefined && rangeEndIndex !== undefined) ? [{
+      startIndex: rangeStartIndex,
+      endIndex: rangeEndIndex,
+      ...(rangeTextSnippet ? { textSnippet: rangeTextSnippet } : {}),
+    }] : [],
+  };
+}
+
+function _create_Annotations_Part(annotations: DVoidWebCitation[]): DVoidModelAnnotationsPart {
+  return { pt: 'annotations', annotations };
+}
+
+function _create_ModelAux_Part(aType: DVoidModelAuxPart['aType'], aText: string, textSignature?: string, redactedData?: Readonly<string[]>): DVoidModelAuxPart {
+  return {
+    pt: 'ma', aType, aText,
+    ...(textSignature !== undefined ? { textSignature } : undefined),
+    ...(redactedData ? { redactedData: Array.from(redactedData) /* creates a mutable copy of the array */ } : undefined),
+  };
+}
+
+function _create_Placeholder_Part(placeholderText: string, pType?: DVoidPlaceholderPart['pType']): DVoidPlaceholderPart {
+  return { pt: 'ph', pText: placeholderText, ...(pType ? { pType } : undefined) };
 }
 
 function _create_Sentinel_Part(): _SentinelPart {
@@ -365,9 +440,10 @@ function _create_Sentinel_Part(): _SentinelPart {
 }
 
 function _duplicate_Part<TPart extends (DMessageContentFragment | DMessageAttachmentFragment | DMessageVoidFragment)['part']>(part: TPart): TPart {
-  switch (part.pt) {
+  const pt = part.pt;
+  switch (pt) {
     case 'doc':
-      const newDocVersion = Number(part.version || 1); // we don't increase the version on duplication (not sure we should?)
+      const newDocVersion = Number(part.version ?? 1); // we don't increase the version on duplication (not sure we should?)
       return _create_Doc_Part(part.vdt, _duplicate_InlineData(part.data), part.ref, part.l1Title, newDocVersion, part.meta ? { ...part.meta } : undefined) as TPart;
 
     case 'error':
@@ -376,8 +452,20 @@ function _duplicate_Part<TPart extends (DMessageContentFragment | DMessageAttach
     case 'image_ref':
       return _create_ImageRef_Part(_duplicate_DataReference(part.dataRef), part.altText, part.width, part.height) as TPart;
 
+    case 'annotations':
+      const annotationsDeepCopy = part.annotations.map(citation => ({
+        ...citation,
+        ranges: citation.ranges.map(range => ({
+          ...range,
+        })),
+      }));
+      return _create_Annotations_Part(annotationsDeepCopy) as TPart;
+
+    case 'ma':
+      return _create_ModelAux_Part(part.aType, part.aText, part.textSignature, part.redactedData) as TPart;
+
     case 'ph':
-      return _create_Placeholder_Part(part.pText) as TPart;
+      return _create_Placeholder_Part(part.pText, part.pType) as TPart;
 
     case 'text':
       return _create_Text_Part(part.text) as TPart;
@@ -394,6 +482,16 @@ function _duplicate_Part<TPart extends (DMessageContentFragment | DMessageAttach
 
     case '_pt_sentinel':
       return _create_Sentinel_Part() as TPart;
+
+    default:
+      const _exhaustiveCheck: never = pt;
+
+      // console.warn('[DEV] _duplicate_Part: Unknown part type, will duplicate as Error', { part });
+      // return _create_Error_Part(`Unknown part type '${(part as any)?.pt || '(undefined)'}'`) as TPart;
+
+      // unexpected case: if we are here, the best to do is probably to return a clone of the part, as returning
+      // nothing would corrupt the Fragment
+      return structuredClone(part) as TPart; // fallback to structured clone for unknown parts
   }
 }
 
@@ -447,19 +545,46 @@ function _duplicate_DataReference(ref: DMessageDataRef): DMessageDataRef {
 
 /// Editor Helpers - Fragment Editing
 
+export function splitFragmentsByType(fragments: DMessageFragment[]) {
+  // also see `useFragmentBuckets.ts` which inspired this function
+  return fragments.reduce((acc, frag) => {
+    if (isContentFragment(frag))
+      acc.contentFragments.push(frag);
+    else if (isAttachmentFragment(frag))
+      acc.attachmentFragments.push(frag);
+    else if (isVoidFragment(frag))
+      acc.voidFragments.push(frag);
+    else
+      console.warn('[DEV] splitFragmentsByType: Unexpected fragment type:', frag.ft);
+    return acc;
+  }, {
+    contentFragments: [] as DMessageContentFragment[],
+    attachmentFragments: [] as DMessageAttachmentFragment[],
+    voidFragments: [] as DMessageVoidFragment[],
+  });
+}
+
+export function filterDocAttachmentFragments(fragments: DMessageAttachmentFragment[]) {
+  return fragments.filter(fragment => isDocPart(fragment.part));
+}
+
 /**
  * Updates a fragment with the edited text, ensuring the fragment retains its type and structure.
  * @returns A new fragment with the edited text applied or null if the fragment type isn't handled.
  */
+export function updateFragmentWithEditedText(fragment: DMessageContentFragment, editedText: string): DMessageContentFragment | null;
+export function updateFragmentWithEditedText(fragment: DMessageAttachmentFragment, editedText: string): DMessageAttachmentFragment | null;
+export function updateFragmentWithEditedText(fragment: DMessageFragment, editedText: string): DMessageFragment | null;
 export function updateFragmentWithEditedText(
   fragment: DMessageFragment,
   editedText: string,
 ): DMessageFragment | null {
 
-  if (editedText.length === 0) {
-    // If the edited text is empty, we may choose to delete the fragment (depending on the caller's logic)
-    return null;
-  }
+  // NOTE: we transfer the responsibility of this to the caller
+  // if (editedText.length === 0) {
+  //   // If the edited text is empty, we may choose to delete the fragment (depending on the caller's logic)
+  //   return null;
+  // }
 
   if (isContentFragment(fragment)) {
     const { fId, part } = fragment;
@@ -536,7 +661,7 @@ export function updateFragmentWithEditedText(
         part.vdt,
         newDataInline,
         part.ref,
-        Number(part.version || 1) + 1, // Increment version as this has been edited - note: we could have used ?? to be more correct, but || is safer
+        Number(part.version ?? 1) + 1, // Increment version as this has been edited - note: we could have used ?? to be more correct, but || is safer
         part.meta,
         liveFileId,
       );

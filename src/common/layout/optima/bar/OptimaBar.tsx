@@ -1,47 +1,40 @@
 import * as React from 'react';
 
 import type { SxProps } from '@mui/joy/styles/types';
-import { Box, IconButton, ListDivider, ListItem, ListItemDecorator, MenuItem, MenuList, Typography, useColorScheme } from '@mui/joy';
+import { Box, Dropdown, IconButton, ListDivider, ListItem, ListItemDecorator, Menu, MenuButton, MenuItem, Typography } from '@mui/joy';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import DarkModeIcon from '@mui/icons-material/DarkMode';
-import LightModeIcon from '@mui/icons-material/LightMode';
+import EngineeringIcon from '@mui/icons-material/Engineering';
+import FeedbackIcon from '@mui/icons-material/Feedback';
+import HistoryIcon from '@mui/icons-material/History';
+import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined';
 import MenuIcon from '@mui/icons-material/Menu';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
-import NavigateNextRoundedIcon from '@mui/icons-material/NavigateNextRounded';
-import SettingsIcon from '@mui/icons-material/Settings';
+import NavigateNextIcon from '@mui/icons-material/NavigateNext';
+import NewReleasesIcon from '@mui/icons-material/NewReleases';
 
-import { overlayButtonsActiveSx } from '~/modules/blocks/OverlayButton';
+import { BuildInfoCard } from '../../../../apps/news/AppNews';
+import { blocksRenderHTMLIFrameCss } from '~/modules/blocks/code/code-renderers/RenderCodeHtmlIFrame';
 
-import { AgiSquircleIcon } from '~/common/components/icons/AgiSquircleIcon';
+import { BigAgiSquircleIcon } from '~/common/components/icons/big-agi/BigAgiSquircleIcon';
 import { Brand } from '~/common/app.config';
-import { CloseableMenu } from '~/common/components/CloseableMenu';
+import { GoodModal } from '~/common/components/modals/GoodModal';
+import { LayoutSidebarRight } from '~/common/components/icons/LayoutSidebarRight';
 import { Link } from '~/common/components/Link';
-import { ROUTE_INDEX } from '~/common/app.routes';
-import { WindowPaneRightOpen } from '~/common/components/icons/WindowPaneRightOpen';
+import { Release } from '~/common/app.release';
+import { TooltipOutlined } from '~/common/components/TooltipOutlined';
 import { checkVisibleNav, NavItemApp } from '~/common/app.nav';
+import { navigateToIndex, ROUTE_INDEX } from '~/common/app.routes';
+import { useOverlayComponents } from '~/common/layout/overlays/useOverlayComponents';
 
 import { InvertedBar, InvertedBarCornerItem } from '../InvertedBar';
-import { OptimaPanelIn } from '../portals/OptimaPortalsIn';
-import { optimaCloseAppMenu, optimaOpenAppMenu, optimaOpenDrawer, optimaOpenPanel, optimaOpenPreferences, optimaTogglePanel, useOptimaAppMenu, useOptimaAppMenuOpen, useOptimaPanelOpen } from '../useOptima';
+import { PopupPanel } from '../panel/PopupPanel';
+import { optimaOpenDrawer, optimaOpenPanel, optimaTogglePanel, useOptimaPanelOpen } from '../useOptima';
+import { scratchClipSupported, useScratchClipVisibility } from '../scratchclip/store-scratchclip';
 import { useOptimaPortalHasInputs } from '../portals/useOptimaPortalHasInputs';
 import { useOptimaPortalOutRef } from '../portals/useOptimaPortalOutRef';
 
 
-const PageBarItemsFallback = (props: { currentApp?: NavItemApp }) =>
-  <Box sx={{
-    display: 'flex',
-    alignItems: 'center',
-    gap: { xs: 1, md: 2 },
-  }}>
-    <Link href={ROUTE_INDEX}>
-      <AgiSquircleIcon inverted sx={{ width: 32, height: 32, color: 'white' }} />
-    </Link>
-
-    <Typography level='title-md'>
-      {props.currentApp?.barTitle || props.currentApp?.name || Brand.Title.Base}
-    </Typography>
-  </Box>;
-
+// Center Items (Portal)
 
 const centerItemsContainerSx: SxProps = {
   flexGrow: 1,
@@ -49,248 +42,197 @@ const centerItemsContainerSx: SxProps = {
   display: 'flex', flexFlow: 'row wrap', justifyContent: 'center', alignItems: 'center',
   my: 'auto',
   gap: { xs: 0, md: 1 },
+  // ensure we can keep the plugged center bars in check
+  overflow: 'hidden',
   // [electron] make the blank part of the bar draggable (and not the contents)
   WebkitAppRegion: 'drag',
   '& > *': { WebkitAppRegion: 'no-drag' },
 };
 
-function CenterItemsPortal(props: {
-  currentApp?: NavItemApp,
-}) {
+function CenterItemsPortal(props: { currentApp?: NavItemApp }) {
 
-  // state
-  const hasInputs = useOptimaPortalHasInputs('optima-portal-toolbar');
+  // external state
   const portalToolbarRef = useOptimaPortalOutRef('optima-portal-toolbar', 'PageBar.CenterItemsContainer');
+  const hasInputs = useOptimaPortalHasInputs('optima-portal-toolbar');
 
   return (
     <Box ref={portalToolbarRef} sx={centerItemsContainerSx}>
-      {hasInputs ? null : <PageBarItemsFallback currentApp={props.currentApp} />}
+
+      {/* Only if nobody's injecting in the Toolbar portal, show the fallback */}
+      {!hasInputs && <CenterItemsFallback currentApp={props.currentApp} />}
+
     </Box>
   );
 }
 
-const panelMenuListSx: SxProps = {
-  borderRadius: 0,
-  border: 'none',
-  background: 'transparent',
-  py: 0,
-  gap: 'var(--ListDivider-gap)',
-};
+function CenterItemsFallback(props: { currentApp?: NavItemApp }) {
+  return <Box sx={{
+    display: 'flex',
+    alignItems: 'center',
+    gap: { xs: 1, md: 2 },
+  }}>
 
-const panelSectionHeaderSx: SxProps = {
-  fontSize: 'sm',
-  fontWeight: 'lg',
-  borderBottom: '1px solid',
-  borderBottomColor: 'divider',
-  // '--A': 'var(--joy-palette-background-level1)',
-  // '--B': 'var(--joy-palette-background-popup)',
-  // background: 'linear-gradient(45deg, var(--A) 25%, var(--B) 25%, var(--B) 50%, var(--A) 50%, var(--A) 75%, var(--B) 75%)',
-  // backgroundSize: '40px 40px',
-  // boxShadow: 'xs',
-  py: 1,
-};
+    {/* Squircle */}
+    <Link href={ROUTE_INDEX}>
+      <BigAgiSquircleIcon inverted sx={{ width: 32, height: 32, color: 'white' }} />
+    </Link>
 
-const panelSelectionHeaderRowSx: SxProps = {
-  flex: 1,
-  // layout
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  gap: 1,
-  // show the button on hover
-  '&:hover > button': overlayButtonsActiveSx,
-};
+    {/* Title */}
+    <Typography level='title-md'>
+      {props.currentApp?.barTitle || props.currentApp?.name || Brand.Title.Base}
+    </Typography>
 
-const panelSelectionHeaderButtonSx: SxProps = {
-  my: -0.5,
-  opacity: 0,
-  pointerEvents: 'none',
-};
-
-
-function CommonAppMenuItems(props: { onClose: () => void }) {
-
-  // external state
-  const { mode: colorMode, setMode: setColorMode } = useColorScheme();
-
-  const { onClose } = props;
-  const handleShowSettings = React.useCallback((event: React.MouseEvent) => {
-    event.stopPropagation();
-    optimaOpenPreferences();
-    onClose();
-  }, [onClose]);
-
-  const handleToggleDarkMode = (event: React.MouseEvent) => {
-    event.stopPropagation();
-    setColorMode(colorMode === 'dark' ? 'light' : 'dark');
-  };
-
-  return <>
-
-    {/* Preferences |...| Dark Mode Toggle */}
-    {/*<Tooltip title={<KeyStroke combo='Ctrl + ,' />}>*/}
-    <MenuItem onClick={handleShowSettings}>
-      <ListItemDecorator><SettingsIcon /></ListItemDecorator>
-      Preferences{/*<KeyStroke combo='Ctrl + ,' />*/}
-      <IconButton
-        size='sm'
-        variant='soft'
-        onClick={handleToggleDarkMode}
-        sx={{ ml: 'auto', /*mr: '2px',*/ my: '-0.25rem' /* absorb the menuItem padding */ }}
-      >
-        {colorMode !== 'dark' ? <DarkModeIcon /> : <LightModeIcon />}
-      </IconButton>
-    </MenuItem>
-    {/*</Tooltip>*/}
-
-  </>;
+  </Box>;
 }
 
 
-// type ContainedAppType = 'chat' | 'data' | 'news';
-
-
 /**
- * The top bar of the application, with pluggable Left and Right menus, and Center component
+ * Top bar displayed on the Optima Layout
  */
 export function OptimaBar(props: { component: React.ElementType, currentApp?: NavItemApp, isMobile: boolean, sx?: SxProps }) {
 
   // state
-  // const [value, setValue] = React.useState<ContainedAppType>('chat');
   const appMenuAnchor = React.useRef<HTMLButtonElement>(null);
 
   // external state
+  /**
+   * NOTE: shall we fall back to the 'standard' release notes when not available on the tenant?
+   * - prob not because this could be a per-company deployment, and we don't know the tenant's release notes
+   */
+  const releaseNotesUrl = Release.App.releaseNotes;
+  const { showPromisedOverlay } = useOverlayComponents();
   const hasDrawerContent = useOptimaPortalHasInputs('optima-portal-drawer');
-  // const hasPanelContent = useOptimaPortalHasInputs('optima-portal-panel');
-  const appMenuItems = useOptimaAppMenu();
-  const isAppMenuOpen = useOptimaAppMenuOpen();
-  const isPanelOpen = useOptimaPanelOpen();
+  const { panelAsPopup, panelHasContent, panelShownAsPanel, panelShownAsPopup } = useOptimaPanelOpen(props.isMobile, props.currentApp);
+  const { isVisible: isScratchClipVisible, toggleVisibility: toggleScratchClipVisibility } = useScratchClipVisibility();
 
   // derived state
-  const menuToPanelDesktop = !!props.currentApp?.appMenuToPanel;
-  const menuToPanelMobile = props.isMobile;
-  const menuToPanel = menuToPanelDesktop || menuToPanelMobile;
+  const navIsShown = checkVisibleNav(props.currentApp);
 
-  const commonAppMenuItems = React.useMemo(() => {
-    return <CommonAppMenuItems onClose={optimaCloseAppMenu} />;
-  }, []);
 
-  // [Desktop] hide the app bar if the current app doesn't use it
-  const desktopHide = !!props.currentApp?.hideBar && !props.isMobile;
-  if (desktopHide)
+  // Handlers
+
+  const handleShowReleaseNotes = React.useCallback(async () => {
+    if (!releaseNotesUrl) return;
+    return await showPromisedOverlay('app-recent-changes', { rejectWithValue: false }, ({ onResolve, onUserReject }) =>
+      <GoodModal
+        open
+        onClose={onUserReject}
+        noTitleBar
+        themedColor='neutral'
+        unfilterBackdrop
+        sx={{ minWidth: { xs: 400, sm: 580, md: 780, lg: 890 } }}
+      >
+        <iframe
+          src={releaseNotesUrl}
+          style={{ ...blocksRenderHTMLIFrameCss, height: '70svh' }}
+          title='Release Notes Embed'
+          loading='lazy' // do not load until visible in the viewport
+        />
+      </GoodModal>,
+    );
+  }, [releaseNotesUrl, showPromisedOverlay]);
+
+  const handleShowTechnologies = React.useCallback(async () => {
+    return await showPromisedOverlay<boolean>('app-recent-changes', { rejectWithValue: false }, ({ onUserReject }) =>
+      <GoodModal open onClose={onUserReject} noTitleBar unfilterBackdrop>
+        <BuildInfoCard noMargin />
+      </GoodModal>,
+    );
+  }, [showPromisedOverlay]);
+
+  // [Desktop] optionally hide the Bar if the current app asks for it
+  if (props.currentApp?.hideBar && !props.isMobile && !panelHasContent)
     return null;
 
   return <>
 
-    {/* This will animate the height from 0 to auto (and the bar is overflow:hidden */}
-    {/* But we're not using it yet as a NextJS page transition is a full removal */}
-    {/*<Box sx={{*/}
-    {/*  display: 'grid',*/}
-    {/*  gridTemplateRows: desktopHide ? '0fr' : '1fr',*/}
-    {/*  transition: 'grid-template-rows 1.42s linear',*/}
-    {/*}}>*/}
-
-    <InvertedBar
-      component={props.component}
-      direction='horizontal'
-      sx={props.sx}
-    >
+    {/* Bar: [Drawer control] [Center Items] [Panel/Menu control] */}
+    <InvertedBar component={props.component} direction='horizontal' sx={props.sx}>
 
       {/* [Mobile] Drawer button */}
-      {(props.isMobile || !checkVisibleNav(props.currentApp)) && (
+      {(props.isMobile || !navIsShown) && (
         <InvertedBarCornerItem>
-
-          {(!hasDrawerContent || !checkVisibleNav(props.currentApp)) ? (
-            <IconButton component={Link} href={ROUTE_INDEX} noLinkStyle>
-              <ArrowBackIcon />
-            </IconButton>
-          ) : (
+          {(hasDrawerContent && navIsShown) ? (
+            // show the drawer button
             <IconButton disabled={!hasDrawerContent} onPointerDown={optimaOpenDrawer}>
               <MenuIcon />
             </IconButton>
+          ) : (
+            // back button
+            <IconButton onClick={() => navigateToIndex()}>
+              <ArrowBackIcon />
+            </IconButton>
           )}
-
         </InvertedBarCornerItem>
       )}
 
       {/* Pluggable Toolbar Items */}
       <CenterItemsPortal currentApp={props.currentApp} />
 
-      {/* App Menu Anchor */}
-      <InvertedBarCornerItem>
-        <IconButton
-          ref={appMenuAnchor}
-          disabled={menuToPanel ? false : !appMenuAnchor /*|| (!appMenuItems && !props.isMobile)*/}
-          onClick={menuToPanel ? optimaTogglePanel : optimaOpenAppMenu /* onPointerDown doesn't work well with a menu (the 'up' event would close it), so we're still with onClick */}
-          onContextMenu={menuToPanel ? optimaOpenPanel : optimaOpenAppMenu /* important to get the 'preventDefault' for the Right mouse click (to prevent the menu) */}
-          // sx={!menuToPanel ? undefined : {
-          //   transform: isPanelOpen ? 'rotate(180deg)' : 'none',
-          //   transition: 'transform 0.42s',
-          // }}
-        >
-          {isPanelOpen ? <NavigateNextRoundedIcon /> : menuToPanel ? <WindowPaneRightOpen /> : <MoreVertIcon />}
-          {/*{isPanelOpen ? <NavigateNextRoundedIcon /> : <WindowPaneRightOpen />}*/}
-          {/*{menuToPanel ? <NavigateBeforeRoundedIcon /> : <MoreVertIcon />}*/}
-        </IconButton>
-      </InvertedBarCornerItem>
+      {/* (PREVIEW) Preview Menu */}
+      {!props.isMobile && (
+        <Dropdown>
+          <MenuButton
+            aria-label='Quick Tools Menu'
+            slots={{ root: IconButton }}
+            slotProps={{ root: { size: 'md' } }}
+          >
+            {/*<NotificationsNoneOutlinedIcon />*/}
+            <LightbulbOutlinedIcon />
+            {/*<FeedbackOutlinedIcon />*/}
+          </MenuButton>
+
+          <Menu placement='bottom-end' sx={{ minWidth: 220 }}>
+            <ListItem>
+              <Typography level='body-xs' sx={{ textTransform: 'uppercase' }}>
+                {Release.App.versionName}
+              </Typography>
+            </ListItem>
+
+            {!!releaseNotesUrl && (
+              <MenuItem onClick={handleShowReleaseNotes}>
+                <ListItemDecorator><NewReleasesIcon /></ListItemDecorator>
+                Release Notes
+              </MenuItem>
+            )}
+            <MenuItem onClick={handleShowTechnologies}>
+              {/*<ListItemDecorator><EventNoteOutlinedIcon /></ListItemDecorator>*/}
+              <ListItemDecorator><EngineeringIcon /></ListItemDecorator>
+              Build Info
+            </MenuItem>
+
+
+            {scratchClipSupported() && <MenuItem onClick={toggleScratchClipVisibility}>
+              <ListItemDecorator><HistoryIcon /></ListItemDecorator>
+              {isScratchClipVisible ? 'Hide ' : ''}Clipboard History
+            </MenuItem>}
+
+          </Menu>
+        </Dropdown>
+      )}
+
+      {/* Panel Open: has content always on Mobile (the app menu) */}
+      {panelHasContent && (
+        <InvertedBarCornerItem>
+          {/*<Tooltip disableInteractive title={contentToPopup ? (panelIsOpen ? 'Close' : 'Open') + ' Menu' : (panelIsOpen ? 'Close' : 'Open')}>*/}
+          <IconButton
+            ref={appMenuAnchor}
+            // disabled={contentToPopup ? !appMenuAnchor : false}
+            onClick={optimaTogglePanel /* onPointerDown doesn't work well with a menu (the 'up' event would close it), so we're still with onClick */}
+            onContextMenu={optimaOpenPanel /* important to get the 'preventDefault' for the Right mouse click (to prevent the menu) */}
+          >
+            {panelShownAsPanel ? <NavigateNextIcon />
+              : panelAsPopup ? <MoreVertIcon />
+                : <LayoutSidebarRight /> /* aa*/} {/* WindowPaneRightOpen */}
+          </IconButton>
+          {/*</Tooltip>*/}
+        </InvertedBarCornerItem>
+      )}
 
     </InvertedBar>
 
-    {/*</Box>*/}
-
-    {menuToPanel ? (
-
-      <OptimaPanelIn>
-        <MenuList variant='plain' sx={panelMenuListSx}>
-
-          {/* Common (Preferences) */}
-
-          <ListItem variant='soft' sx={panelSectionHeaderSx}>
-            <Box sx={panelSelectionHeaderRowSx}>
-              App
-              {/*<IconButton variant='soft' size='sm' sx={panelSelectionHeaderButtonSx}>*/}
-              {/*  {false ? <ExpandLessIcon /> : <ExpandMoreIcon />}*/}
-              {/*</IconButton>*/}
-            </Box>
-          </ListItem>
-
-          {commonAppMenuItems}
-
-
-          {/* App Menu Items */}
-
-          {!!appMenuItems && <ListItem variant='soft' sx={panelSectionHeaderSx}>
-            <Box sx={panelSelectionHeaderRowSx}>
-              {props.currentApp?.name || 'Menu'}
-              {/*<IconButton variant='soft' size='sm' sx={panelSelectionHeaderButtonSx}>*/}
-              {/*  {false ? <ExpandLessIcon /> : <ExpandMoreIcon />}*/}
-              {/*</IconButton>*/}
-            </Box>
-          </ListItem>}
-
-          {!!appMenuItems && <Box sx={{ overflowY: 'auto' }}>{appMenuItems}</Box>}
-
-        </MenuList>
-      </OptimaPanelIn>
-
-    ) : (
-
-      <CloseableMenu
-        dense maxHeightGapPx={56 + 24} noBottomPadding={props.isMobile} placement='bottom-end'
-        open={isAppMenuOpen && !!appMenuAnchor.current} anchorEl={appMenuAnchor.current} onClose={optimaCloseAppMenu}
-        sx={{ minWidth: 280 }}
-      >
-
-        {/* Common (Preferences) */}
-        {commonAppMenuItems}
-
-        {/* App Menu Items */}
-        {!!appMenuItems && <ListDivider />}
-        {!!appMenuItems && <Box sx={{ overflowY: 'auto' }}>{appMenuItems}</Box>}
-
-      </CloseableMenu>
-
-    )}
+    {/* Use a Popup containing the Panel Portal */}
+    {panelShownAsPopup && !!appMenuAnchor.current && <PopupPanel anchorEl={appMenuAnchor.current} />}
 
   </>;
 }

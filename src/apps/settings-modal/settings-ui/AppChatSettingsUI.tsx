@@ -8,18 +8,27 @@ import WidthWideIcon from '@mui/icons-material/WidthWide';
 
 import { FormLabelStart } from '~/common/components/forms/FormLabelStart';
 import { FormRadioControl } from '~/common/components/forms/FormRadioControl';
-import { useUIPreferencesStore } from '~/common/state/store-ui';
+import { useUIPreferencesStore } from '~/common/stores/store-ui';
 import { isPwa } from '~/common/util/pwaUtils';
 import { optimaOpenModels } from '~/common/layout/optima/useOptima';
 import { useIsMobile } from '~/common/components/useMatchMedia';
 
 import { SettingUIComplexity } from './SettingUIComplexity';
+import { SettingUIComposerQuickButton } from './SettingUIComposerQuickButton';
 import { SettingUIContentScaling } from './SettingUIContentScaling';
 
 
 // configuration
 const SHOW_MARKDOWN_DISABLE_SETTING = false;
 const SHOW_PURPOSE_FINDER = false;
+
+
+const OptionsPageSize = [
+  { value: 'narrow', label: <WidthNormalIcon sx={{ width: 25, height: 24, mt: -0.25 }} /> },
+  { value: 'wide', label: <WidthWideIcon sx={{ width: 25, height: 24, mt: -0.25 }} /> },
+  { value: 'full', label: 'Full' },
+] as const;
+
 
 function ModelsSetupButton() {
   return <Button
@@ -28,9 +37,11 @@ function ModelsSetupButton() {
     startDecorator={<BuildCircleIcon />}
     sx={{
       '--Icon-fontSize': 'var(--joy-fontSize-xl2)',
+      minWidth: 150,
     }}
   >
-    Models
+    {/*Admin Models*/}
+    AI Models
   </Button>;
 }
 
@@ -65,7 +76,7 @@ export function AppChatSettingsUI() {
 
     <FormControl orientation='horizontal' sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
       <FormLabelStart title='AI Models'
-                      description='Setup' />
+                      description='Configure' />
       <ModelsSetupButton />
     </FormControl>
 
@@ -88,8 +99,8 @@ export function AppChatSettingsUI() {
     )}
 
     <FormControl orientation='horizontal' sx={{ justifyContent: 'space-between' }}>
-      <FormLabelStart title='Edit mode'
-                      description={doubleClickToEdit ? 'Double click' : 'Three dots'} />
+      <FormLabelStart title={isMobile ? 'Edit Mode' : 'Easy Edit'}
+                      description={doubleClickToEdit ? (isMobile ? 'Double tap' : 'Double click') : (isMobile ? 'Menu' : 'Shift + double-click')} />
       <Switch checked={doubleClickToEdit} onChange={handleDoubleClickToEditChange}
               endDecorator={doubleClickToEdit ? 'On' : 'Off'}
               slotProps={{ endDecorator: { sx: { minWidth: 26 } } }} />
@@ -103,22 +114,20 @@ export function AppChatSettingsUI() {
               slotProps={{ endDecorator: { sx: { minWidth: 26 } } }} />
     </FormControl>}
 
-    <SettingUIComplexity />
-
     <SettingUIContentScaling />
 
     {!isPwa() && !isMobile && (
       <FormRadioControl
         title='Page Size'
         description={centerMode === 'full' ? 'Full screen chat' : centerMode === 'narrow' ? 'Narrow chat' : 'Wide'}
-        options={[
-          { value: 'narrow', label: <WidthNormalIcon sx={{ width: 25, height: 24, mt: -0.25 }} /> },
-          { value: 'wide', label: <WidthWideIcon sx={{ width: 25, height: 24, mt: -0.25 }} /> },
-          { value: 'full', label: 'Full' },
-        ]}
+        options={OptionsPageSize}
         value={centerMode} onChange={setCenterMode}
       />
     )}
+
+    <SettingUIComplexity />
+
+    {isMobile && <SettingUIComposerQuickButton />}
 
   </>;
 }

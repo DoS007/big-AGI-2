@@ -1,3 +1,4 @@
+import { ModelVendorAlibaba } from './alibaba/alibaba.vendor';
 import { ModelVendorAnthropic } from './anthropic/anthropic.vendor';
 import { ModelVendorAzure } from './azure/azure.vendor';
 import { ModelVendorDeepseek } from './deepseek/deepseekai.vendor';
@@ -18,6 +19,7 @@ import type { IModelVendor } from './IModelVendor';
 
 
 export type ModelVendorId =
+  | 'alibaba'
   | 'anthropic'
   | 'azure'
   | 'deepseek'
@@ -37,6 +39,7 @@ export type ModelVendorId =
 
 /** Global: Vendor Instances Registry **/
 const MODEL_VENDOR_REGISTRY: Record<ModelVendorId, IModelVendor> = {
+  alibaba: ModelVendorAlibaba,
   anthropic: ModelVendorAnthropic,
   azure: ModelVendorAzure,
   deepseek: ModelVendorDeepseek,
@@ -61,8 +64,12 @@ export function findAllModelVendors(): IModelVendor[] {
   return modelVendors;
 }
 
-export function findModelVendor<TServiceSettings extends object = {}, TAccess = unknown, TLLMOptions = unknown>(
+export function findModelVendor<TServiceSettings extends object = {}, TAccess = unknown>(
   vendorId?: ModelVendorId,
-): IModelVendor<TServiceSettings, TAccess, TLLMOptions> | null {
-  return vendorId ? (MODEL_VENDOR_REGISTRY[vendorId] as IModelVendor<TServiceSettings, TAccess, TLLMOptions>) ?? null : null;
+): IModelVendor<TServiceSettings, TAccess> | null {
+  return vendorId ? (MODEL_VENDOR_REGISTRY[vendorId] as IModelVendor<TServiceSettings, TAccess>) ?? null : null;
 }
+
+// export function getDefaultModelVendor(): IModelVendor {
+//   return MODEL_VENDOR_REGISTRY.openai;
+// }
