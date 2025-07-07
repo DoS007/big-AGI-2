@@ -13,7 +13,7 @@ const METRICS_APPROXIMATE_VT_TOKENS_THRESHOLD = 40; // tokens
 export type DMetricsChatGenerate_Md =
   Omit<MetricsChatGenerateTokens, 'T'> &
   MetricsChatGenerateCost_Md &
-  Pick<MetricsChatGenerateTime, 'dtStart' | 'vTOutInner'>; // 2025-02-27: added the inner velocity, which wasn't stored before
+  Pick<MetricsChatGenerateTime, 'dtAll' | 'dtStart' | 'vTOutInner'>; // 2025-02-27: added the inner velocity, which wasn't stored before
 
 /**
  * In particular this is used 'as' AixWire_Particles.CGSelectMetrics
@@ -123,7 +123,7 @@ export function metricsChatGenerateLgToMd(metrics: DMetricsChatGenerate_Lg): DMe
   const allOptionalKeys: (keyof DMetricsChatGenerate_Md)[] = [
     '$c', '$cdCache', '$code', // select costs
     'TIn', 'TCacheRead', 'TCacheWrite', 'TOut', 'TOutR', // select token counts
-    'dtStart', 'vTOutInner', // select token timings/velocities
+    'dtAll', 'dtStart', 'vTOutInner', // select token timings/velocities
     'TsR', // stop reason
   ] as const;
   const extracted: DMetricsChatGenerate_Md = {};
@@ -201,11 +201,10 @@ export function metricsComputeChatGenerateCostsMd(metrics?: Readonly<DMetricsCha
     return { $c: $noCacheRounded, $code: 'partial-price' };
   }
 
-  // 2024-08-22: DEV Note: we put this here to break in case we start having tiered price with cache,
-  // for which we don't know if the tier discriminator is the input tokens level, or the equivalent
-  // tokens level (input + cache)
-  if (Array.isArray(cachePricing.read) || ('write' in cachePricing && Array.isArray(cachePricing.write)))
-    throw new Error('Tiered pricing with cache is not supported');
+  // 2025-01-10: Now supporting tiered cache pricing
+  // Note: We use the total input tokens (new + cache) as the tier discriminator for ALL pricing tiers.
+  // This matches how providers like Google structure their pricing - the tier is based on the request size
+  // (input context), and that tier's rates apply to all token types in that request.
 
   // compute the input cache read costs
   const $cacheRead = getLlmCostForTokens(tierTokens, inCacheReadTokens, cachePricing.read);

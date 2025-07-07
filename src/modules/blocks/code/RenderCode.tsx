@@ -25,6 +25,7 @@ import { RenderCodeSyntax } from './code-renderers/RenderCodeSyntax';
 import { heuristicIsBlockPureHTML } from '../danger-html/RenderDangerousHtml';
 import { heuristicIsCodePlantUML, RenderCodePlantUML, usePlantUmlSvg } from './code-renderers/RenderCodePlantUML';
 import { useOpenInWebEditors } from './code-buttons/useOpenInWebEditors';
+import { useStickyCodeOverlay } from './useStickyCodeOverlay';
 
 // style for line-numbers
 import './RenderCode.css';
@@ -50,6 +51,7 @@ interface RenderCodeBaseProps {
   noCopyButton?: boolean,
   optimizeLightweight?: boolean,
   onReplaceInCode?: (search: string, replace: string) => boolean;
+  renderHideTitle?: boolean,
   sx?: SxProps,
 }
 
@@ -130,6 +132,9 @@ function RenderCodeImpl(props: RenderCodeBaseProps & {
 
   // external state
   const { isFullscreen, enterFullscreen, exitFullscreen } = useFullscreenElement(fullScreenElementRef);
+  const { overlayRef, overlayBoundaryRef } = useStickyCodeOverlay({ disabled: props.optimizeLightweight || isFullscreen });
+
+  // sticky overlay positioning
   const { uiComplexityMode, showLineNumbers, showSoftWrap, setShowLineNumbers, setShowSoftWrap } = useUIPreferencesStore(useShallow(state => ({
     uiComplexityMode: state.complexityMode,
     showLineNumbers: state.renderCodeLineNumbers,
@@ -204,7 +209,7 @@ function RenderCodeImpl(props: RenderCodeBaseProps & {
 
 
   // Title
-  let showBlockTitle = (blockTitle != inferredCodeLanguage) && (blockTitle.includes('.') || blockTitle.includes('://'));
+  let showBlockTitle = !props.renderHideTitle && (blockTitle != inferredCodeLanguage) && (blockTitle.includes('.') || blockTitle.includes('://'));
   // Beautify: hide the block title when rendering HTML
   if (renderHTML)
     showBlockTitle = false;
@@ -245,6 +250,7 @@ function RenderCodeImpl(props: RenderCodeBaseProps & {
 
   return (
     <Box
+      ref={overlayBoundaryRef}
       // onMouseEnter={handleMouseOverEnter}
       // onMouseLeave={handleMouseOverLeave}
       sx={renderCodecontainerSx}
@@ -260,7 +266,7 @@ function RenderCodeImpl(props: RenderCodeBaseProps & {
         {/* Markdown Title (File/Type) */}
         {showBlockTitle && (
           <Sheet sx={{ backgroundColor: 'background.popup', boxShadow: 'xs', borderRadius: 'sm', border: '1px solid var(--joy-palette-neutral-outlinedBorder)', m: -0.5, mb: 1.5 }}>
-            <Typography level='body-sm' sx={{ px: 1, py: 0.5, color: 'text.primary' }}>
+            <Typography level='body-sm' sx={{ px: 1, py: 0.5, color: 'text.primary' }} className='agi-ellipsize'>
               {blockTitle}
               {/*{inferredCodeLanguage}*/}
             </Typography>
@@ -285,7 +291,11 @@ function RenderCodeImpl(props: RenderCodeBaseProps & {
 
       {/* [overlay] Buttons (Code blocks (SVG, diagrams, HTML, syntax, ...)) */}
       {(ALWAYS_SHOW_OVERLAY /*|| isHovering*/) && (
-        <Box className={overlayButtonsClassName} sx={overlayGridSx}>
+        <Box
+          ref={overlayRef}
+          className={overlayButtonsClassName}
+          sx={overlayGridSx}
+        >
 
           {/* [row 1] */}
           <Box sx={overlayFirstRowSx}>

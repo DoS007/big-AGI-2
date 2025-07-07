@@ -13,6 +13,7 @@ import { ROUTE_INDEX } from '~/common/app.routes';
 import { Release } from '~/common/app.release';
 import { animationColorBlues, animationColorRainbow } from '~/common/util/animUtils';
 import { capitalizeFirstLetter } from '~/common/util/textUtils';
+import { useIsMobile } from '~/common/components/useMatchMedia';
 
 import { NewsItems } from './news.data';
 import { beamNewsCallout } from './beam.data';
@@ -87,8 +88,8 @@ function BuildInfoSheet() {
       PL: <strong>{Release.TenantSlug}</strong> · package {backendBuild?.pkgVersion} ({Release.Monotonics.NewsVersion}).<br />
       Frontend: {frontendBuild.gitSha} - deployed {frontendBuild.timestamp ? <strong><TimeAgo date={frontendBuild.timestamp} /></strong> : 'unknown'}, and
       backend {backendBuild?.gitSha}{backendBuild?.timestamp === frontendBuild.timestamp ? '.' : backendBuild?.timestamp ? <TimeAgo date={backendBuild?.timestamp!} /> : 'unknown.'}<br />
-      Ships with -modal/-model: {Object.entries(Release.TechLevels).map(([name, version], idx, arr) => <><strong>{name}</strong> v{version}{idx < arr.length - 1 ? ', ' : ''}</>)}.<br />
-      Ships with intelligent functions: {Release.AiFunctions.map((name, idx, arr) => <><i>{name}</i>{idx < arr.length - 1 ? ', ' : ''}</>)}.
+      Ships with -modal/-model: {Object.entries(Release.TechLevels).map(([name, version], idx, arr) => <React.Fragment key={name}><strong>{name}</strong> v{version}{idx < arr.length - 1 ? ', ' : ''}</React.Fragment>)}.<br />
+      Ships with intelligent functions: {Release.AiFunctions.map((name, idx, arr) => <React.Fragment key={name}><i>{name}</i>{idx < arr.length - 1 ? ', ' : ''}</React.Fragment>)}.
     </Sheet>
   );
 }
@@ -96,6 +97,9 @@ function BuildInfoSheet() {
 export function AppNews() {
   // state
   const [lastNewsIdx, setLastNewsIdx] = React.useState<number>(NEWS_INITIAL_COUNT - 1);
+
+  // external state
+  const isMobile = useIsMobile();
 
   // news selection
   const news = NewsItems.filter((_, idx) => idx <= lastNewsIdx);
@@ -149,9 +153,6 @@ export function AppNews() {
             // const firstCard = idx === 0;
             const addPadding = false; //!firstCard; // || showExpander;
             return <React.Fragment key={idx}>
-
-              {/* Inject the Build Info Sheet */}
-              {idx === 0 && <BuildInfoCard />}
 
               {/* Inject the Big-AGI 2.0 item here*/}
               {/*{idx === 1 && (*/}
@@ -236,6 +237,9 @@ export function AppNews() {
 
             </React.Fragment>;
           })}
+
+          {/* Inject the Build Info Sheet */}
+          {!isMobile && <BuildInfoCard />}
 
           {canExpand && (
             <Button

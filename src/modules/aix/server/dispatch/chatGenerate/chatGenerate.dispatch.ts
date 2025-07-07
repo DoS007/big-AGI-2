@@ -11,11 +11,13 @@ import { GeminiWire_API_Generate_Content } from '../wiretypes/gemini.wiretypes';
 import { aixToAnthropicMessageCreate } from './adapters/anthropic.messageCreate';
 import { aixToGeminiGenerateContent } from './adapters/gemini.generateContent';
 import { aixToOpenAIChatCompletions } from './adapters/openai.chatCompletions';
+import { aixToOpenAIResponses } from './adapters/openai.responsesCreate';
 
 import type { IParticleTransmitter } from './IParticleTransmitter';
 import { createAnthropicMessageParser, createAnthropicMessageParserNS } from './parsers/anthropic.parser';
 import { createGeminiGenerateContentResponseParser } from './parsers/gemini.parser';
 import { createOpenAIChatCompletionsChunkParser, createOpenAIChatCompletionsParserNS } from './parsers/openai.parser';
+import { createOpenAIResponsesEventParser, createOpenAIResponseParserNS, } from './parsers/openai.responses.parser';
 
 
 /**
@@ -92,6 +94,20 @@ export function createChatGenerateDispatch(access: AixAPI_Access, model: AixAPI_
     case 'perplexity':
     case 'togetherai':
     case 'xai':
+
+      // switch to the Responses API if the model supports it
+      const isResponsesAPI = !!model.vndOaiResponsesAPI;
+      if (isResponsesAPI) {
+        return {
+          request: {
+            ...openAIAccess(access, model.id, '/v1/responses'),
+            body: aixToOpenAIResponses(model, chatGenerate, false, streaming),
+          },
+          demuxerFormat: streaming ? 'fast-sse' : null,
+          chatGenerateParse: streaming ? createOpenAIResponsesEventParser() : createOpenAIResponseParserNS(),
+        };
+      }
+
       return {
         request: {
           ...openAIAccess(access, model.id, '/v1/chat/completions'),

@@ -14,9 +14,8 @@ export const Release = {
   TenantSlug: 'open',
 
   App: {
-    versionCode: '2.0.0-open-rc2',       // 1.92.0 sequentially...
+    versionCode: '2.0.0-open-rc3',       // 1.92.0 sequentially...
     versionName: 'Big-AGI 2',
-    releaseNotes: '',
   },
 
   // Future compatibility
@@ -29,7 +28,7 @@ export const Release = {
 
   // this is here to trigger revalidation of data, e.g. models refresh
   Monotonics: {
-    Aix: 19,
+    Aix: 22,
     NewsVersion: 192,
   },
 
@@ -59,6 +58,12 @@ export const Release = {
     timestamp: process.env.NEXT_PUBLIC_BUILD_TIMESTAMP,
   }),
 
-  IsNodeDevBuild: process.env.NODE_ENV === 'development',
+  IsNodeDevBuild: process.env.NODE_ENV === 'development' as const,
 
+} as const;
+
+
+export const BaseProduct = {
+  ReleaseNotes: '',
+  SupportForm: (_userId?: string) => 'https://github.com/enricoros/big-agi/issues',
 } as const;

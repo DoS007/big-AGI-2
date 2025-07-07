@@ -3,11 +3,13 @@ import * as React from 'react';
 import type { SxProps } from '@mui/joy/styles/types';
 import { Box } from '@mui/joy';
 
-import { RenderImageRefDBlob, showImageDataRefInNewTab } from '~/modules/blocks/image/RenderImageRefDBlob';
+import { RenderImageRefDBlob } from '~/modules/blocks/image/RenderImageRefDBlob';
 
 import type { DMessageRole } from '~/common/stores/chat/chat.message';
 import { ContentScaling, themeScalingMap } from '~/common/app.theme';
-import { DMessageAttachmentFragment, DMessageFragmentId, isImageRefPart } from '~/common/stores/chat/chat.fragments';
+import { DMessageAttachmentFragment, DMessageFragmentId, DMessageImageRefPart, isImageRefPart } from '~/common/stores/chat/chat.fragments';
+
+import { ViewImageRefPartModal } from '../fragments-content/ViewImageRefPartModal';
 
 
 // configuration
@@ -66,6 +68,10 @@ export function ImageAttachmentFragments(props: {
   onFragmentDelete?: (fragmentId: DMessageFragmentId) => void,
 }) {
 
+  // state
+  const [viewingImageRefPart, setViewingImageRefPart] = React.useState<DMessageImageRefPart | null>(null);
+
+
   const layoutSxMemo = React.useMemo((): SxProps => ({
     ...layoutSx,
     justifyContent: props.messageRole === 'assistant' ? 'flex-start' : 'flex-end',
@@ -97,12 +103,13 @@ export function ImageAttachmentFragments(props: {
               key={'att-img-' + attachmentFragment.fId}
               dataRefDBlobAssetId={dataRef.dblobAssetId}
               dataRefMimeType={dataRef.mimeType}
+              dataRefBytesSize={dataRef.bytesSize}
               imageAltText={imageRefPart.altText || title}
               imageWidth={imageRefPart.width}
               imageHeight={imageRefPart.height}
               disabled={props.disabled}
-              onOpenInNewTab={() => showImageDataRefInNewTab(dataRef)}
               onDeleteFragment={!props.onFragmentDelete ? undefined : () => props.onFragmentDelete?.(attachmentFragment.fId)}
+              onViewImage={() => setViewingImageRefPart(imageRefPart)}
               scaledImageSx={cardStyleSxMemo}
               variant='attachment-card'
             />
@@ -111,6 +118,14 @@ export function ImageAttachmentFragments(props: {
 
         throw new Error('Unexpected dataRef type: ' + dataRef.reftype);
       })}
+
+      {/* Image viewer modal */}
+      {viewingImageRefPart && (
+        <ViewImageRefPartModal
+          imageRefPart={viewingImageRefPart}
+          onClose={() => setViewingImageRefPart(null)}
+        />
+      )}
 
     </Box>
   );

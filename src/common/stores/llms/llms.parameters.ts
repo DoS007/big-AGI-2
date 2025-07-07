@@ -98,7 +98,12 @@ export const DModelParameterRegistry = {
   llmVndGeminiThinkingBudget: {
     label: 'Thinking Budget',
     type: 'integer' as const,
-    range: [0, 24576] as const, // 0 disables thinking, undefined means 'auto thinking budget'
+    /**
+     * can be overwritten, as gemini models seem to have different ranges which also does not include 0
+     * - value = 0 disables thinking
+     * - value = undefined means 'auto thinking budget'.
+     */
+    range: [0, 24576] as const,
     // initialValue: unset, // auto-budgeting
     description: 'Budget for extended thinking. 0 disables thinking. If not set, the model chooses automatically.',
   } as const,
@@ -137,17 +142,43 @@ export const DModelParameterRegistry = {
     initialValue: false,
   } as const,
 
+  // Perplexity-specific parameters
+
+  // llmVndPerplexityReasoningEffort - we reuse the OpenAI reasoning effort parameter
+
+  llmVndPerplexityDateFilter: {
+    label: 'Date Range',
+    type: 'enum' as const,
+    description: 'Filter results by publication date',
+    values: ['unfiltered', '1m', '3m', '6m', '1y'] as const,
+    // requiredFallback: 'unfiltered',
+  } as const,
+
+  llmVndPerplexitySearchMode: {
+    label: 'Search Mode',
+    type: 'enum' as const,
+    description: 'Type of sources to search',
+    values: ['default', 'academic'] as const,
+    // requiredFallback: 'default', // or leave unset for "unspecified"
+  } as const,
+
 } as const;
 
 
 /// Types
 
+// this is the client-side typescript definition that matches ModelParameterSpec_schema in `llm.server.types.ts`
 export interface DModelParameterSpec<T extends DModelParameterId> {
   paramId: T;
   required?: boolean;
   hidden?: boolean;
-  initialValue?: number | string | null;
+  initialValue?: boolean | number | string | null;
   // upstreamDefault?: DModelParameterValue<T>;
+  /**
+   * (optional, rare) Special: [min, max] range override for this parameter.
+   * Used by llmVndGeminiThinkingBudget to allow different ranges for different models.
+   */
+  rangeOverride?: [number, number];
 }
 
 export type DModelParameterValues = {

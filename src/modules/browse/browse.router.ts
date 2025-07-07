@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod/v4';
 import { TRPCError } from '@trpc/server';
 
 import puppeteer, { Browser, BrowserContext, ScreenshotOptions } from 'puppeteer-core';
@@ -28,7 +28,7 @@ const fetchPageInputSchema = z.object({
     wssEndpoint: z.string().trim().optional(),
   }),
   requests: z.array(z.object({
-    url: z.string().url(),
+    url: z.url(),
     transforms: z.array(pageTransformSchema),
     allowFileDownloads: z.boolean().optional(),
     screenshot: z.object({
@@ -46,7 +46,7 @@ const fetchPageWorkerOutputSchema = z.object({
   url: z.string(),
   title: z.string(),
 
-  content: z.record(pageTransformSchema, z.string()).optional(), // either...
+  content: z.partialRecord(pageTransformSchema, z.string()).optional(), // either...
   file: z.object({ // ...or
     mimeType: z.string(),
     encoding: z.literal('base64'),

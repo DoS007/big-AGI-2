@@ -13,6 +13,7 @@ import type { LogEntry } from './logger.types';
 // configuration
 const DEFAULT_MAX_ENTRIES = 500;
 const DEFAULT_MAX_PERSISTED = 100;
+const DEFAULT_MAX_PERSISTED_DETAILS_LEN = 500;
 const DEBUG_NEW_LOG = Release.IsNodeDevBuild;
 
 
@@ -70,9 +71,50 @@ export const useLoggerStore = create<LoggerState & LoggerActions>()(
             id: a.id || `action_${index}`,
           }));
 
-        // create the log entry
-        const id = agiUuid('logger');
         const timestamp = Date.now();
+
+        // Check if this is a duplicate of the most recent message
+        const state = get();
+        const lastEntry = state.entries[0]; // Most recent entry is first
+
+        if (lastEntry && !lastEntry.dismissed &&
+          lastEntry.message === entryData.message &&
+          lastEntry.level === entryData.level &&
+          lastEntry.source === entryData.source &&
+          JSON.stringify(lastEntry.details) === JSON.stringify(entryData.details)) {
+
+          // update the last entry with incremented repetitions
+          const updatedEntry = {
+            ...lastEntry,
+            repetitionCount: (lastEntry.repetitionCount || 1) + 1,
+            timestamp, // reflect when we last saw this message
+          };
+
+          set((state) => ({
+            entries: [
+              updatedEntry,
+              ...state.entries.slice(1),
+            ].slice(0, state.maxEntries),
+          }));
+
+          // console output in DEV mode
+          if (DEBUG_NEW_LOG) {
+            const consoleMethod = {
+              DEV: console.warn,
+              debug: console.log,
+              info: console.info, warn: console.warn,
+              error: console.error, critical: console.error,
+            }[updatedEntry.level] || console.log;
+            // NOTE: we don't show repetition count in the console, to let the browser perform its own deduplication
+            // consoleMethod(`[${updatedEntry.source || 'client'}] ${updatedEntry.message} (repeated ${updatedEntry.repetitionCount} times)`, updatedEntry.details || '', updatedEntry.actions ? '(Actionable)' : '');
+            consoleMethod(`[${updatedEntry.source || 'client'}] ${updatedEntry.message}`, updatedEntry.details || '', updatedEntry.actions ? '(Actionable)' : '');
+          }
+
+          return lastEntry.id;
+        }
+
+        // create new log entry
+        const id = agiUuid('logger');
         const newEntry: LogEntry = {
           ...entryData,
           id,
@@ -173,6 +215,16 @@ export const useLoggerStore = create<LoggerState & LoggerActions>()(
           .map(e => {
             // remove any actions
             const { actions, hasPendingActions, ...rest } = e;
+            // Truncate details if too large
+            if (rest.details) {
+              const detailsStr = JSON.stringify(rest.details);
+              if (detailsStr.length > 1000) {
+                rest.details = {
+                  truncated: true,
+                  preview: detailsStr.substring(0, DEFAULT_MAX_PERSISTED_DETAILS_LEN) + '...'
+                };
+              }
+            }
             return rest;
           }),
       }),

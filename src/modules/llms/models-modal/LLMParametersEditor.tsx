@@ -22,12 +22,22 @@ const _reasoningEffortOptions = [
   { value: _UNSPECIFIED, label: 'Default', description: 'Default value (unset)' } as const,
 ] as const;
 const _webSearchContextOptions = [
-  { value: 'high', label: 'High', description: 'Largest, highest cost, slower' } as const,
+  { value: 'high', label: 'Comprehensive', description: 'Largest, highest cost, slower' } as const,
   { value: 'medium', label: 'Medium', description: 'Balanced context, cost, and speed' } as const,
   { value: 'low', label: 'Low', description: 'Smallest, cheapest, fastest' } as const,
   { value: _UNSPECIFIED, label: 'Default', description: 'Default value (unset)' } as const,
 ] as const;
-
+const _perplexitySearchModeOptions = [
+  { value: _UNSPECIFIED, label: 'Default', description: 'General web sources' },
+  { value: 'academic', label: 'Academic', description: 'Scholarly and peer-reviewed sources' },
+] as const;
+const _perplexityDateFilterOptions = [
+  { value: _UNSPECIFIED, label: 'All Time', description: 'No date restriction' },
+  { value: '1m', label: 'Last Month', description: 'Results from last 30 days' },
+  { value: '3m', label: 'Last 3 Months', description: 'Results from last 90 days' },
+  { value: '6m', label: 'Last 6 Months', description: 'Results from last 6 months' },
+  { value: '1y', label: 'Last Year', description: 'Results from last 12 months' },
+] as const;
 
 export function LLMParametersEditor(props: {
   // constants
@@ -70,6 +80,8 @@ export function LLMParametersEditor(props: {
     llmVndOaiRestoreMarkdown,
     llmVndOaiWebSearchContext,
     llmVndOaiWebSearchGeolocation,
+    llmVndPerplexityDateFilter,
+    llmVndPerplexitySearchMode,
   } = allParameters;
 
 
@@ -102,6 +114,10 @@ export function LLMParametersEditor(props: {
   const antThinkingOff = llmVndAntThinkingBudget === null;
   const gemThinkingAuto = llmVndGeminiThinkingBudget === undefined;
   const gemThinkingOff = llmVndGeminiThinkingBudget === 0;
+
+  // Get the range override if available for Gemini thinking budget
+  const gemTBSpec = modelParamSpec['llmVndGeminiThinkingBudget'];
+  const gemTBMinMax = gemTBSpec?.rangeOverride || defGemTB.range;
 
   return <>
 
@@ -180,13 +196,13 @@ export function LLMParametersEditor(props: {
       <FormSliderControl
         title='Thinking Budget' ariaLabel='Gemini Thinking Token Budget'
         description={gemThinkingAuto ? 'Auto' : gemThinkingOff ? 'Thinking Off' : 'Tokens'}
-        min={defGemTB.range[0]} max={defGemTB.range[1]} step={1024}
+        min={gemTBMinMax[0]} max={gemTBMinMax[1]} step={1024}
         valueLabelDisplay={(gemThinkingAuto || gemThinkingOff) ? 'off' : 'on'}
-        value={llmVndGeminiThinkingBudget ?? [defGemTB.range[0], defGemTB.range[1]]}
+        value={llmVndGeminiThinkingBudget ?? [gemTBMinMax[0], gemTBMinMax[1]]}
         variant={gemThinkingAuto ? 'soft' : undefined}
         // disabled={gemThinkingAuto}
         onChange={value => onChangeParameter({ llmVndGeminiThinkingBudget: Array.isArray(value) ? (value[0] || value[1]) : value })}
-        startAdornment={
+        startAdornment={gemTBMinMax[0] === 0 && (
           <Tooltip arrow disableInteractive title={gemThinkingOff ? 'Thinking Off' : 'Disable Thinking'}>
             <IconButton
               variant={gemThinkingOff ? 'solid' : 'outlined'}
@@ -197,7 +213,7 @@ export function LLMParametersEditor(props: {
               {gemThinkingOff ? <ClearIcon sx={{ fontSize: 'lg' }} /> : <PowerSettingsNewIcon />}
             </IconButton>
           </Tooltip>
-        }
+        )}
         endAdornment={
           <Tooltip arrow disableInteractive title={gemThinkingAuto ? 'Automatic Thinking (default)' : 'Auto Budget'}>
             <IconButton
@@ -210,6 +226,70 @@ export function LLMParametersEditor(props: {
             </IconButton>
           </Tooltip>
         }
+      />
+    )}
+
+    {showParam('llmVndPerplexitySearchMode') && (
+      <FormSelectControl
+        title='Search Mode'
+        tooltip='Type of sources to prioritize in search results'
+        value={llmVndPerplexitySearchMode ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value)
+            onRemoveParameter('llmVndPerplexitySearchMode');
+          else
+            onChangeParameter({ llmVndPerplexitySearchMode: value });
+        }}
+        options={_perplexitySearchModeOptions}
+      />
+    )}
+
+    {showParam('llmVndOaiWebSearchContext') && (
+      <FormSelectControl
+        title='Search Size'
+        tooltip='Controls how much context is retrieved from the web (low = default for Perplexity, medium = default for OpenAI)'
+        value={llmVndOaiWebSearchContext ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value)
+            onRemoveParameter('llmVndOaiWebSearchContext');
+          else
+            onChangeParameter({ llmVndOaiWebSearchContext: value });
+        }}
+        options={_webSearchContextOptions}
+      />
+    )}
+
+    {showParam('llmVndOaiWebSearchGeolocation') && (
+      <FormSwitchControl
+        title='Add User Location'
+        description='Use approximate location for better search results'
+        tooltip='When enabled, uses browser geolocation API to provide approximate location data to improve search results relevance'
+        checked={!!llmVndOaiWebSearchGeolocation}
+        onChange={checked => {
+          if (!checked)
+            onRemoveParameter('llmVndOaiWebSearchGeolocation');
+          else {
+            webGeolocationRequest().then((locationOrNull) => {
+              if (locationOrNull)
+                onChangeParameter({ llmVndOaiWebSearchGeolocation: true });
+            });
+          }
+        }}
+      />
+    )}
+
+    {showParam('llmVndPerplexityDateFilter') && (
+      <FormSelectControl
+        title='Date Range'
+        tooltip='Filter search results by publication date'
+        value={llmVndPerplexityDateFilter ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value)
+            onRemoveParameter('llmVndPerplexityDateFilter');
+          else
+            onChangeParameter({ llmVndPerplexityDateFilter: value });
+        }}
+        options={_perplexityDateFilterOptions}
       />
     )}
 
@@ -239,40 +319,6 @@ export function LLMParametersEditor(props: {
             onChangeParameter({ llmVndOaiRestoreMarkdown: false });
           else
             onChangeParameter({ llmVndOaiRestoreMarkdown: true });
-        }}
-      />
-    )}
-
-    {showParam('llmVndOaiWebSearchContext') && (
-      <FormSelectControl
-        title='Search Context Size'
-        tooltip='Controls how much context is retrieved from the web'
-        value={llmVndOaiWebSearchContext ?? _UNSPECIFIED}
-        onChange={(value) => {
-          if (value === _UNSPECIFIED || !value)
-            onRemoveParameter('llmVndOaiWebSearchContext');
-          else
-            onChangeParameter({ llmVndOaiWebSearchContext: value });
-        }}
-        options={_webSearchContextOptions}
-      />
-    )}
-
-    {showParam('llmVndOaiWebSearchGeolocation') && (
-      <FormSwitchControl
-        title='Add User Location'
-        description='Use approximate location for better search results'
-        tooltip='When enabled, uses browser geolocation API to provide approximate location data to improve search results relevance'
-        checked={!!llmVndOaiWebSearchGeolocation}
-        onChange={checked => {
-          if (!checked)
-            onRemoveParameter('llmVndOaiWebSearchGeolocation');
-          else {
-            webGeolocationRequest().then((locationOrNull) => {
-              if (locationOrNull)
-                onChangeParameter({ llmVndOaiWebSearchGeolocation: true });
-            });
-          }
         }}
       />
     )}

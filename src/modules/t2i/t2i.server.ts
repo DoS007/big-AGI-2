@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod/v4';
 
 
 // Image generation output
@@ -28,7 +28,7 @@ const t2iCreateImageOutputSchema = z.object({
 
   // origin
   generatorName: z.string(),
-  parameters: z.record(z.any()),
+  parameters: z.record(z.string(), z.any()),
   generatedAt: z.string(),
 
 });

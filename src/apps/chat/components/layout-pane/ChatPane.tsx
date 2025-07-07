@@ -151,30 +151,44 @@ export function ChatPane(props: {
 
     {/* Chat Actions group */}
     <OptimaPanelGroupedList title='Actions'>
+      {/* Use 2 columns */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
 
-      <MenuItem disabled={props.disableItems} onClick={handleToggleArchive}>
-        <ListItemDecorator>{isArchived ? <UnarchiveOutlinedIcon /> : <ArchiveOutlinedIcon />}</ListItemDecorator>
-        {isArchived ? <b>Unarchive</b> : 'Archive'}
-      </MenuItem>
+        {/* Left column */}
+        <Box sx={{ display: 'flex', flexDirection: 'column' }}>
 
-      <MenuItem disabled={props.disableItems} onClick={handleConversationBranch}>
-        <ListItemDecorator><ForkRightIcon /></ListItemDecorator>
-        Branch
-      </MenuItem>
+          <MenuItem disabled={props.disableItems} onClick={handleToggleArchive}>
+            <ListItemDecorator>{isArchived ? <UnarchiveOutlinedIcon /> : <ArchiveOutlinedIcon />}</ListItemDecorator>
+            {isArchived ? <b>Unarchive</b> : 'Archive'}
+          </MenuItem>
 
-      <MenuItem disabled={props.disableItems} onClick={handleConversationRestart}>
-        <ListItemDecorator><RestartAltIcon /></ListItemDecorator>
-        <Box sx={{ flexGrow: 1, display: 'flex', justifyContent: 'space-between', gap: 1 }}>
-          Restart
-          {/*{!props.disableItems && <KeyStroke combo='Ctrl + Shift + X' />}*/}
+          <MenuItem disabled={props.disableItems} onClick={handleConversationBranch}>
+            <ListItemDecorator><ForkRightIcon /></ListItemDecorator>
+            Branch
+          </MenuItem>
+
         </Box>
-      </MenuItem>
 
-      <MenuItem disabled={props.disableItems} onClick={handleConversationFlatten}>
-        <ListItemDecorator><CompressIcon /></ListItemDecorator>
-        Minify
-      </MenuItem>
+        {/* Right column */}
+        <Box sx={{ display: 'flex', flexDirection: 'column' }}>
 
+          <MenuItem disabled={props.disableItems} onClick={handleConversationFlatten}>
+            <ListItemDecorator><CompressIcon /></ListItemDecorator>
+            Compact
+          </MenuItem>
+
+          <MenuItem disabled={props.disableItems} onClick={handleConversationRestart}>
+            <ListItemDecorator><RestartAltIcon /></ListItemDecorator>
+            <Box sx={{ flexGrow: 1, display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+              Restart
+              {/*{!props.disableItems && <KeyStroke combo='Ctrl + Shift + X' />}*/}
+            </Box>
+          </MenuItem>
+
+        </Box>
+      </Box>
+
+      {/* Spans both columns */}
       <MenuItem
         disabled={props.disableItems}
         color={props.isMessageSelectionMode ? 'warning' : 'neutral'}
@@ -192,9 +206,9 @@ export function ChatPane(props: {
     <OptimaPanelGroupedList title='Persona'>
       <ListItemButton disabled={props.disableItems} onClick={handleToggleSystemMessages}>
         <ListItemDecorator><SettingsSuggestOutlinedIcon /></ListItemDecorator>
-        System Instruction
+        Show Instruction
         {/*<FormLabelStart title='View System Instruction' />*/}
-        <Switch size='md' checked={showSystemMessages} disabled={props.disableItems} onChange={handleToggleSystemMessages} sx={{ ml: 'auto' }} />
+        <Switch size='sm' checked={showSystemMessages} disabled={props.disableItems} onChange={handleToggleSystemMessages} sx={{ ml: 'auto' }} />
         {/*<Checkbox size='md' checked={showSystemMessages} disabled={props.disableItems} sx={{ ml: 'auto' }} />*/}
       </ListItemButton>
     </OptimaPanelGroupedList>

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod/v4';
 
 // Used to align Particles to the Typescript definitions from the frontend-side, on 'chat.fragments.ts'
 import type { DMessageToolResponsePart } from '~/common/stores/chat/chat.fragments';
@@ -18,7 +18,7 @@ import { openAIAccessSchema } from '~/modules/llms/server/openai/openai.router';
 
 // Export types
 export type AixParts_DocPart = z.infer<typeof AixWire_Parts.DocPart_schema>;
-// export type AixParts_InlineAudioPart = z.infer<typeof AixWire_Parts.InlineAudioPart_schema>;
+export type AixParts_InlineAudioPart = z.infer<typeof AixWire_Parts.InlineAudioPart_schema>;
 export type AixParts_InlineImagePart = z.infer<typeof AixWire_Parts.InlineImagePart_schema>;
 export type AixParts_ModelAuxPart = z.infer<typeof AixWire_Parts.ModelAuxPart_schema>;
 export type AixParts_MetaCacheControl = z.infer<typeof AixWire_Parts.MetaCacheControl_schema>;
@@ -70,7 +70,7 @@ export namespace OpenAPI_Schema {
     format: z.string().optional(),
 
     // [object] properties (recursively)
-    properties: z.record(z.any() /* could refer to self using z.lazy().... */).optional(),
+    properties: z.record(z.string(), z.any() /* could refer to self using z.lazy().... */).optional(),
     // [object] required properties
     required: z.array(z.string()).optional(),
 
@@ -315,7 +315,7 @@ export namespace AixWire_Tooling {
      */
     input_schema: z.object({
       // type: z.literal('object'), // Note: every protocol adapter adds this in the structure, here's we're just opting to not add it
-      properties: z.record(OpenAPI_Schema.Object_schema),
+      properties: z.record(z.string(), OpenAPI_Schema.Object_schema),
       required: z.array(z.string()).optional(),
     }).optional(),
   });
@@ -407,9 +407,12 @@ export namespace AixWire_API {
     vndAntThinkingBudget: z.number().nullable().optional(),
     vndGeminiShowThoughts: z.boolean().optional(),
     vndGeminiThinkingBudget: z.number().optional(),
+    vndOaiResponsesAPI: z.boolean().optional(),
     vndOaiReasoningEffort: z.enum(['low', 'medium', 'high']).optional(),
     vndOaiRestoreMarkdown: z.boolean().optional(),
     vndOaiWebSearchContext: z.enum(['low', 'medium', 'high']).optional(),
+    vndPerplexityDateFilter: z.enum(['unfiltered', '1m', '3m', '6m', '1y']).optional(),
+    vndPerplexitySearchMode: z.enum(['default', 'academic']).optional(),
     /**
      * [OpenAI, 2025-03-11] This is the generic version of the `web_search_options.user_location` field
      * This AIX field mimics on purpose: https://platform.openai.com/docs/api-reference/chat/create
@@ -602,6 +605,6 @@ export namespace AixWire_Particles {
     | { p: 'cer', id: string, error: DMessageToolResponsePart['error'], result: string, executor: 'gemini_auto_inline', environment: DMessageToolResponsePart['environment'] }
     | { p: 'ia', mimeType: string, a_b64: string, label?: string, generator?: string, durationMs?: number } // inline audio, complete
     | { p: 'ii', mimeType: string, i_b64: string, label?: string, generator?: string, prompt?: string } // inline image, complete
-    | { p: 'urlc', title: string, url: string, num?: number, from?: number, to?: number, text?: string }; // url citation
+    | { p: 'urlc', title: string, url: string, num?: number, from?: number, to?: number, text?: string, pubTs?: number }; // url citation - pubTs: publication timestamp
 
 }

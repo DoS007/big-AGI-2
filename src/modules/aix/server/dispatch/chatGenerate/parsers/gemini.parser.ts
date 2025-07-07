@@ -121,7 +121,12 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
 
           // <- FunctionCallPart
           case 'functionCall' in mPart:
-            pt.startFunctionCallInvocation(null, mPart.functionCall.name, 'json_object', mPart.functionCall.args ?? null);
+            let { id: fcId, name: fcName, args: fcArgs } = mPart.functionCall;
+            // Validate the function call arguments - we expect a JSON object, not just any JSON value
+            if (!fcArgs || typeof fcArgs !== 'object')
+              console.warn(`[Gemini] Invalid function call arguments: ${JSON.stringify(fcArgs)} for ${fcName}`);
+            else
+              pt.startFunctionCallInvocation(fcId ?? null, fcName, 'json_object', fcArgs);
             pt.endMessagePart();
             break;
 
@@ -163,7 +168,7 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
       if (ENABLE_RECITATIONS_AS_CITATIONS && candidate0.citationMetadata?.citationSources?.length) {
         for (let { startIndex, endIndex, uri /*, license*/ } of candidate0.citationMetadata.citationSources) {
           // TODO: have a particle/part flag to state the purpose of a citation? (e.g. 'recitation' is weaker than 'grounding')
-          pt.appendUrlCitation('', uri || '', undefined, startIndex, endIndex, undefined);
+          pt.appendUrlCitation('', uri || '', undefined, startIndex, endIndex, undefined, undefined);
         }
       }
 
@@ -177,7 +182,7 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
          * - include the 'renderedContent' from .searchEntryPoint
          */
         for (const { web } of candidate0.groundingMetadata.groundingChunks) {
-          pt.appendUrlCitation(web.title, web.uri, ++groundingIndexNumber, undefined, undefined, undefined);
+          pt.appendUrlCitation(web.title, web.uri, ++groundingIndexNumber, undefined, undefined, undefined, undefined);
         }
       }
 
@@ -243,8 +248,19 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
         TIn: generationChunk.usageMetadata.promptTokenCount,
         TOut: generationChunk.usageMetadata.candidatesTokenCount,
       };
-      if (generationChunk.usageMetadata.thoughtsTokenCount)
+
+      // Add reasoning tokens if available
+      if (generationChunk.usageMetadata.thoughtsTokenCount) {
         metricsUpdate.TOutR = generationChunk.usageMetadata.thoughtsTokenCount;
+        metricsUpdate.TOut = (metricsUpdate.TOut ?? 0) + metricsUpdate.TOutR; // in gemini candidatesTokenCount does not include reasoning tokens
+      }
+
+      // Subtract auto-cached (read) input tokens
+      if (generationChunk.usageMetadata.cachedContentTokenCount) {
+        metricsUpdate.TCacheRead = generationChunk.usageMetadata.cachedContentTokenCount;
+        if ((metricsUpdate.TIn ?? 0) > metricsUpdate.TCacheRead)
+          metricsUpdate.TIn = (metricsUpdate.TIn ?? 0) - metricsUpdate.TCacheRead;
+      }
 
       if (isStreaming && timeToFirstEvent !== undefined)
         metricsUpdate.dtStart = timeToFirstEvent;

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 
 import type { SxProps } from '@mui/joy/styles/types';
-import { useTheme } from '@mui/joy';
+import { Box, useTheme } from '@mui/joy';
 
 import { DEV_MODE_SETTINGS } from '../settings-modal/UxLabsSettings';
 import { DiagramConfig, DiagramsModal } from '~/modules/aifn/digrams/DiagramsModal';
@@ -44,14 +44,15 @@ import { useUIComplexityIsMinimal } from '~/common/stores/store-ui';
 import { useUXLabsStore } from '~/common/stores/store-ux-labs';
 
 import { ChatPane } from './components/layout-pane/ChatPane';
-import { ChatBarAltBeam } from './components/layout-bar/ChatBarAltBeam';
+import { ChatBarBeam } from './components/layout-bar/ChatBarBeam';
 import { ChatBarAltTitle } from './components/layout-bar/ChatBarAltTitle';
-import { ChatBarDropdowns } from './components/layout-bar/ChatBarDropdowns';
+import { ChatBarChat } from './components/layout-bar/ChatBarChat';
 import { ChatBeamWrapper } from './components/ChatBeamWrapper';
 import { ChatDrawerMemo } from './components/layout-drawer/ChatDrawer';
 import { ChatMessageList } from './components/ChatMessageList';
 import { Composer } from './components/composer/Composer';
 import { PaneTitleOverlay } from './components/PaneTitleOverlay';
+import { useComposerAutoHide } from './components/composer/useComposerAutoHide';
 import { usePanesManager } from './components/panes/store-panes-manager';
 
 import type { ChatExecuteMode } from './execute-mode/execute-mode.types';
@@ -105,21 +106,18 @@ const composerOpenSx: SxProps = {
   // hack: eats the bottom of the last message (as it has a 1px divider)
   // NOTE: commented on 2024-05-13, as other content was stepping on the border due to it and missing zIndex
   // mt: '-1px',
-};
+} as const;
 
 const composerOpenMobileSx: SxProps = {
   zIndex: 21, // allocates the surface, possibly enables shadow if we like
-  // backgroundColor: themeBgAppChatComposer, // inlined in the Composer
-  transition: 'background-color 0.5s ease-out',
-  borderTop: `1px solid`,
-  borderTopColor: 'rgba(var(--joy-palette-neutral-mainChannel, 99 107 116) / 0.4)',
   pt: 0.5, // have some breathing room
   // boxShadow: '0px -1px 8px -2px rgba(0, 0, 0, 0.4)',
-};
+  ...composerOpenSx,
+} as const;
 
-const composerClosedSx: SxProps = {
-  display: 'none',
-};
+// const composerClosedSx: SxProps = {
+//   display: 'none',
+// };
 
 
 export function AppChat() {
@@ -139,6 +137,7 @@ export function AppChat() {
 
   // external state
   const theme = useTheme();
+  const [composerHasContent, setComposerHasContent] = React.useState(false);
 
   const isMobile = useIsMobile();
   const isTallScreen = useIsTallScreen();
@@ -209,6 +208,9 @@ export function AppChat() {
     return activeFolder?.id ?? null;
   });
 
+  // Composer Auto-hiding
+  const forceComposerHide = !!beamOpenStoreInFocusedPane;
+  const composerAutoHide = useComposerAutoHide(forceComposerHide, composerHasContent);
 
   // Window actions
 
@@ -241,7 +243,7 @@ export function AppChat() {
     else if (outcome === 'err-t2i-unconfigured')
       optimaOpenPreferences('draw');
     else if (outcome === 'err-no-persona')
-      addSnackbar({ key: 'chat-no-persona', message: 'No persona selected.', type: 'issue' });
+      addSnackbar({ key: 'chat-no-persona', message: 'No persona selected.', type: 'issue', overrides: { autoHideDuration: 4000 } });
     else if (outcome === 'err-no-conversation')
       addSnackbar({ key: 'chat-no-conversation', message: 'No active conversation.', type: 'issue' });
     else if (outcome === 'err-no-last-message')
@@ -463,9 +465,9 @@ export function AppChat() {
   const barAltTitle = showAltTitleBar ? focusedChatTitle ?? 'No Chat' : null;
 
   const focusedBarContent = React.useMemo(() => beamOpenStoreInFocusedPane
-      ? <ChatBarAltBeam conversationTitle={focusedChatTitle ?? 'No Chat'} beamStore={beamOpenStoreInFocusedPane} isMobile={isMobile} />
+      ? <ChatBarBeam conversationTitle={focusedChatTitle ?? 'No Chat'} beamStore={beamOpenStoreInFocusedPane} isMobile={isMobile} />
       : (barAltTitle === null)
-        ? <ChatBarDropdowns conversationId={focusedPaneConversationId} llmDropdownRef={llmDropdownRef} personaDropdownRef={personaDropdownRef} />
+        ? <ChatBarChat conversationId={focusedPaneConversationId} llmDropdownRef={llmDropdownRef} personaDropdownRef={personaDropdownRef} />
         : <ChatBarAltTitle conversationId={focusedPaneConversationId} conversationTitle={barAltTitle} />
     , [barAltTitle, beamOpenStoreInFocusedPane, focusedChatTitle, focusedPaneConversationId, isMobile],
   );
@@ -637,8 +639,10 @@ export function AppChat() {
             defaultSize={(_panesCount === 3 && idx === 1) ? 34 : Math.round(100 / _panesCount)}
             // minSize={20 /* IMPORTANT: this forces a reflow even on a simple on hover */}
             onClick={(event) => {
-              const setFocus = chatPanes.length < 2 || !event.altKey;
-              setFocusedPaneIndex(setFocus ? idx : -1);
+              // Alt + Click: undocumented feature to clear focus
+              if (event.altKey && chatPanes.length > 1)
+                return setFocusedPaneIndex(-1);
+              setFocusedPaneIndex(idx);
             }}
             onCollapse={() => {
               // NOTE: despite the delay to try to let the draggin settle, there seems to be an issue with the Pane locking the screen
@@ -745,22 +749,31 @@ export function AppChat() {
 
     </PanelGroup>
 
-    <Composer
-      isMobile={isMobile}
-      chatLLM={chatLLM}
-      composerTextAreaRef={composerTextAreaRef}
-      targetConversationId={focusedPaneConversationId}
-      capabilityHasT2I={capabilityHasT2I}
-      capabilityHasT2IEdit={capabilityHasT2IEdit}
-      isMulticast={!isMultiConversationId ? null : isComposerMulticast}
-      isDeveloperMode={isFocusedChatDeveloper}
-      onAction={handleComposerAction}
-      onConversationBeamEdit={handleMessageBeamLastInFocusedPane}
-      onConversationsImportFromFiles={handleConversationsImportFromFiles}
-      onTextImagine={handleImagineFromText}
-      setIsMulticast={setIsComposerMulticast}
-      sx={beamOpenStoreInFocusedPane ? composerClosedSx : isMobile ? composerOpenMobileSx : composerOpenSx}
-    />
+    {/* Composer with auto-hide */}
+    <Box {...composerAutoHide.compressorProps}>
+      <div style={composerAutoHide.compressibleStyle}>
+        <Composer
+          isMobile={isMobile}
+          chatLLM={chatLLM}
+          composerTextAreaRef={composerTextAreaRef}
+          targetConversationId={focusedPaneConversationId}
+          capabilityHasT2I={capabilityHasT2I}
+          capabilityHasT2IEdit={capabilityHasT2IEdit}
+          isMulticast={!isMultiConversationId ? null : isComposerMulticast}
+          isDeveloperMode={isFocusedChatDeveloper}
+          onAction={handleComposerAction}
+          onConversationBeamEdit={handleMessageBeamLastInFocusedPane}
+          onConversationsImportFromFiles={handleConversationsImportFromFiles}
+          onTextImagine={handleImagineFromText}
+          setIsMulticast={setIsComposerMulticast}
+          onComposerHasContent={setComposerHasContent}
+          sx={isMobile ? composerOpenMobileSx : composerOpenSx}
+        />
+      </div>
+    </Box>
+
+    {/* Hover zone for auto-hide */}
+    {!forceComposerHide && composerAutoHide.isHidden && <Box {...composerAutoHide.detectorProps} />}
 
     {/* Diagrams */}
     {!!diagramConfig && (
