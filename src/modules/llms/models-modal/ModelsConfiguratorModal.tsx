@@ -5,40 +5,30 @@ import { Box, Button, Divider } from '@mui/joy';
 import type { DModelsService } from '~/common/stores/llms/llms.service.types';
 import { AppBreadcrumbs } from '~/common/components/AppBreadcrumbs';
 import { GoodModal } from '~/common/components/modals/GoodModal';
-import { optimaActions, optimaOpenModels, useOptimaModals } from '~/common/layout/optima/useOptima';
-import { runWhenIdle } from '~/common/util/pwaUtils';
-import { useHasLLMs, useModelsServices } from '~/common/stores/llms/llms.hooks';
+import { optimaActions } from '~/common/layout/optima/useOptima';
+import { useHasLLMs } from '~/common/stores/llms/llms.hooks';
 import { useIsMobile } from '~/common/components/useMatchMedia';
 
-import { LLMOptionsModal } from './LLMOptionsModal';
+import { LLMVendorSetup } from '../components/LLMVendorSetup';
 import { ModelsList } from './ModelsList';
 import { ModelsServiceSelector } from './ModelsServiceSelector';
 import { ModelsWizard } from './ModelsWizard';
-import { findModelVendor } from '../vendors/vendors.registry';
 
 
 // configuration
 const MODELS_WIZARD_ENABLE_INITIALLY = true;
 
 
-function VendorServiceSetup(props: { service: DModelsService }) {
-  const vendor = findModelVendor(props.service.vId);
-  if (!vendor)
-    return 'Configuration issue: Vendor not found for Service ' + props.service.id;
-  return <vendor.ServiceSetupComponent key={props.service.id} serviceId={props.service.id} />;
-}
-
-
 type TabValue = 'wizard' | 'setup' | 'defaults';
 
 /**
- * Note: the reason for this component separation from the parent state, is delayed state intitialization.
+ * Note: the reason for this component separation from the parent state, is delayed state initialization.
  */
-function ModelsConfiguratorModal(props: {
+export function ModelsConfiguratorModal(props: {
   modelsServices: DModelsService[],
   confServiceId: string | null,
   setConfServiceId: (serviceId: string | null) => void,
-  allowAutoTrigger: boolean,
+  // allowAutoTrigger: boolean,
 }) {
 
   const { modelsServices, confServiceId, setConfServiceId } = props;
@@ -148,7 +138,7 @@ function ModelsConfiguratorModal(props: {
       {isTabSetup && (
         <Box sx={{ display: 'grid', gap: 'var(--Card-padding)' }}>
           {activeService
-            ? <VendorServiceSetup service={activeService} />
+            ? <LLMVendorSetup service={activeService} />
             : <Box sx={{ minHeight: '7.375rem' }} />
           }
         </Box>
@@ -183,41 +173,4 @@ function ModelsConfiguratorModal(props: {
 
     </GoodModal>
   );
-}
-
-
-export function ModelsModal(props: { suspendAutoModelsSetup?: boolean }) {
-
-  // external state
-  const { showModels, showModelOptions } = useOptimaModals();
-  const { modelsServices, confServiceId, setConfServiceId } = useModelsServices();
-
-
-  // [effect] Auto-open the configurator - anytime no service is selected
-  const hasNoServices = !modelsServices.length;
-  const autoOpenTrigger = hasNoServices && !props.suspendAutoModelsSetup;
-  React.useEffect(() => {
-    if (autoOpenTrigger)
-      return runWhenIdle(() => optimaOpenModels(), 2000);
-  }, [autoOpenTrigger]);
-
-
-  return <>
-
-    {/* Services Setup */}
-    {showModels && (
-      <ModelsConfiguratorModal
-        modelsServices={modelsServices}
-        confServiceId={confServiceId}
-        setConfServiceId={setConfServiceId}
-        allowAutoTrigger={!props.suspendAutoModelsSetup}
-      />
-    )}
-
-    {/* per-LLM options */}
-    {!!showModelOptions && (
-      <LLMOptionsModal id={showModelOptions} onClose={optimaActions().closeModelOptions} />
-    )}
-
-  </>;
 }

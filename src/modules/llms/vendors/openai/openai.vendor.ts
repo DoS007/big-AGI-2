@@ -1,9 +1,7 @@
-import { OpenAIIcon } from '~/common/components/icons/vendors/OpenAIIcon';
 import { apiAsync } from '~/common/util/trpc.client';
 
 import type { IModelVendor } from '../IModelVendor';
 import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
-import { OpenAIServiceSetup } from './OpenAIServiceSetup';
 
 
 // special symbols
@@ -24,10 +22,6 @@ export const ModelVendorOpenAI: IModelVendor<DOpenAIServiceSettings, OpenAIAcces
   location: 'cloud',
   instanceLimit: 5,
   hasServerConfigKey: 'hasLlmOpenAI',
-
-  // components
-  Icon: OpenAIIcon,
-  ServiceSetupComponent: OpenAIServiceSetup,
 
   // functions
   getTransportAccess: (partialSetup): OpenAIAccessSchema => ({

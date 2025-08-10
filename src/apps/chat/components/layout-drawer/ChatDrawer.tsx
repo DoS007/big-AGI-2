@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { Box, Button, Dropdown, IconButton, ListDivider, ListItem, ListItemButton, ListItemDecorator, Menu, MenuButton, MenuItem, Tooltip, Typography } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
+import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import AttachFileRoundedIcon from '@mui/icons-material/AttachFileRounded';
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 import ClearIcon from '@mui/icons-material/Clear';
@@ -82,6 +83,7 @@ function ChatDrawer(props: {
   const [searchDepth, setSearchDepth] = React.useState<ChatSearchDepth>('attachments'); // default: full search
   const [debouncedSearchQuery, setDebouncedSearchQuery] = React.useState('');
   const [folderChangeRequest, setFolderChangeRequest] = React.useState<FolderChangeRequest | null>(null);
+  const [renderLimit, setRenderLimit] = React.useState(200); // progressive loading limit
 
   // external state
   const {
@@ -100,6 +102,16 @@ function ChatDrawer(props: {
   const [uiComplexityMode, contentScaling] = useUIPreferencesStore(useShallow((state) => [state.complexityMode, state.contentScaling]));
   const zenMode = uiComplexityMode === 'minimal';
   const gifMode = uiComplexityMode === 'extra';
+
+  // Calculate chat counts per folder
+  // TODO: restore this, but also check if conversations are active? or move the computation to the renderNavItems hook?
+  // const folderChatCounts = React.useMemo(() => {
+  //   const counts: Record<string, number> = {};
+  //   allFolders.forEach(folder => {
+  //     counts[folder.id] = folder.conversationIds.length;
+  //   });
+  //   return counts;
+  // }, [allFolders]);
 
 
   // New/Activate/Delete Conversation
@@ -153,6 +165,30 @@ function ChatDrawer(props: {
   }, []);
 
 
+  // Render limit - load more items
+
+  const handleRenderLimitIncrease = React.useCallback(() => {
+    setRenderLimit(prevValue => {
+      // Thresholds: 200 --(+200)--> 400 --(+500)--> 900 --(+1000)--> 1900 --> Infinity --> 200 (cycle)
+      if (prevValue === 200)
+        return (filteredChatsCount > 400 ? 400 : Infinity); // if less than 400, show all
+      else if (prevValue === 400)
+        return (filteredChatsCount > 900 ? 900 : Infinity); // if less than 900, show all
+      else if (prevValue === 900)
+        return (filteredChatsCount > 1900 ? 1900 : Infinity); // if less than 1900, show all
+      else if (prevValue === 1900)
+        return Infinity; // no limit
+      else
+        return 200; // go back to optimized view
+    });
+  }, [filteredChatsCount]);
+
+  // Reset render limit when search query changes
+  React.useEffect(() => {
+    setRenderLimit(200);
+  }, [debouncedSearchQuery]);
+
+
   // memoize the group dropdown
   const { isSearching } = isDrawerSearching(debouncedSearchQuery);
   const groupingComponent = React.useMemo(() => (
@@ -187,13 +223,13 @@ function ChatDrawer(props: {
           <ListItem>
             <Typography level='body-sm'>Filter</Typography>
           </ListItem>
-          <MenuItem onClick={toggleFilterIsArchived}>
-            <ListItemDecorator>{filterIsArchived && <CheckRoundedIcon />}</ListItemDecorator>
-            Archived
-          </MenuItem>
           <MenuItem onClick={toggleFilterHasStars}>
             <ListItemDecorator>{filterHasStars && <CheckRoundedIcon />}</ListItemDecorator>
             Starred <StarOutlineRoundedIcon />
+          </MenuItem>
+          <MenuItem onClick={toggleFilterIsArchived}>
+            <ListItemDecorator>{filterIsArchived && <CheckRoundedIcon />}</ListItemDecorator>
+            Archived <ArchiveOutlinedIcon />
           </MenuItem>
           <MenuItem onClick={toggleFilterHasImageAssets}>
             <ListItemDecorator>{filterHasImageAssets && <CheckRoundedIcon />}</ListItemDecorator>
@@ -281,6 +317,7 @@ function ChatDrawer(props: {
     {enableFolders && (
       <ChatFolderList
         folders={allFolders}
+        // folderChatCounts={folderChatCounts}
         contentScaling={contentScaling}
         activeFolderId={props.activeFolderId}
         onFolderSelect={props.setActiveFolderId}
@@ -342,7 +379,7 @@ function ChatDrawer(props: {
 
       {/* Chat Titles List (shrink as half the rate as the Folders List) */}
       <Box sx={{ flexGrow: 1, flexShrink: 1, flexBasis: '20rem', overflowY: 'auto', ...themeScalingMap[contentScaling].chatDrawerItemSx }}>
-        {renderNavItems.map((item, idx) => item.type === 'nav-item-chat-data' ? (
+        {renderNavItems.slice(0, renderLimit).map((item, idx) => item.type === 'nav-item-chat-data' ? (
             <ChatDrawerItemMemo
               key={'nav-chat-' + item.conversationId}
               item={item}
@@ -382,6 +419,28 @@ function ChatDrawer(props: {
               )}
             </Box>
           ) : null,
+        )}
+
+        {/* Load More Button */}
+        {filteredChatsCount > 200 && (
+          <ListItem>
+            <ListItemButton
+              variant='soft'
+              onClick={handleRenderLimitIncrease}
+              sx={{ justifyContent: 'center', py: 3 }}
+            >
+              {renderLimit === Infinity
+                ? 'Show less'
+                : (renderLimit === 200 && filteredChatsCount > 400)
+                  ? 'Show 200 more'
+                  : (renderLimit === 400 && filteredChatsCount > 900)
+                    ? 'Show 500 more'
+                    : (renderLimit === 900 && filteredChatsCount > 1900)
+                      ? 'Show 1000 more'
+                      : 'Show all'
+              } {renderLimit !== Infinity && `(${filteredChatsCount - renderLimit} hidden)`}
+            </ListItemButton>
+          </ListItem>
         )}
       </Box>
 

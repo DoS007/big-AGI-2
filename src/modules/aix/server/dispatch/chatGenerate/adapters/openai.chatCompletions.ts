@@ -44,12 +44,8 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
   // [OpenAI] - o1 models
   // - o1 models don't support system messages, we could hotfix this here once and for all, but we want to transfer the responsibility to the UI for better messaging to the user
   // - o1 models also use the new 'max_completion_tokens' rather than 'max_tokens', breaking API compatibility, so we have to address it here
-  const hotFixOpenAIOFamily = (openAIDialect === 'openai' || openAIDialect === 'azure') && (
-    model.id === 'o1' || model.id.startsWith('o1-') ||
-    model.id === 'o3' || model.id.startsWith('o3-') ||
-    model.id === 'o4' || model.id.startsWith('o4-') ||
-    model.id === 'o5' || model.id.startsWith('o5-')
-  );
+  const hotFixOpenAIOFamily = (openAIDialect === 'openai' || openAIDialect === 'azure')
+    && ['gpt-6', 'gpt-5', 'o4', 'o3', 'o1'].some(_id => model.id === _id || model.id.startsWith(_id + '-'));
 
   // Throw if function support is needed but missing
   if (chatGenerate.tools?.length && hotFixThrowCannotFC)
@@ -107,7 +103,9 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
     _fixVndOaiRestoreMarkdown_Inline(payload);
   }
   // [OpenAI] Vendor-specific web search context and/or geolocation
-  if (model.vndOaiWebSearchContext || model.userGeolocation) {
+  // NOTE: OpenAI doesn't support web search with minimal reasoning effort
+  const skipWebSearchDueToMinimalReasoning = model.vndOaiReasoningEffort === 'minimal';
+  if ((model.vndOaiWebSearchContext || model.userGeolocation) && !skipWebSearchDueToMinimalReasoning) {
     payload.web_search_options = {};
     if (model.vndOaiWebSearchContext)
       payload.web_search_options.search_context_size = model.vndOaiWebSearchContext;
@@ -118,6 +116,37 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
           ...model.userGeolocation,
         },
       };
+  }
+
+  // [xAI] Vendor-specific extensions for Live Search
+  if (openAIDialect === 'xai' && model.vndXaiSearchMode && model.vndXaiSearchMode !== 'off') {
+    const search_parameters: any = {
+      return_citations: true,
+    };
+
+    // mode defaults to 'auto' if not specified, so only include if not 'auto'
+    if (model.vndXaiSearchMode && model.vndXaiSearchMode !== 'auto')
+      search_parameters.mode = model.vndXaiSearchMode;
+
+    if (model.vndXaiSearchSources) {
+      const sources = model.vndXaiSearchSources
+        .split(',')
+        .map(s => s.trim())
+        .filter(s => !!s);
+      
+      // only omit sources if it's the default ('web' and 'x')
+      const isDefaultSources = sources.length === 2 && sources.includes('web') && sources.includes('x');
+      if (!isDefaultSources)
+        search_parameters.sources = sources.map(s => ({ type: s }));
+    }
+
+    if (model.vndXaiSearchDateFilter && model.vndXaiSearchDateFilter !== 'unfiltered') {
+      const fromDate = _convertSimpleDateFilterToISO(model.vndXaiSearchDateFilter);
+      if (fromDate)
+        search_parameters.from_date = fromDate;
+    }
+
+    payload.search_parameters = search_parameters;
   }
 
   // [Perplexity] Vendor-specific extensions for search models
@@ -639,4 +668,26 @@ function _convertPerplexityDateFilter(filter: string): string {
       console.warn('[DEV] Perplexity date filter not recognized:', filter);
       return '';
   }
+}
+
+function _convertSimpleDateFilterToISO(filter: '1d' | '1w' | '1m' | '6m' | '1y'): string {
+  const now = new Date();
+  switch (filter) {
+    case '1d':
+      now.setDate(now.getDate() - 1);
+      break;
+    case '1w':
+      now.setDate(now.getDate() - 7);
+      break;
+    case '1m':
+      now.setMonth(now.getMonth() - 1);
+      break;
+    case '6m':
+      now.setMonth(now.getMonth() - 6);
+      break;
+    case '1y':
+      now.setFullYear(now.getFullYear() - 1);
+      break;
+  }
+  return now.toISOString().split('T')[0];
 }

@@ -1,11 +1,7 @@
-import { TogetherIcon } from '~/common/components/icons/vendors/TogetherIcon';
-
 import type { IModelVendor } from '../IModelVendor';
 import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
 
 import { ModelVendorOpenAI } from '../openai/openai.vendor';
-
-import { TogetherAIServiceSetup } from './TogetherAIServiceSetup';
 
 
 interface DTogetherAIServiceSettings {
@@ -21,10 +17,6 @@ export const ModelVendorTogetherAI: IModelVendor<DTogetherAIServiceSettings, Ope
   location: 'cloud',
   instanceLimit: 1,
   hasServerConfigKey: 'hasLlmTogetherAI',
-
-  // components
-  Icon: TogetherIcon,
-  ServiceSetupComponent: TogetherAIServiceSetup,
 
   // functions
   initializeSetup: () => ({

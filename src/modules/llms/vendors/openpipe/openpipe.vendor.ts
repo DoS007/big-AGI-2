@@ -1,11 +1,7 @@
-import { OpenPipeIcon } from '~/common/components/icons/vendors/OpenPipeIcon';
-
 import type { IModelVendor } from '../IModelVendor';
 import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
 
 import { ModelVendorOpenAI } from '../openai/openai.vendor';
-
-import { OpenPipeServiceSetup } from './OpenPipeServiceSetup';
 
 
 export interface DOpenPipeServiceSettings {
@@ -20,10 +16,6 @@ export const ModelVendorOpenPipe: IModelVendor<DOpenPipeServiceSettings, OpenAIA
   location: 'cloud',
   instanceLimit: 1,
   hasServerConfigKey: 'hasLlmOpenPipe',
-
-  // components
-  Icon: OpenPipeIcon,
-  ServiceSetupComponent: OpenPipeServiceSetup,
 
   // functions
   initializeSetup: () => ({

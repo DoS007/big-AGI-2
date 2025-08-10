@@ -47,8 +47,9 @@ export function aixCreateModelFromLLMOptions(
     llmRef, llmTemperature, llmResponseTokens, llmTopP, llmForceNoStream,
     llmVndAntThinkingBudget,
     llmVndGeminiShowThoughts, llmVndGeminiThinkingBudget,
-    llmVndOaiReasoningEffort, llmVndOaiRestoreMarkdown, llmVndOaiWebSearchContext, llmVndOaiWebSearchGeolocation,
+    llmVndOaiReasoningEffort, llmVndOaiReasoningEffort4, llmVndOaiRestoreMarkdown, llmVndOaiWebSearchContext, llmVndOaiWebSearchGeolocation,
     llmVndPerplexityDateFilter, llmVndPerplexitySearchMode,
+    llmVndXaiSearchMode, llmVndXaiSearchSources, llmVndXaiSearchDateFilter,
   } = {
     ...llmOptions,
     ...llmOptionsOverride,
@@ -100,12 +101,15 @@ export function aixCreateModelFromLLMOptions(
     ...(llmVndGeminiShowThoughts ? { vndGeminiShowThoughts: llmVndGeminiShowThoughts } : {}),
     ...(llmVndGeminiThinkingBudget !== undefined ? { vndGeminiThinkingBudget: llmVndGeminiThinkingBudget } : {}),
     ...(llmVndOaiResponsesAPI ? { vndOaiResponsesAPI: true } : {}),
-    ...(llmVndOaiReasoningEffort ? { vndOaiReasoningEffort: llmVndOaiReasoningEffort } : {}),
+    ...((llmVndOaiReasoningEffort4 || llmVndOaiReasoningEffort) ? { vndOaiReasoningEffort: llmVndOaiReasoningEffort4 || llmVndOaiReasoningEffort } : {}),
     ...(llmVndOaiRestoreMarkdown ? { vndOaiRestoreMarkdown: llmVndOaiRestoreMarkdown } : {}),
     ...(llmVndOaiWebSearchContext ? { vndOaiWebSearchContext: llmVndOaiWebSearchContext } : {}),
     ...(llmVndPerplexityDateFilter ? { vndPerplexityDateFilter: llmVndPerplexityDateFilter } : {}),
     ...(llmVndPerplexitySearchMode ? { vndPerplexitySearchMode: llmVndPerplexitySearchMode } : {}),
     ...(userGeolocation ? { userGeolocation } : {}),
+    ...(llmVndXaiSearchMode ? { vndXaiSearchMode: llmVndXaiSearchMode } : {}),
+    ...(llmVndXaiSearchSources ? { vndXaiSearchSources: llmVndXaiSearchSources } : {}),
+    ...(llmVndXaiSearchDateFilter ? { vndXaiSearchDateFilter: llmVndXaiSearchDateFilter } : {}),
   };
 }
 
@@ -361,7 +365,8 @@ function _llToText(src: AixChatGenerateContent_LL, dest: AixChatGenerateText_Sim
   if (src.fragments.length) {
     dest.text = '';
     for (let fragment of src.fragments) {
-      switch (fragment.part.pt) {
+      const pt = fragment.part.pt;
+      switch (pt) {
         case 'text':
           dest.text += fragment.part.text;
           break;
@@ -370,10 +375,16 @@ function _llToText(src: AixChatGenerateContent_LL, dest: AixChatGenerateText_Sim
           break;
         case 'tool_invocation':
           throw new Error(`AIX: Unexpected tool invocation ${fragment.part.invocation?.type === 'function_call' ? fragment.part.invocation.name : fragment.part.id} in the Text response.`);
+        case 'annotations': // citations - ignored
+        case 'ma': // model annotations (thinking tokens) - ignored
+        case 'ph': // placeholder - ignored
+        case 'reference': // impossible
         case 'image_ref': // impossible
-        case 'tool_response': // impossible - stopped at the invocation alrady
+        case 'tool_response': // impossible - stopped at the invocation already
         case '_pt_sentinel': // impossible
           break;
+        default:
+          const _exhaustiveCheck: never = pt;
       }
     }
   }
@@ -594,7 +605,7 @@ async function _aixChatGenerateContent_LL(
     /* rest start as undefined (missing in reality) */
   };
 
-  const sendContentUpdate = !onGenerateContentUpdate ? undefined : withDecimator(throttleParallelThreads ?? 0, async () => {
+  const sendContentUpdate = !onGenerateContentUpdate ? undefined : withDecimator(throttleParallelThreads ?? 0, 'aicChatGenerateContent', async () => {
     /**
      * We want the first update to have actual content.
      * However note that we won't be sending out the model name very fast this way,
@@ -668,10 +679,16 @@ async function _aixChatGenerateContent_LL(
     for await (const particle of particles)
       reassembler.enqueueWireParticle(particle);
 
+    // dispose the deadline decimator before the await, as we're done basically
+    sendContentUpdate?.dispose?.();
+
     // synchronize any pending async tasks
     await reassembler.waitForWireComplete();
 
   } catch (error: any) {
+
+    // dispose the deadline decimator, as we're into error handling mode now
+    sendContentUpdate?.dispose?.();
 
     // something else broke, likely a User Abort, or an Aix server error (e.g. tRPC)
     const isUserAbort = abortSignal.aborted;
@@ -695,7 +712,7 @@ async function _aixChatGenerateContent_LL(
   // and we're done
   reassembler.finalizeAccumulator();
 
-  // final update (could ignore and take the final accumulator)
+  // final update bypasses decimation entirely and contains complete content
   await onGenerateContentUpdate?.(accumulator_LL, true /* Last message, done */);
 
   // return the final accumulated message

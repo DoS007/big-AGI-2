@@ -1,11 +1,7 @@
-import { DeepseekIcon } from '~/common/components/icons/vendors/DeepseekIcon';
-
 import type { IModelVendor } from '../IModelVendor';
 import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
 
 import { ModelVendorOpenAI } from '../openai/openai.vendor';
-
-import { DeepseekAIServiceSetup } from './DeepseekAIServiceSetup';
 
 
 export interface DDeepseekServiceSettings {
@@ -19,10 +15,6 @@ export const ModelVendorDeepseek: IModelVendor<DDeepseekServiceSettings, OpenAIA
   location: 'cloud',
   instanceLimit: 1,
   hasServerConfigKey: 'hasLlmDeepseek',
-
-  // components
-  Icon: DeepseekIcon,
-  ServiceSetupComponent: DeepseekAIServiceSetup,
 
   // functions
   initializeSetup: () => ({

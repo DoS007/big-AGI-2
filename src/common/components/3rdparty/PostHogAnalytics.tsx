@@ -1,6 +1,5 @@
 import * as React from 'react';
-import type { PostHog } from 'posthog-js';
-import Router from 'next/router';
+import type { PostHog, Properties } from 'posthog-js';
 
 import { isBrowser } from '~/common/util/pwaUtils';
 import { Release } from '~/common/app.release';
@@ -22,9 +21,15 @@ export function posthogAnalyticsOptOut() {
 }
 
 // unused yet
-export function posthogCaptureEvent(eventName: string, properties: Record<string, any>) {
+export function posthogCaptureEvent(eventName: string, properties?: Properties) {
   if (isBrowser && hasPostHogAnalytics) {
     _posthog?.capture(eventName, properties);
+  }
+}
+
+export function posthogCaptureException(error: Error | unknown, additionalProperties?: Properties) {
+  if (isBrowser && hasPostHogAnalytics && _posthog) {
+    _posthog.captureException(error, additionalProperties);
   }
 }
 
@@ -54,7 +59,7 @@ export function posthogUser(userId: string, userProperties?: Record<string, any>
 export function OptionalPostHogAnalytics() {
 
   // state
-  const [initialized, setInitialized] = React.useState(false);
+  // const [initialized, setInitialized] = React.useState(false);
 
 
   // [effect] PostHog > Initialize (if on) - the effect avoids hydration issues
@@ -78,15 +83,15 @@ export function OptionalPostHogAnalytics() {
 
         // initialize
         _posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY || '', {
-          api_host: '/a/ph', // default: process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://us.i.posthog.com'
-          ui_host: 'https://us.i.posthog.com',
+          api_host: '/a/ph', // client analytics host - default: process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://us.i.posthog.com'
+          ui_host: 'https://us.posthog.com',
+          defaults: '2025-05-24',
+          capture_exceptions: true, // captures exceptions using Error Tracking
+          // capture_pageview: false, // we used to handle this manually, but changed to the 'defaults' option which captures pageviews automatically
+          // capture_pageleave: true, // we used to track goodbyes, now included in 'defaults'
           person_profiles: 'identified_only',
-          capture_pageview: false, // handle this manually
-          capture_pageleave: true, // track goodbyes
           disable_surveys: true, // disable surveys
-          loaded: (ph) => {
-            if (Release.IsNodeDevBuild) ph.debug();
-          },
+          debug: Release.IsNodeDevBuild, // enable debug mode in development (was: `loaded: (ph) => if (Release.IsNodeDevBuild) ph.debug();`)
         });
 
         // add deployment context - see `next.config.mjs`
@@ -99,29 +104,29 @@ export function OptionalPostHogAnalytics() {
         });
 
         // trigger router hooks
-        setInitialized(true);
+        // setInitialized(true);
       })
       .catch(err => console.error('Failed to load PostHog:', err));
   }, []);
 
 
   // [effect] PostHog > PageViews
-  React.useEffect(() => {
-    if (!hasPostHogAnalytics || !initialized || !_posthog) return;
-
-    const handleRouteChange = () => {
-      // better representation of the next.js URL, compared to reading the window
-      const url = window.location.origin + Router.asPath;
-      _posthog?.capture('$pageview', { $current_url: url });
-    };
-
-    // initial page view
-    handleRouteChange();
-
-    // ongoing page views
-    Router.events.on('routeChangeComplete', handleRouteChange);
-    return () => Router.events.off('routeChangeComplete', handleRouteChange);
-  }, [initialized]);
+  // React.useEffect(() => {
+  //   if (!hasPostHogAnalytics || !initialized || !_posthog) return;
+  //
+  //   const handleRouteChange = () => {
+  //     // better representation of the next.js URL, compared to reading the window
+  //     const url = window.location.origin + Router.asPath;
+  //     _posthog?.capture('$pageview', { $current_url: url });
+  //   };
+  //
+  //   // initial page view
+  //   handleRouteChange();
+  //
+  //   // ongoing page views
+  //   Router.events.on('routeChangeComplete', handleRouteChange);
+  //   return () => Router.events.off('routeChangeComplete', handleRouteChange);
+  // }, [initialized]);
 
   // nothing to render - this component is just for the side effects
   return null;

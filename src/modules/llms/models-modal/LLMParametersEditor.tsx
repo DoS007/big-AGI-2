@@ -21,6 +21,13 @@ const _reasoningEffortOptions = [
   { value: 'low', label: 'Low', description: 'Quick, concise responses' } as const,
   { value: _UNSPECIFIED, label: 'Default', description: 'Default value (unset)' } as const,
 ] as const;
+const _reasoningEffort4Options = [
+  { value: 'high', label: 'High', description: 'Deep, thorough analysis' } as const,
+  { value: 'medium', label: 'Medium', description: 'Balanced reasoning depth' } as const,
+  { value: 'low', label: 'Low', description: 'Quick, concise responses' } as const,
+  { value: 'minimal', label: 'Minimal', description: 'Fastest, cheapest, least reasoning' } as const,
+  { value: _UNSPECIFIED, label: 'Default', description: 'Default value (unset)' } as const,
+] as const;
 const _webSearchContextOptions = [
   { value: 'high', label: 'Comprehensive', description: 'Largest, highest cost, slower' } as const,
   { value: 'medium', label: 'Medium', description: 'Balanced context, cost, and speed' } as const,
@@ -35,6 +42,21 @@ const _perplexityDateFilterOptions = [
   { value: _UNSPECIFIED, label: 'All Time', description: 'No date restriction' },
   { value: '1m', label: 'Last Month', description: 'Results from last 30 days' },
   { value: '3m', label: 'Last 3 Months', description: 'Results from last 90 days' },
+  { value: '6m', label: 'Last 6 Months', description: 'Results from last 6 months' },
+  { value: '1y', label: 'Last Year', description: 'Results from last 12 months' },
+] as const;
+
+const _xaiSearchModeOptions = [
+  { value: 'auto', label: 'Auto', description: 'Model decides (default)' },
+  { value: 'on', label: 'On', description: 'Always search active sources' },
+  { value: 'off', label: 'Off', description: 'Never perform a search' },
+] as const;
+
+const _xaiDateFilterOptions = [
+  { value: 'unfiltered', label: 'All Time', description: 'No date restriction' },
+  { value: '1d', label: 'Last Day', description: 'Results from last 24 hours' },
+  { value: '1w', label: 'Last Week', description: 'Results from last 7 days' },
+  { value: '1m', label: 'Last Month', description: 'Results from last 30 days' },
   { value: '6m', label: 'Last 6 Months', description: 'Results from last 6 months' },
   { value: '1y', label: 'Last Year', description: 'Results from last 12 months' },
 ] as const;
@@ -77,11 +99,15 @@ export function LLMParametersEditor(props: {
     llmVndGeminiShowThoughts,
     llmVndGeminiThinkingBudget,
     llmVndOaiReasoningEffort,
+    llmVndOaiReasoningEffort4,
     llmVndOaiRestoreMarkdown,
     llmVndOaiWebSearchContext,
     llmVndOaiWebSearchGeolocation,
     llmVndPerplexityDateFilter,
     llmVndPerplexitySearchMode,
+    llmVndXaiSearchMode,
+    llmVndXaiSearchSources,
+    llmVndXaiSearchDateFilter,
   } = allParameters;
 
 
@@ -118,6 +144,9 @@ export function LLMParametersEditor(props: {
   // Get the range override if available for Gemini thinking budget
   const gemTBSpec = modelParamSpec['llmVndGeminiThinkingBudget'];
   const gemTBMinMax = gemTBSpec?.rangeOverride || defGemTB.range;
+
+  // Check if web search should be disabled due to minimal reasoning effort
+  const isOaiReasoningEffortMinimal = llmVndOaiReasoningEffort4 === 'minimal';
 
   return <>
 
@@ -246,8 +275,9 @@ export function LLMParametersEditor(props: {
 
     {showParam('llmVndOaiWebSearchContext') && (
       <FormSelectControl
-        title='Search Size'
-        tooltip='Controls how much context is retrieved from the web (low = default for Perplexity, medium = default for OpenAI)'
+        title='Web Search'
+        tooltip={isOaiReasoningEffortMinimal ? 'Web search is not compatible with minimal reasoning effort' : 'Controls how much context is retrieved from the web (low = default for Perplexity, medium = default for OpenAI). For GPT-5 models, Default=OFF.'}
+        disabled={isOaiReasoningEffortMinimal}
         value={llmVndOaiWebSearchContext ?? _UNSPECIFIED}
         onChange={(value) => {
           if (value === _UNSPECIFIED || !value)
@@ -263,7 +293,8 @@ export function LLMParametersEditor(props: {
       <FormSwitchControl
         title='Add User Location'
         description='Use approximate location for better search results'
-        tooltip='When enabled, uses browser geolocation API to provide approximate location data to improve search results relevance'
+        tooltip={isOaiReasoningEffortMinimal ? 'Web search geolocation is not compatible with minimal reasoning effort' : 'When enabled, uses browser geolocation API to provide approximate location data to improve search results relevance'}
+        disabled={isOaiReasoningEffortMinimal}
         checked={!!llmVndOaiWebSearchGeolocation}
         onChange={checked => {
           if (!checked)
@@ -308,6 +339,21 @@ export function LLMParametersEditor(props: {
       />
     )}
 
+    {showParam('llmVndOaiReasoningEffort4') && (
+      <FormSelectControl
+        title='Reasoning Effort'
+        tooltip='Controls how much effort the model spends on reasoning (4-level scale)'
+        value={llmVndOaiReasoningEffort4 ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value)
+            onRemoveParameter('llmVndOaiReasoningEffort4');
+          else
+            onChangeParameter({ llmVndOaiReasoningEffort4: value });
+        }}
+        options={_reasoningEffort4Options}
+      />
+    )}
+
     {showParam('llmVndOaiRestoreMarkdown') && (
       <FormSwitchControl
         title='Restore Markdown'
@@ -335,6 +381,62 @@ export function LLMParametersEditor(props: {
           else
             onChangeParameter({ llmForceNoStream: true });
         }}
+      />
+    )}
+
+    {showParam('llmVndXaiSearchMode') && (
+      <FormSelectControl
+        title='Search Mode'
+        tooltip='Controls when to search'
+        value={llmVndXaiSearchMode ?? 'auto'}
+        onChange={value => onChangeParameter({ llmVndXaiSearchMode: value })}
+        options={_xaiSearchModeOptions}
+      />
+    )}
+
+    {showParam('llmVndXaiSearchSources') && (
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, ml: 0 }}>
+        {[
+          { key: 'web', label: 'Web Search', description: 'Search websites' },
+          { key: 'x', label: 'X Posts', description: 'Search X posts' },
+          { key: 'news', label: 'News', description: 'Search news' },
+        ].map(({ key, label, description }) => {
+          const currentSources = llmVndXaiSearchSources?.split(',').map(s => s.trim()).filter(Boolean) || [];
+          const isEnabled = currentSources.includes(key);
+          const searchIsOff = llmVndXaiSearchMode === 'off';
+
+          return (
+            <FormSwitchControl
+              key={key}
+              title={label}
+              description={description}
+              checked={isEnabled}
+              disabled={searchIsOff}
+              onChange={checked => {
+                const newSources = currentSources.filter(s => s !== key);
+                if (checked) newSources.push(key);
+                const newValue = newSources.length > 0 ? newSources.join(',') : undefined;
+                onChangeParameter({ llmVndXaiSearchSources: newValue || 'web,x' });
+              }}
+            />
+          );
+        })}
+      </Box>
+    )}
+
+    {showParam('llmVndXaiSearchDateFilter') && (
+      <FormSelectControl
+        title='Search Period'
+        // tooltip='Recency of search results'
+        disabled={llmVndXaiSearchMode === 'off'}
+        value={llmVndXaiSearchDateFilter ?? 'unfiltered'}
+        onChange={(value) => {
+          if (value === 'unfiltered' || !value)
+            onRemoveParameter('llmVndXaiSearchDateFilter');
+          else
+            onChangeParameter({ llmVndXaiSearchDateFilter: value });
+        }}
+        options={_xaiDateFilterOptions}
       />
     )}
 

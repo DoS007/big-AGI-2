@@ -180,7 +180,7 @@ You can easily configure 100s of AI models in big-AGI:
 | Local Servers       | [LM Studio](https://lmstudio.ai/)                                                                                                                                                                                                                                                              |
 | Multimodal services | [Azure](https://azure.microsoft.com/en-us/products/ai-services/openai-service) · [Anthropic](https://anthropic.com) · [Google Gemini](https://ai.google.dev/) · [OpenAI](https://platform.openai.com/docs/overview)                                                                            |
 | Language services   | [Alibaba](https://www.alibabacloud.com/en/product/modelstudio) · [DeepSeek](https://deepseek.com) · [Groq](https://wow.groq.com/) · [Mistral](https://mistral.ai/) · [OpenRouter](https://openrouter.ai/) · [Perplexity](https://www.perplexity.ai/) · [Together AI](https://www.together.ai/) | 
-| Image services      | [Prodia](https://prodia.com/) (SDXL)                                                                                                                                                                                                                                                           | 
+| Image services      | OpenAI, ...                                                                                                                                                                                                                                                                                    | 
 | Speech services     | [ElevenLabs](https://elevenlabs.io) (Voice synthesis / cloning)                                                                                                                                                                                                                                | 
 
 Add extra functionality with these integrations:
@@ -190,7 +190,7 @@ Add extra functionality with these integrations:
 | Web Browse   | [Browserless](https://www.browserless.io/) · [Puppeteer](https://pptr.dev/)-based                              |
 | Web Search   | [Google CSE](https://programmablesearchengine.google.com/)                                                     |
 | Code Editors | [CodePen](https://codepen.io/pen/) · [StackBlitz](https://stackblitz.com/) · [JSFiddle](https://jsfiddle.net/) |
-| Sharing      | [Paste.gg](https://paste.gg/) (Paste chats)                                                                    | 
+ 
 | Tracking     | [Helicone](https://www.helicone.ai) (LLM Observability)                                                        | 
 
 [//]: # (- [x] **Flow-state UX** for uncompromised productivity)

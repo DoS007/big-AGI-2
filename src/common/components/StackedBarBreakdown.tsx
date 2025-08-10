@@ -15,7 +15,7 @@ export interface StackedBarBreakdownProps {
   /** Array of segments to display */
   segments: StackedBarSegment[];
   /** Optional title for the chart */
-  title?: string;
+  title?: React.ReactNode;
   /** Whether to show absolute values in the legend (otherwise just percentages) */
   showValues?: boolean;
   /** Function to format values for display and tooltips */
@@ -34,14 +34,19 @@ export function StackedBarBreakdown({ segments, title, showValues = false, value
 
   return (
     <Box>
-      {title && <Typography level='title-md' mb={1}>{title}</Typography>}
+      {title && (
+        typeof title === 'string'
+          ? <Typography level='title-md' mb={1}>{title}</Typography>
+          : title
+      )}
 
       {/* The stacked bar */}
       <Box sx={{
         display: 'flex',
-        height: 8,
-        borderRadius: 8,
+        height: 10,
+        borderRadius: 'sm',
         overflow: 'hidden',
+        boxShadow: 'xs',
         my: 1,
       }}>
         {nonZeroSegments.map(({ key, value, color }) => {
@@ -53,7 +58,7 @@ export function StackedBarBreakdown({ segments, title, showValues = false, value
               sx={{
                 width: `${percentage}%`,
                 backgroundColor: color,
-                transition: 'width 0.3s ease-in-out',
+                // transition: 'width 0.3s ease-in-out',
               }}
             />
           );
@@ -61,12 +66,15 @@ export function StackedBarBreakdown({ segments, title, showValues = false, value
       </Box>
 
       {/* Legend with colored squares */}
-      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
         {nonZeroSegments.map(({ key, label, value, color }) => {
           const percentage = (value / total) * 100;
           return (
             <Box key={key} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-              <Box sx={{ width: 10, height: 10, backgroundColor: color, borderRadius: 2 }} />
+              <Box sx={{
+                width: 10, height: 10, backgroundColor: color, borderRadius: 'sm',
+                boxShadow: 'xs'
+              }} />
               <Typography level='body-xs'>
                 {label} {showValues
                 ? `${valueFormatter(value)} (${percentage.toFixed(0)}%)`
