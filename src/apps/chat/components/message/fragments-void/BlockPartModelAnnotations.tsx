@@ -1,7 +1,9 @@
 import * as React from 'react';
 
-import { Box, Button, List, ListItem, ListItemButton } from '@mui/joy';
+import { Box, Button, Chip, List, ListItem, ListItemButton } from '@mui/joy';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import TableViewRoundedIcon from '@mui/icons-material/TableView';
 
 import { useScaledTypographySx } from '~/modules/blocks/blocks.styles';
 
@@ -11,6 +13,8 @@ import type { Immutable } from '~/common/types/immutable.types';
 import { AvatarDomainFavicon } from '~/common/components/AvatarDomainFavicon';
 import { ExpanderControlledBox } from '~/common/components/ExpanderControlledBox';
 import { TooltipOutlined } from '~/common/components/TooltipOutlined';
+import { adjustContentScaling } from '~/common/app.theme';
+import { copyToClipboard } from '~/common/util/clipboardUtils';
 import { urlExtractDomain, urlPrettyHref } from '~/common/util/urlUtils';
 
 
@@ -19,7 +23,7 @@ const MAX_ICONS = 6;
 const COLOR = 'neutral';
 
 
-const styles = {
+const _styles = {
 
   iconRowButton: {
     minHeight: '2.25rem',
@@ -92,13 +96,66 @@ export function BlockPartModelAnnotations(props: {
   const [expanded, setExpanded] = React.useState(false);
 
   // external state
-  const scaledTypographySx = useScaledTypographySx(props.contentScaling, false, false);
+  const adjustedScaling = adjustContentScaling(props.contentScaling, -1);
+  const scaledTypographySx = useScaledTypographySx(adjustedScaling, false, false);
 
   // derived
   const annotationsCount = props.annotations.length;
   const moreIcons = annotationsCount - MAX_ICONS;
 
   const handleToggleExpanded = React.useCallback(() => setExpanded(on => !on), []);
+
+  // useRef to keep current annotations for copy handlers
+  const annotationsRef = React.useRef(props.annotations);
+  annotationsRef.current = props.annotations;
+
+
+  // copy handlers
+
+  const handleCopyText = React.useCallback((event: React.MouseEvent) => {
+    event.stopPropagation();
+    const citationsText = annotationsRef.current
+      .map((citation, index) => {
+        const domain = urlExtractDomain(citation.url);
+        const refNumber = citation.refNumber ? `[${citation.refNumber}]` : `${index + 1}`;
+        const title = citation.title || domain;
+        const date = citation.pubTs ? ` (${new Date(citation.pubTs).toLocaleDateString()})` : '';
+        return `${refNumber} ${title}${date}\n${citation.url}`;
+      })
+      .join('\n\n');
+    copyToClipboard(citationsText, 'Citations');
+  }, []);
+
+  const handleCopyMarkdown = React.useCallback((event: React.MouseEvent) => {
+    event.stopPropagation();
+    const markdownTable = [
+      '| # | Title | URL | Date |',
+      '|---|-------|-----|------|',
+      ...annotationsRef.current.map((citation, index) => {
+        const domain = urlExtractDomain(citation.url);
+        const refNumber = citation.refNumber ? citation.refNumber : index + 1;
+        const title = (citation.title || domain).replace(/\|/g, '\\|');
+        const url = citation.url.replace(/\|/g, '\\|');
+        const date = citation.pubTs ? new Date(citation.pubTs).toLocaleDateString() : '';
+        return `| ${refNumber} | ${title} | ${url} | ${date} |`;
+      })
+    ].join('\n');
+    copyToClipboard(markdownTable, 'Citations Table');
+  }, []);
+
+  // memo styles
+  const scaledStyles = React.useMemo(() => ({
+    iconRowButton: {
+      ..._styles.iconRowButton,
+      ...scaledTypographySx,
+      // since we 'soft' on not expanded, inset it too
+      ...(!expanded && { boxShadow: 'inset 1px 1px 4px -2px rgba(0, 0, 0, 0.2)' }),
+    },
+    citationsList: {
+      ..._styles.citationsList,
+      ...scaledTypographySx,
+    }
+  }), [expanded, scaledTypographySx]);
 
   if (!annotationsCount)
     return null;
@@ -109,12 +166,12 @@ export function BlockPartModelAnnotations(props: {
       {/* Row of favicons */}
       <Button
         size='sm'
-        variant={expanded ? 'plain' : 'plain'}
+        variant={!expanded ? 'soft' : 'plain'}
         color={COLOR}
         fullWidth
         aria-expanded={expanded}
         onClick={handleToggleExpanded}
-        sx={styles.iconRowButton}
+        sx={scaledStyles.iconRowButton}
       >
         <span>{annotationsCount} {props.itemsName || 'citation'}{annotationsCount > 1 ? 's' : ''}</span>
 
@@ -122,28 +179,62 @@ export function BlockPartModelAnnotations(props: {
         {!expanded && props.annotations.slice(0, MAX_ICONS).map((citation, index) => (
           <TooltipOutlined key={index} title={citation.title || urlExtractDomain(citation.url)}>
             <div>
-              <AvatarDomainFavicon key={index} url={citation.url} size={24} iconRes={48} noHover noShadow />
+              <AvatarDomainFavicon key={index} url={citation.url} size={18} iconRes={48} noHover noShadow />
             </div>
           </TooltipOutlined>
         ))}
 
         {/* +X symbol */}
-        {(moreIcons >= 1 && !expanded) && '+' + moreIcons}
+        <span style={{ opacity: 0.5 }}>{(moreIcons >= 1 && !expanded) && '+' + moreIcons}</span>
 
         {/* Expand/Collapse button */}
-        <ExpandMoreIcon
-          sx={{
-            ml: 'auto',
-            transition: 'transform 0.14s ease',
-            transform: expanded ? 'rotate(180deg)' : 'none',
-          }}
-        />
+        <Box sx={{
+          ml: 'auto',
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 1,
+        }}>
+
+          {/* Copy buttons - only show when expanded */}
+          {expanded && (
+            <Chip
+              size='sm'
+              color={COLOR}
+              variant='soft'
+              onClick={handleCopyText}
+              startDecorator={<ContentCopyIcon />}
+              sx={{ px: 1.5 }}
+            >
+              Copy
+            </Chip>
+          )}
+          {expanded && (
+            <Chip
+              size='sm'
+              color={COLOR}
+              variant='soft'
+              onClick={handleCopyMarkdown}
+              startDecorator={<TableViewRoundedIcon />}
+              sx={{ px: 1.5 }}
+            >
+              Table
+            </Chip>
+          )}
+
+          <ExpandMoreIcon
+            sx={{
+              ml: 'auto',
+              transition: 'transform 0.14s ease',
+              transform: expanded ? 'rotate(180deg)' : 'none',
+            }}
+          />
+        </Box>
       </Button>
 
       {/* Expanded citations list */}
       <ExpanderControlledBox expanded={expanded}>
 
-        <List sx={{ ...styles.citationsList, ...scaledTypographySx }}>
+        <List sx={scaledStyles.citationsList}>
           {props.annotations.map((citation, index) => {
             const domain = urlExtractDomain(citation.url);
 
@@ -154,19 +245,19 @@ export function BlockPartModelAnnotations(props: {
                   href={citation.url}
                   target='_blank'
                   rel='noopener noreferrer'
-                  sx={index < annotationsCount - 1 ? styles.citationItem : styles.citationItemLast}
+                  sx={index < annotationsCount - 1 ? _styles.citationItem : _styles.citationItemLast}
                 >
-                  <Box sx={styles.citationNumber}>
+                  <Box sx={_styles.citationNumber}>
                     {citation.refNumber ? `[${citation.refNumber}]` : index + 1}
                   </Box>
 
-                  <Box sx={styles.line}>
-                    <AvatarDomainFavicon url={!expanded ? '' : citation.url} size={32} iconRes={64} />
-                    <Box sx={styles.lineContent}>
+                  <Box sx={_styles.line}>
+                    <AvatarDomainFavicon url={!expanded ? '' : citation.url} size={24} iconRes={64} />
+                    <Box sx={_styles.lineContent}>
                       <Box className='agi-ellipsize'>
                         {citation.title || domain}
                       </Box>
-                      <Box sx={styles.lineLink} className='agi-ellipsize'>
+                      <Box sx={_styles.lineLink} className='agi-ellipsize'>
                         {urlPrettyHref(citation.url, true, true)}
                         {citation.pubTs && (
                           <span style={{ marginLeft: '0.5em' }}>

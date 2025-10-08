@@ -7,6 +7,7 @@
       "Bash(git branch:*)",
       "Bash(grep:*)",
       "Bash(ls:*)",
+      "Bash(mkdir:*)",
       "Bash(node:*)",
       "Bash(npm install)",
       "Bash(npm install:*)",
@@ -17,6 +18,7 @@
       "Bash(sed:*)",
       "WebFetch(domain:big-agi.com)",
       "WebFetch(domain:github.com)",
+      "WebSearch",
       "mcp__ide__getDiagnostics"
     ],
     "deny": [

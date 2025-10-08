@@ -29,6 +29,10 @@ export function CloseablePopup(props: {
   size?: 'sm' | 'md' | 'lg', // if set, overrides 'dense' and applies to the MenuList
   dense?: boolean,
   bigIcons?: boolean,
+  boxShadow?: string, // boxShadow style, defaults to 'md'
+
+  // behavior changes
+  disableMenuTypeahead?: boolean, // disable alphanumeric typeahead navigation in MenuList
 
   placement?: PopperPlacementType,
   maxHeightGapPx?: number,
@@ -59,8 +63,12 @@ export function CloseablePopup(props: {
       if (props.anchorEl)
         props.anchorEl?.focus();
       handleClose(event);
+    } else if (props.disableMenuTypeahead && event.key.length === 1) {
+      // Prevent MenuList's typeahead navigation when disabled
+      event.stopPropagation();
+      // event.preventDefault(); // this is needed.. e.g. typing on input boxes
     }
-  }, [handleClose, props.anchorEl]);
+  }, [handleClose, props.anchorEl, props.disableMenuTypeahead]);
 
 
   // memos
@@ -75,7 +83,7 @@ export function CloseablePopup(props: {
 
     // style
     backgroundColor: 'background.popup',
-    boxShadow: 'md',
+    boxShadow: props.boxShadow ?? 'md',
     ...(props.maxHeightGapPx !== undefined ? { maxHeight: `calc(100dvh - ${props.maxHeightGapPx}px)`, overflowY: 'auto' } : {}),
     ...(props.maxWidth !== undefined && { maxWidth: props.maxWidth }),
     ...(props.minWidth !== undefined && { minWidth: props.minWidth }),
@@ -96,7 +104,7 @@ export function CloseablePopup(props: {
     // inject
     ...(props.sx || {}),
 
-  }), [props.maxHeightGapPx, props.maxWidth, props.minWidth, props.size, props.dense, props.bigIcons, props.noBottomPadding, props.noTopPadding, props.sx]);
+  }), [props.boxShadow, props.maxHeightGapPx, props.maxWidth, props.minWidth, props.size, props.dense, props.bigIcons, props.noBottomPadding, props.noTopPadding, props.sx]);
 
 
   return (

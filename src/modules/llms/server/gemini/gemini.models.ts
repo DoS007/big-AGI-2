@@ -3,10 +3,11 @@ import type { GeminiWire_API_Models_List } from '~/modules/aix/server/dispatch/w
 import type { ModelDescriptionSchema } from '../llm.server.types';
 
 import { LLM_IF_GEM_CodeExecution, LLM_IF_HOTFIX_NoStream, LLM_IF_HOTFIX_StripImages, LLM_IF_HOTFIX_StripSys0, LLM_IF_HOTFIX_Sys0ToUsr0, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_PromptCaching, LLM_IF_OAI_Reasoning, LLM_IF_OAI_Vision, LLM_IF_Outputs_Audio, LLM_IF_Outputs_Image, LLM_IF_Outputs_NoText } from '~/common/stores/llms/llms.types';
+import { Release } from '~/common/app.release';
 
 
 // dev options
-const DEV_DEBUG_GEMINI_MODELS = true;
+const DEV_DEBUG_GEMINI_MODELS = (Release.TenantSlug as any) === 'staging' || Release.IsNodeDevBuild;
 
 
 // supported interfaces
@@ -22,6 +23,11 @@ const filterUnallowedNames = ['Legacy'];
 //   'predictLongRunning', // e.g. removes "models/veo-2.0-generate-001" (appeared on 2025-04-10)
 // ];
 const filterLyingModelNames: GeminiWire_API_Models_List.Model['name'][] = [
+  // new symlinks that are too vague and high risk; let the user pick the correct model
+  'models/gemini-pro-latest',
+  'models/gemini-flash-latest',
+  'models/gemini-flash-lite-latest',
+
   // 2025-02-27: verified, old model is no more
   'models/gemini-2.0-flash-exp', // verified, replaced by gemini-2.0-flash, which is non-free anymore
 
@@ -38,7 +44,7 @@ const filterLyingModelNames: GeminiWire_API_Models_List.Model['name'][] = [
    - Latest stable     version  gemini-1.0-pro  <model>-<generation>-<variation>
    - Stable versions   gemini-1.0-pro-001       <model>-<generation>-<variation>-<version>
 
-   Gemini capabilities chart (updated 2025-06-05):
+   Gemini capabilities chart (updated 2025-09-29):
    - [table stakes] System instructions
    - JSON Mode, with optional JSON Schema
    - Adjustable Safety Settings
@@ -59,7 +65,7 @@ const geminiExpFree: ModelDescriptionSchema['chatPrice'] = {
 };
 
 
-// Pricing based on https://ai.google.dev/pricing (June 26, 2025)
+// Pricing based on https://ai.google.dev/pricing (Sept 29, 2025)
 
 const gemini25ProPricing: ModelDescriptionSchema['chatPrice'] = {
   input: [{ upTo: 200000, price: 1.25 }, { upTo: null, price: 2.50 }],
@@ -73,17 +79,17 @@ const gemini25FlashPricing: ModelDescriptionSchema['chatPrice'] = {
   cache: { cType: 'oai-ac', read: 0.075 }, // text/image/video; audio is $0.25 but we don't differentiate yet
 };
 
-const gemini25FlashLitePreviewPricing: ModelDescriptionSchema['chatPrice'] = {
-  input: 0.10, // text/image/video; audio is $0.50 but we don't differentiate yet
+const gemini25FlashPreviewPricing = gemini25FlashPricing; // The latest model based on the 2.5 Flash model. 2.5 Flash Preview is best for large scale processing, low-latency.
+
+const gemini25FlashLitePricing: ModelDescriptionSchema['chatPrice'] = {
+  input: 0.10, // text/image/video; audio is $0.30 but we don't differentiate yet
   output: 0.40, // including thinking tokens
   cache: { cType: 'oai-ac', read: 0.025 }, // text/image/video; audio is $0.125 but we don't differentiate yet
 };
 
-const gemini25FlashNativeAudioPricing: ModelDescriptionSchema['chatPrice'] = {
-  input: 0.50, // text; audio/video is $3.00 but we don't differentiate yet
-  output: 2.00, // text; audio is $12.00 but we don't differentiate yet
-  // NOTE: we don't account for audio yet
-};
+const gemini25FlashLitePreviewPricing = gemini25FlashLitePricing; // The latest model based on Gemini 2.5 Flash lite optimized for cost-efficiency, high throughput and high quality.
+
+// REMOVED: gemini25FlashNativeAudioPricing (dialog models no longer supported)
 
 const gemini25FlashPreviewTTSPricing: ModelDescriptionSchema['chatPrice'] = {
   input: 0.50, // text input
@@ -137,7 +143,7 @@ const _knownGeminiModels: ({
   isPreview?: boolean,
   symLink?: string,
   deprecated?: string, // Gemini may provide deprecation dates
-  _delete?: boolean, // some gemini models are not acknowledged by Google Docs anymore, and leaving them in the list will confuse users
+  // _delete removed - models are now physically removed from the list instead of marked for deletion
 } & Pick<ModelDescriptionSchema, 'interfaces' | 'parameterSpecs' | 'chatPrice' | 'hidden' | 'benchmark'>)[] = [
 
   /// Generation 2.5
@@ -149,9 +155,10 @@ const _knownGeminiModels: ({
     chatPrice: gemini25ProPricing,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Reasoning, LLM_IF_GEM_CodeExecution, LLM_IF_OAI_PromptCaching],
     parameterSpecs: [{ paramId: 'llmVndGeminiThinkingBudget', rangeOverride: [128, 32768] /* does not support 0 which would turn thinking off */ }],
-    benchmark: { cbaElo: 1470 }, // Same as preview-06-05 since it's the stable version
+    benchmark: { cbaElo: 1455 }, // gemini-2.5-pro (updated from CSV)
   },
   {
+    hidden: true, // show the final stable version instead
     id: 'models/gemini-2.5-pro-preview-06-05',
     labelOverride: 'Gemini 2.5 Pro Preview 06-05', // overriding because the API does not have the version on this
     isPreview: true,
@@ -196,14 +203,25 @@ const _knownGeminiModels: ({
 
   // 2.5 Flash (Stable) - Released June 17, 2025
   {
+    id: 'models/gemini-2.5-flash-preview-09-2025',
+    labelOverride: 'Gemini 2.5 Flash Preview 09-2025',
+    isPreview: true,
+    chatPrice: gemini25FlashPreviewPricing,
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Reasoning, LLM_IF_GEM_CodeExecution, LLM_IF_OAI_PromptCaching],
+    parameterSpecs: [{ paramId: 'llmVndGeminiThinkingBudget' }],
+    benchmark: { cbaElo: 1424 + 1 }, // FALLBACK-UNTIL-AVAILABLE: models/gemini-2.5-flash-preview-05-20 + 1
+  },
+  {
+    hidden: true, // yielding to 'models/gemini-2.5-flash-preview-09-2025', which is more recent
     id: 'models/gemini-2.5-flash',
     labelOverride: 'Gemini 2.5 Flash',
     chatPrice: gemini25FlashPricing,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Reasoning, LLM_IF_GEM_CodeExecution, LLM_IF_OAI_PromptCaching],
     parameterSpecs: [{ paramId: 'llmVndGeminiThinkingBudget' }],
-    benchmark: { cbaElo: 1424 }, // Same as preview-05-20 since it's the stable version
+    benchmark: { cbaElo: 1407 }, // gemini-2.5-flash (updated from CSV)
   },
   {
+    hidden: true, // show the final stable version instead
     id: 'models/gemini-2.5-flash-preview-05-20',
     isPreview: true,
     chatPrice: gemini25FlashPricing,
@@ -211,27 +229,46 @@ const _knownGeminiModels: ({
     parameterSpecs: [{ paramId: 'llmVndGeminiThinkingBudget' }],
     benchmark: { cbaElo: 1424 },
   },
+
+  // 2.5 Flash-Based: Gemini Robotics-ER 1.5 Preview - Released September 25, 2025
   {
-    id: 'models/gemini-2.5-flash-preview-04-17',
+    id: 'models/gemini-robotics-er-1.5-preview',
+    labelOverride: 'Gemini Robotics-ER 1.5 Preview',
     isPreview: true,
-    chatPrice: gemini25FlashPricing,
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Reasoning, LLM_IF_GEM_CodeExecution],
+    chatPrice: gemini25FlashPricing, // Uses same pricing as 2.5 Flash per pricing page
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Reasoning],
     parameterSpecs: [{ paramId: 'llmVndGeminiThinkingBudget' }],
-    benchmark: { cbaElo: 1392 },
-    hidden: true, // Hidden now that 05-20 is available
+    benchmark: undefined, // Robotics model, not benchmarkable on standard tests
   },
+
+  // 2.5 Flash Image Preview
   {
-    id: 'models/gemini-2.5-flash-preview-04-17-thinking',
-    labelOverride: 'Gemini 2.5 Flash Preview (Cursor, 04-17)',
-    isPreview: true,
-    chatPrice: gemini25FlashPricing,
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Reasoning, LLM_IF_GEM_CodeExecution],
-    parameterSpecs: [{ paramId: 'llmVndGeminiThinkingBudget' }],
-    hidden: true,
+    id: 'models/gemini-2.5-flash-image',
+    labelOverride: 'Nano Banana',
+    chatPrice: { input: 0.30, output: undefined }, // Per pricing page: $0.30 text/image input, $0.039 per image output, but the text output is not stated
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_Outputs_Image],
+    parameterSpecs: [{ paramId: 'llmVndGeminiAspectRatio' }],
+    benchmark: undefined, // Non-benchmarkable because generates images
   },
+  // 2.5 Flash Image Preview
+  {
+    hidden: true, // superseded by 'models/gemini-2.5-flash-image'
+    id: 'models/gemini-2.5-flash-image-preview',
+    labelOverride: 'Gemini 2.5 Flash Image Preview', // default is Nano Banana
+    isPreview: true,
+    chatPrice: { input: 0.30, output: undefined }, // Per pricing page: $0.30 text/image input, $0.039 per image output, but the text output is not stated
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_Outputs_Image],
+    benchmark: undefined, // Non-benchmarkable because generates images
+  },
+
+  // REMOVED MODELS (no longer returned by API as of Sept 16, 2025):
+  // - models/gemini-2.5-flash-preview-04-17 (superseded by 05-20 version)
+  // - models/gemini-2.5-flash-preview-04-17-thinking (Cursor variant, superseded)
+
 
   // 2.5 Flash Preview TTS
   {
+    hidden: true, // audio outputs are unavailable as of 2025-05-27
     id: 'models/gemini-2.5-flash-preview-tts',
     isPreview: true,
     chatPrice: gemini25FlashPreviewTTSPricing,
@@ -242,33 +279,42 @@ const _knownGeminiModels: ({
       LLM_IF_HOTFIX_NoStream, // TTS: no streaming - use generateContent instead
     ],
     benchmark: undefined, // TTS models are not benchmarkable
-    hidden: true, // audio outputs are unavailable as of 2025-05-27
   },
 
-  // 2.5 Flash Native Audio (Dialog and Thinking variants)
-  {
-    id: 'models/gemini-2.5-flash-preview-native-audio-dialog',
-    isPreview: true,
-    chatPrice: gemini25FlashNativeAudioPricing,
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_Outputs_Audio],
-    benchmark: undefined, // Native audio models are not benchmarkable
-    _delete: true, // dialog models unsupported as of 2025-05-27, but keeping the model for now
-  },
-  {
-    id: 'models/gemini-2.5-flash-exp-native-audio-thinking-dialog',
-    isPreview: true,
-    chatPrice: gemini25FlashNativeAudioPricing,
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Reasoning, LLM_IF_Outputs_Audio],
-    benchmark: undefined, // Native audio models are not benchmarkable
-    _delete: true, // dialog models unsupported as of 2025-05-27, but keeping the model for now
-  },
+  // REMOVED MODELS (dialog models unsupported as of 2025-05-27):
+  // - models/gemini-2.5-flash-preview-native-audio-dialog
+  // - models/gemini-2.5-flash-exp-native-audio-thinking-dialog
 
-  // 2.5 Flash-Lite Preview
+
+  // 2.5 Flash-Lite
+
+  /// 2.5 Flash-Lite Preview - Released September 25, 2025
   {
-    id: 'models/gemini-2.5-flash-lite-preview-06-17',
-    labelOverride: 'Gemini 2.5 Flash-Lite Preview',
+    id: 'models/gemini-2.5-flash-lite-preview-09-2025',
+    labelOverride: 'Gemini 2.5 Flash-Lite Preview 09-2025',
     isPreview: true,
     chatPrice: gemini25FlashLitePreviewPricing,
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Reasoning, LLM_IF_GEM_CodeExecution, LLM_IF_OAI_PromptCaching],
+    parameterSpecs: [{ paramId: 'llmVndGeminiThinkingBudget' }],
+    benchmark: { cbaElo: 1310 + 1 }, // FALLBACK-UNTIL-AVAILABLE: models/gemini-2.5-flash-lite-preview-06-17 + 1
+  },
+  // 2.5 Flash-Lite (Stable) - Released July 2025
+  {
+    hidden: true, // yielding to 'models/gemini-2.5-flash-lite', which is stable now
+    id: 'models/gemini-2.5-flash-lite',
+    labelOverride: 'Gemini 2.5 Flash-Lite',
+    chatPrice: gemini25FlashLitePricing,
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Reasoning, LLM_IF_GEM_CodeExecution, LLM_IF_OAI_PromptCaching],
+    parameterSpecs: [{ paramId: 'llmVndGeminiThinkingBudget' }],
+    benchmark: { cbaElo: 1310 }, // Based on 2.0 Flash-Lite performance
+  },
+  // 2.5 Flash-Lite Preview (oldest version, superseded)
+  {
+    hidden: true, // Superseded by stable version
+    id: 'models/gemini-2.5-flash-lite-preview-06-17',
+    labelOverride: 'Gemini 2.5 Flash-Lite Preview 06-17',
+    isPreview: true,
+    chatPrice: gemini25FlashLitePricing,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Reasoning, LLM_IF_GEM_CodeExecution, LLM_IF_OAI_PromptCaching],
     parameterSpecs: [{ paramId: 'llmVndGeminiThinkingBudget' }],
     benchmark: { cbaElo: 1310 }, // Estimated based on 2.0 Flash-Lite performance
@@ -297,7 +343,8 @@ const _knownGeminiModels: ({
     benchmark: { cbaElo: 1380 },
   },
   {
-    _delete: true, // replaced by gemini-2.0-pro-exp-02-05, 2025-02-27: verified, old model is no more
+    hidden: true,
+    // _delete: true, // replaced by gemini-2.0-pro-exp-02-05, 2025-02-27: verified, old model is no more
     id: 'models/gemini-exp-1206',
     labelOverride: 'Gemini 2.0 Pro Experimental 1206',
     isPreview: true,
@@ -352,6 +399,7 @@ const _knownGeminiModels: ({
 
   // 2.0 Flash Preview Image Generation (Newer than the Experimental, introduced on 05-07)
   {
+    hidden: true, // replaced by Nano Banana
     id: 'models/gemini-2.0-flash-preview-image-generation',
     // labelOverride: 'Gemini 2.0 Flash Image Generation Preview',
     isPreview: true,
@@ -415,7 +463,7 @@ const _knownGeminiModels: ({
     isPreview: true,
     chatPrice: gemini20FlashLitePricing,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn],
-    benchmark: { cbaElo: 1312 },
+    benchmark: { cbaElo: 1352 },
   },
   {
     id: 'models/gemini-2.0-flash-lite-preview',
@@ -424,103 +472,32 @@ const _knownGeminiModels: ({
     isPreview: true,
     chatPrice: gemini20FlashLitePricing,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn],
-    benchmark: { cbaElo: 1311 },
+    benchmark: { cbaElo: 1352 },
   },
 
 
   /// Generation 1.5
 
-  // Gemini 1.5 Flash Models
-  {
-    id: 'models/gemini-1.5-flash-latest', // updated regularly and might be a preview version
-    isPreview: true,
-    chatPrice: gemini15FlashPricing,
-    // symLink: '-002 or newer',
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_GEM_CodeExecution],
-    hidden: true, // old model, SNR
-  },
-  {
-    id: 'models/gemini-1.5-flash',
-    // Defaults to version 002 on Oct 8, 2024
-    symLink: 'models/gemini-1.5-flash-002',
-    chatPrice: gemini15FlashPricing,
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_GEM_CodeExecution],
-    benchmark: { cbaElo: 1271 },
-    hidden: true, // old model, SNR
-  },
-  {
-    id: 'models/gemini-1.5-flash-002', // new stable version
-    chatPrice: gemini15FlashPricing,
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_GEM_CodeExecution],
-    benchmark: { cbaElo: 1271 },
-    hidden: true,
-  },
-
-  // Gemini 1.5 Flash-8B Models
-  {
-    id: 'models/gemini-1.5-flash-8b-latest',
-    isPreview: false,
-    chatPrice: gemini15Flash8BPricing,
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_GEM_CodeExecution],
-    benchmark: { cbaElo: 1212 },
-    hidden: true, // old model, SNR
-  },
-  {
-    id: 'models/gemini-1.5-flash-8b',
-    symLink: 'models/gemini-1.5-flash-8b-001',
-    chatPrice: gemini15Flash8BPricing,
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_GEM_CodeExecution],
-    benchmark: { cbaElo: 1212 },
-    hidden: true, // old model, SNR
-  },
-  {
-    id: 'models/gemini-1.5-flash-8b-001',
-    chatPrice: gemini15Flash8BPricing,
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_GEM_CodeExecution],
-    benchmark: { cbaElo: 1212 },
-    hidden: true,
-  },
-
-  // Gemini 1.5 Pro Models
-  {
-    id: 'models/gemini-1.5-pro-latest', // updated to latest stable version
-    chatPrice: gemini15ProPricing,
-    // symLink: '-002 or newer',
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_GEM_CodeExecution],
-    hidden: true, // old model, SNR
-  },
-  {
-    id: 'models/gemini-1.5-pro',
-    symLink: 'models/gemini-1.5-pro-002',
-    chatPrice: gemini15ProPricing,
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_GEM_CodeExecution],
-    benchmark: { cbaElo: 1302 },
-    hidden: true, // old model, SNR
-  },
-  {
-    id: 'models/gemini-1.5-pro-002',
-    chatPrice: gemini15ProPricing,
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_GEM_CodeExecution],
-    benchmark: { cbaElo: 1302 },
-    hidden: true,
-  },
+  // REMOVED MODELS (no longer returned by API as of Sept 29, 2025):
+  // - Gemini 1.5 Flash Models - DEPRECATED September 2025
+  //   - models/gemini-1.5-flash-latest
+  //   - models/gemini-1.5-flash
+  //   - models/gemini-1.5-flash-002
+  // - Gemini 1.5 Flash-8B Models - DEPRECATED September 2025
+  //   - models/gemini-1.5-flash-8b-latest
+  //   - models/gemini-1.5-flash-8b
+  //   - models/gemini-1.5-flash-8b-001
+  // - Gemini 1.5 Pro Models - DEPRECATED September 2025
+  //   - models/gemini-1.5-pro-latest
+  //   - models/gemini-1.5-pro
+  //   - models/gemini-1.5-pro-002
 
 
   /// Generation 1.0
 
-  // Gemini 1.0 Pro Vision Model
-  {
-    id: 'models/gemini-1.0-pro-vision-latest',
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision],
-    hidden: true,
-    _delete: true, // confusing and deprecated
-  },
-  {
-    id: 'models/gemini-pro-vision',
-    symLink: 'models/gemini-1.0-pro-vision',
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision], // Text and Images
-    _delete: true, // confusing and deprecated
-  },
+  // REMOVED MODELS (no longer returned by API as of Sept 16, 2025):
+  // - models/gemini-1.0-pro-vision-latest (deprecated, confusing naming)
+  // - models/gemini-pro-vision (deprecated, was symlink to gemini-1.0-pro-vision)
 
 
   /// Other Experimental Models
@@ -583,7 +560,6 @@ const _knownGeminiModels: ({
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision],
     chatPrice: geminiExpFree,
     // hidden: true,
-    // _delete: true,
   },
 
 
@@ -667,19 +643,31 @@ export function geminiFilterModels(geminiModel: GeminiWire_API_Models_List.Model
 
 const _sortOderIdPrefix: string[] = [
   'models/gemini-exp',
+
   'models/gemini-2.5-pro',
   'models/gemini-2.5-pro-exp',
   'models/gemini-2.5-pro-preview',
   'models/gemini-2.5-pro-',
   'models/gemini-2.5-pro-preview-tts',
+
+  'models/gemini-2.5-flash-preview-09',
   'models/gemini-2.5-flash',
+  'models/gemini-2.5-flash-image',
+  'models/gemini-2.5-flash-image-preview',
   'models/gemini-2.5-flash-preview',
   'models/gemini-2.5-flash-',
   'models/gemini-2.5-flash-preview-tts',
+
+  'models/gemini-2.5-flash-lite-preview-09-2025',
   'models/gemini-2.5-flash-lite-preview-',
+  'models/gemini-2.5-flash-lite',
   'models/gemini-2.5-flash-lite-',
+
+  'models/gemini-robotics',
+
   'models/gemini-2.0-pro',
   'models/gemini-2.0-pro-',
+  'models/gemini-exp-1206',
   'models/gemini-2.0-flash-exp-image-generation',
   'models/gemini-2.0-flash-preview-', // -image-generation
   'models/gemini-2.0-flash-thinking-exp-01-21',
@@ -757,9 +745,9 @@ export function geminiModelToModelDescription(geminiModel: GeminiWire_API_Models
   if (!knownModel && DEV_DEBUG_GEMINI_MODELS)
     console.warn('geminiModelToModelDescription: unknown model', modelId, geminiModel);
 
-  // handle _delete
-  if (knownModel?._delete)
-    return null;
+  // _delete logic removed - models are now physically removed from the list
+  // if (knownModel?._delete)
+  //   return null;
 
   // handle symlinks
   let label = knownModel?.symLink

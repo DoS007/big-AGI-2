@@ -2,7 +2,6 @@ import { SERVER_DEBUG_WIRE } from '~/server/wire';
 import { serverSideId } from '~/server/trpc/trpc.nanoid';
 
 import type { AixWire_Particles } from '../../api/aix.wiretypes';
-import { AIX_SECURITY_ONLY_IN_DEV_BUILDS } from '../../api/aix.router';
 
 import type { IParticleTransmitter } from './IParticleTransmitter';
 
@@ -127,13 +126,13 @@ export class ChatGenerateTransmitter implements IParticleTransmitter {
     this.setEnded('issue-rpc');
   }
 
-  addDebugRequestInDev(url: string, headers: HeadersInit, body: object) {
+  addDebugRequest(hideSensitiveData: boolean, url: string, headers: HeadersInit, body: object) {
     this.transmissionQueue.push({
       cg: '_debugDispatchRequest',
       security: 'dev-env',
       dispatchRequest: {
         url: url,
-        headers: !AIX_SECURITY_ONLY_IN_DEV_BUILDS ? '(hidden sensitive data)' : JSON.stringify(headers, null, 2),
+        headers: hideSensitiveData ? '(hidden sensitive data)' : JSON.stringify(headers, null, 2),
         body: JSON.stringify(body, null, 2),
       },
     });
@@ -403,6 +402,16 @@ export class ChatGenerateTransmitter implements IParticleTransmitter {
       ...(textSnippet ? { text: textSnippet } : {}),
       ...(pubTs !== undefined ? { pubTs } : {}),
     } satisfies Extract<AixWire_Particles.PartParticleOp, { p: 'urlc' }>);
+  }
+
+  /** Sends a void placeholder particle - temporary status that gets wiped when real content arrives */
+  sendVoidPlaceholder(mot: 'search-web' | 'gen-image', text: string) {
+    // Don't end message part - placeholders should not interfere with content flow
+    this.transmissionQueue.push({
+      p: 'vp',
+      text,
+      mot,
+    } satisfies Extract<AixWire_Particles.PartParticleOp, { p: 'vp' }>);
   }
 
   /** Communicates the model name to the client */

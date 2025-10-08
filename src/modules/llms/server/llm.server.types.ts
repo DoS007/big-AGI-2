@@ -3,6 +3,8 @@ import * as z from 'zod/v4';
 import { LLMS_ALL_INTERFACES } from '~/common/stores/llms/llms.types';
 
 
+export type RequestAccessValues = { headers: HeadersInit; url: string; };
+
 export type ModelDescriptionSchema = z.infer<typeof ModelDescription_schema>;
 
 // export namespace AixWire_API_ListModels {
@@ -76,13 +78,16 @@ const ModelParameterSpec_schema = z.object({
     'llmTopP',
     'llmForceNoStream',
     'llmVndAntThinkingBudget',
+    'llmVndGeminiAspectRatio',
     'llmVndGeminiShowThoughts',
     'llmVndGeminiThinkingBudget',
     'llmVndOaiReasoningEffort',
     'llmVndOaiReasoningEffort4',
     'llmVndOaiRestoreMarkdown',
+    'llmVndOaiVerbosity',
     'llmVndOaiWebSearchContext',
     'llmVndOaiWebSearchGeolocation',
+    'llmVndOaiImageGeneration',
     'llmVndPerplexityDateFilter',
     'llmVndPerplexitySearchMode',
     'llmVndXaiSearchMode',

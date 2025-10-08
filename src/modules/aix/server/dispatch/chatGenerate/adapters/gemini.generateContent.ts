@@ -1,17 +1,20 @@
 import type { AixAPI_Model, AixAPIChatGenerate_Request, AixMessages_ChatMessage, AixParts_DocPart, AixTools_ToolDefinition, AixTools_ToolsPolicy } from '../../../api/aix.wiretypes';
 import { GeminiWire_API_Generate_Content, GeminiWire_ContentParts, GeminiWire_Messages, GeminiWire_Safety, GeminiWire_ToolDeclarations } from '../../wiretypes/gemini.wiretypes';
 
-import { approxDocPart_To_String, approxInReferenceTo_To_XMLString } from './anthropic.messageCreate';
+import { aixSpillSystemToUser, approxDocPart_To_String, approxInReferenceTo_To_XMLString } from './adapters.common';
 
 
 // configuration
-const hotFixImagePartsFirst = true;
+const hotFixImagePartsFirst = true; // https://ai.google.dev/gemini-api/docs/image-understanding#tips-best-practices
 const hotFixReplaceEmptyMessagesWithEmptyTextPart = true;
 
 
-export function aixToGeminiGenerateContent(model: AixAPI_Model, chatGenerate: AixAPIChatGenerate_Request, geminiSafetyThreshold: GeminiWire_Safety.HarmBlockThreshold, jsonOutput: boolean, _streaming: boolean): TRequest {
+export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: AixAPIChatGenerate_Request, geminiSafetyThreshold: GeminiWire_Safety.HarmBlockThreshold, jsonOutput: boolean, _streaming: boolean): TRequest {
 
   // Note: the streaming setting is ignored as it only belongs in the path
+
+  // Pre-process CGR - approximate spill of System to User message - note: no need to flush as every message is not batched
+  const chatGenerate = aixSpillSystemToUser(_chatGenerate);
 
   // System Instructions
   let systemInstruction: TRequest['systemInstruction'] = undefined;
@@ -26,6 +29,10 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, chatGenerate: Ai
         case 'doc':
           acc.parts.push(GeminiWire_ContentParts.TextPart(approxDocPart_To_String(part)));
           break;
+
+        case 'inline_image':
+          // we have already removed image parts from the system message
+          throw new Error('Gemini: images have to be in user messages, not in system message');
 
         case 'meta_cache_control':
           // ignore this breakpoint hint - Anthropic only
@@ -89,6 +96,13 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, chatGenerate: Ai
     payload.generationConfig!.thinkingConfig = thinkingConfig;
   }
 
+  // [Gemini, 2025-10-02] Image generation: aspect ratio configuration
+  if (model.vndGeminiAspectRatio) {
+    payload.generationConfig!.imageConfig = {
+      aspectRatio: model.vndGeminiAspectRatio,
+    };
+  }
+
   // [Gemini, 2025-05-20] Experimental Audio generation (TTS - audio only, no text): Request
   const noTextOutput = !model.acceptsOutputs.includes('text');
   if (model.acceptsOutputs.includes('audio')) {
@@ -147,6 +161,8 @@ function _toGeminiContents(chatSequence: AixMessages_ChatMessage[]): GeminiWire_
     const parts: GeminiWire_ContentParts.ContentPart[] = [];
 
     if (hotFixImagePartsFirst) {
+      // https://ai.google.dev/gemini-api/docs/image-understanding#tips-best-practices
+      // "When using a single image with text, place the text prompt after the image part in the contents array."
       message.parts.sort((a, b) => {
         if (a.pt === 'inline_image' && b.pt !== 'inline_image') return -1;
         if (a.pt !== 'inline_image' && b.pt === 'inline_image') return 1;
@@ -325,6 +341,12 @@ function _toGeminiTools(itds: AixTools_ToolDefinition[]): NonNullable<TRequest['
           },
         });
         break;
+
+      case 'vnd.ant.tools.bash_20241022':
+      case 'vnd.ant.tools.computer_20241022':
+      case 'vnd.ant.tools.text_editor_20241022':
+      default: // Note: Gemini's tool function doesn't break on unknown tools, so we need the default case here
+        throw new Error('Tool ${itd.type} is not supported by Gemini');
 
     }
   });

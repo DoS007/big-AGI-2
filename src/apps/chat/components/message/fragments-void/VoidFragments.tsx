@@ -104,6 +104,8 @@ export function VoidFragments(props: {
             <BlockPartPlaceholder
               key={fId}
               placeholderText={part.pText}
+              placeholderType={part.pType}
+              placeholderModelOp={part.modelOp}
               messageRole={props.messageRole}
               contentScaling={props.contentScaling}
               showAsItalic

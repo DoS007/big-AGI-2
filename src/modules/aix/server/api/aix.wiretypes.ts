@@ -245,6 +245,7 @@ export namespace AixWire_Content {
     parts: z.array(z.discriminatedUnion('pt', [
       AixWire_Parts.TextPart_schema,
       AixWire_Parts.DocPart_schema, // Jan 10, 2025: added support for Docs in AIX system
+      AixWire_Parts.InlineImagePart_schema, // Sept 12, 2025: added support for Inline Images in AIX system
       AixWire_Parts.MetaCacheControl_schema,
     ])),
   });
@@ -337,6 +338,23 @@ export namespace AixWire_Tooling {
     variant: z.enum(['gemini_auto_inline']),
   });
 
+  /// [Anthropic] Vendor-specific Tooling
+
+  const _VndAntComputer20241022 = z.object({
+    type: z.literal('vnd.ant.tools.computer_20241022'),
+    display_width: z.number().int(),
+    display_height: z.number().int(),
+    display_number: z.number().int().optional(),
+  });
+
+  const _VndAntTextEditor20241022 = z.object({
+    type: z.literal('vnd.ant.tools.text_editor_20241022'),
+  });
+
+  const _VndAntBash20241022 = z.object({
+    type: z.literal('vnd.ant.tools.bash_20241022'),
+  });
+
   /// Tool Definition
 
   /**
@@ -364,6 +382,9 @@ export namespace AixWire_Tooling {
   export const Tool_schema = z.discriminatedUnion('type', [
     _FunctionCallTool_schema,
     _CodeExecutionTool_schema,
+    _VndAntComputer20241022,
+    _VndAntTextEditor20241022,
+    _VndAntBash20241022,
   ]);
 
   /// Tools Policy
@@ -407,10 +428,13 @@ export namespace AixWire_API {
     vndAntThinkingBudget: z.number().nullable().optional(),
     vndGeminiShowThoughts: z.boolean().optional(),
     vndGeminiThinkingBudget: z.number().optional(),
+    vndGeminiAspectRatio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9']).optional(),
     vndOaiResponsesAPI: z.boolean().optional(),
     vndOaiReasoningEffort: z.enum(['minimal', 'low', 'medium', 'high']).optional(),
     vndOaiRestoreMarkdown: z.boolean().optional(),
+    vndOaiVerbosity: z.enum(['low', 'medium', 'high']).optional(),
     vndOaiWebSearchContext: z.enum(['low', 'medium', 'high']).optional(),
+    vndOaiImageGeneration: z.enum(['mq', 'hq', 'hq_edit', 'hq_png']).optional(),
     vndPerplexityDateFilter: z.enum(['unfiltered', '1m', '3m', '6m', '1y']).optional(),
     vndPerplexitySearchMode: z.enum(['default', 'academic']).optional(),
     vndXaiSearchMode: z.enum(['auto', 'on', 'off']).optional(),
@@ -608,6 +632,7 @@ export namespace AixWire_Particles {
     | { p: 'cer', id: string, error: DMessageToolResponsePart['error'], result: string, executor: 'gemini_auto_inline', environment: DMessageToolResponsePart['environment'] }
     | { p: 'ia', mimeType: string, a_b64: string, label?: string, generator?: string, durationMs?: number } // inline audio, complete
     | { p: 'ii', mimeType: string, i_b64: string, label?: string, generator?: string, prompt?: string } // inline image, complete
-    | { p: 'urlc', title: string, url: string, num?: number, from?: number, to?: number, text?: string, pubTs?: number }; // url citation - pubTs: publication timestamp
+    | { p: 'urlc', title: string, url: string, num?: number, from?: number, to?: number, text?: string, pubTs?: number } // url citation - pubTs: publication timestamp
+    | { p: 'vp', text: string, mot: 'search-web' | 'gen-image' }; // void placeholder - temporary status text that gets wiped when real content arrives
 
 }

@@ -1,7 +1,7 @@
-import { escapeXml } from '~/server/wire';
-
-import type { AixAPI_Model, AixAPIChatGenerate_Request, AixMessages_ChatMessage, AixParts_DocPart, AixParts_MetaInReferenceToPart, AixTools_ToolDefinition, AixTools_ToolsPolicy } from '../../../api/aix.wiretypes';
+import type { AixAPI_Model, AixAPIChatGenerate_Request, AixMessages_ChatMessage, AixTools_ToolDefinition, AixTools_ToolsPolicy } from '../../../api/aix.wiretypes';
 import { AnthropicWire_API_Message_Create, AnthropicWire_Blocks } from '../../wiretypes/anthropic.wiretypes';
+
+import { aixSpillShallFlush, aixSpillSystemToUser, approxDocPart_To_String, approxInReferenceTo_To_XMLString } from './adapters.common';
 
 
 // configuration
@@ -14,7 +14,10 @@ const hotFixMapModelImagesToUser = true;
 
 type TRequest = AnthropicWire_API_Message_Create.Request;
 
-export function aixToAnthropicMessageCreate(model: AixAPI_Model, chatGenerate: AixAPIChatGenerate_Request, streaming: boolean): TRequest {
+export function aixToAnthropicMessageCreate(model: AixAPI_Model, _chatGenerate: AixAPIChatGenerate_Request, streaming: boolean): TRequest {
+
+  // Pre-process CGR - approximate spill of System to User message
+  const chatGenerate = aixSpillSystemToUser(_chatGenerate);
 
   // Convert the system message
   let systemMessage: TRequest['system'] = undefined;
@@ -30,6 +33,10 @@ export function aixToAnthropicMessageCreate(model: AixAPI_Model, chatGenerate: A
           acc.push(AnthropicWire_Blocks.TextBlock(approxDocPart_To_String(part)));
           break;
 
+        case 'inline_image':
+          // we have already removed image parts from the system message
+          throw new Error('Anthropic: images have to be in user messages, not in system message');
+
         case 'meta_cache_control':
           if (!acc.length)
             console.warn('Anthropic: cache_control without a message to attach to');
@@ -40,6 +47,7 @@ export function aixToAnthropicMessageCreate(model: AixAPI_Model, chatGenerate: A
           break;
 
         default:
+          const _exhaustiveCheck: never = part;
           throw new Error(`Unsupported part type in System message: ${(part as any).pt}`);
       }
       return acc;
@@ -75,6 +83,12 @@ export function aixToAnthropicMessageCreate(model: AixAPI_Model, chatGenerate: A
         currentMessage = { role, content: [] };
       }
       currentMessage.content.push(content);
+    }
+
+    // Flush: interrupt batching within the same-role and finalize the current message
+    if (aixSpillShallFlush(aixMessage) && currentMessage) {
+      chatMessages.push(currentMessage);
+      currentMessage = null;
     }
   }
   if (currentMessage)
@@ -291,6 +305,27 @@ function _toAnthropicTools(itds: AixTools_ToolDefinition[]): NonNullable<TReques
       case 'code_execution':
         throw new Error('Gemini code interpreter is not supported');
 
+      case 'vnd.ant.tools.computer_20241022':
+        return {
+          type: 'computer_20241022',
+          name: 'computer',
+          display_width_px: itd.display_width,
+          display_height_px: itd.display_height,
+          ...(itd.display_number !== undefined && { display_number: itd.display_number }),
+        };
+
+      case 'vnd.ant.tools.text_editor_20241022':
+        return {
+          type: 'text_editor_20241022',
+          name: 'str_replace_editor',
+        };
+
+      case 'vnd.ant.tools.bash_20241022':
+        return {
+          type: 'bash_20241022',
+          name: 'bash',
+        };
+
     }
   });
 }
@@ -304,28 +339,4 @@ function _toAnthropicToolChoice(itp: AixTools_ToolsPolicy): NonNullable<TRequest
     case 'function_call':
       return { type: 'tool' as const, name: itp.function_call.name };
   }
-}
-
-
-// Approximate conversions - alternative approaches should be tried until we find the best one
-
-export function approxDocPart_To_String({ ref, data }: AixParts_DocPart /*, wrapFormat?: 'markdown-code'*/): string {
-  // NOTE: Consider a better representation here
-  //
-  // We use the 'legacy' markdown encoding, but we may consider:
-  //  - '<doc id='ref' title='title' version='version'>\n...\n</doc>'
-  //  - ```doc id='ref' title='title' version='version'\n...\n```
-  //  - # Title [id='ref' version='version']\n...\n
-  //  - ...more ideas...
-  //
-  return '```' + (ref || '') + '\n' + data.text + '\n```\n';
-}
-
-export function approxInReferenceTo_To_XMLString(irt: AixParts_MetaInReferenceToPart): string | null {
-  const refs = irt.referTo.map(r => escapeXml(r.mText));
-  if (!refs.length)
-    return null; // `<context>User provides no specific references</context>`;
-  return refs.length === 1
-    ? `<context>User refers to this in particular:<ref>${refs[0]}</ref></context>`
-    : `<context>User refers to ${refs.length} items:<ref>${refs.join('</ref><ref>')}</ref></context>`;
 }
