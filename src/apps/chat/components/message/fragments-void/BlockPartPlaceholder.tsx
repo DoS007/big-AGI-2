@@ -1,8 +1,9 @@
 import * as React from 'react';
 
 import type { SxProps } from '@mui/joy/styles/types';
-import { Chip } from '@mui/joy';
+import { Box, Chip } from '@mui/joy';
 import BrushRoundedIcon from '@mui/icons-material/BrushRounded';
+import CodeIcon from '@mui/icons-material/Code';
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 
@@ -44,7 +45,8 @@ const _styles = {
     // minWidth: 200, // would work on mobile, but no clear advantage
     // fontWeight: 500,
     minHeight: '2rem',
-    mx: 1.5, // example: RenderPlainText has _styles.typography.mx = 1.5
+    // replaced by Box with px: 2
+    // mx: 1.5, // example: RenderPlainText has _styles.typography.mx = 1.5
     pl: 1.5,
     pr: 1.75,
     borderRadius: 'sm',
@@ -60,11 +62,12 @@ const _styles = {
 const modelOperationConfig = {
   'search-web': { Icon: SearchRoundedIcon, color: 'neutral' },
   'gen-image': { Icon: BrushRoundedIcon, color: 'success' },
+  'code-exec': { Icon: CodeIcon, color: 'primary' },
 } as const;
 
 
 function ModelOperationChip(props: {
-  mot: 'search-web' | 'gen-image',
+  mot: 'search-web' | 'gen-image' | 'code-exec',
   cts: number,
   text: string,
   contentScaling: ContentScaling,
@@ -88,7 +91,7 @@ function ModelOperationChip(props: {
     return () => {
       clearInterval(timerId);
       setElapsedSeconds(0);
-    }
+    };
   }, [props.cts, timerActive]);
 
   return (
@@ -159,12 +162,14 @@ export function BlockPartPlaceholder(props: {
   if (props.placeholderModelOp)
     return (
       <BlocksContainer>
-        <ModelOperationChip
-          text={props.placeholderText}
-          mot={props.placeholderModelOp.mot}
-          cts={props.placeholderModelOp.cts}
-          contentScaling={adjustContentScaling(props.contentScaling, -1)}
-        />
+        <Box sx={{ px: 1.5 }}>
+          <ModelOperationChip
+            text={props.placeholderText}
+            mot={props.placeholderModelOp.mot}
+            cts={props.placeholderModelOp.cts}
+            contentScaling={adjustContentScaling(props.contentScaling, -1)}
+          />
+        </Box>
       </BlocksContainer>
     );
 

@@ -353,6 +353,16 @@ export namespace OpenAIWire_API_Chat_Completions {
       }).nullable().optional(),
     }).optional(),
 
+    // -- Vendor-specific extensions to the request --
+
+    // [OpenRouter, 2025-10-22] OpenRouter-specific plugins parameter for web search and other hosted tools
+    plugins: z.array(z.object({
+      id: z.literal('web'), // plugin identifier, e.g., 'web
+      engine: z.enum(['native', 'exa']).optional(), // search engine: 'native', 'exa', or undefined (auto)
+      max_results: z.number().int().positive().optional(), // defaults to 5
+      search_prompt: z.string().optional(), // custom search prompt
+    })).optional(),
+
     // [Perplexity, 2025-06-23] Perplexity-specific search parameters
     search_mode: z.enum(['academic']).optional(), // Academic filter for scholarly sources
     search_after_date_filter: z.string().optional(), // Date filter in MM/DD/YYYY format
@@ -418,6 +428,7 @@ export namespace OpenAIWire_API_Chat_Completions {
       reasoning_tokens: z.number().optional(), // [Discord, 2024-04-10] reported missing
       // text_tokens: z.number().optional(), // [Discord, 2024-04-10] revealed as present on custom OpenAI endpoint - not using it here yet
       audio_tokens: z.number().optional(), // [OpenAI, 2024-10-01] audio tokens used in the completion (charged at a different rate)
+      // image_tokens: z.number().optional(), // [OpenRouter, 2025-10-22] first seen.. sounds likely?
       accepted_prediction_tokens: z.number().optional(), // [OpenAI, 2024-11-05] Predicted Outputs
       rejected_prediction_tokens: z.number().optional(), // [OpenAI, 2024-11-05] Predicted Outputs
     }).optional() // not present in other APIs yet
@@ -426,6 +437,26 @@ export namespace OpenAIWire_API_Chat_Completions {
     // [DeepSeek, 2024-08-02] context caching on disk
     prompt_cache_hit_tokens: z.number().optional(),
     prompt_cache_miss_tokens: z.number().optional(),
+
+    // [Perplexity, 2025-10-20] cost breakdown (object format)
+    // [OpenRouter, 2025-01-22] cost as direct number
+    cost: z.union([
+      z.number(), // OpenRouter sends cost as a number directly
+      z.looseObject({
+        input_tokens_cost: z.number().optional(),
+        output_tokens_cost: z.number().optional(),
+        request_cost: z.number().optional(),
+        total_cost: z.number().optional(),
+      }),
+    ]).nullish(),
+
+    // [OpenRouter, 2025-10-22] additional usage fields when used with Chutes
+    // is_byok: z.boolean().optional(), // Bring Your Own Key indicator
+    // cost_details: z.object({
+    //   upstream_inference_cost: z.number().optional(),
+    //   upstream_inference_prompt_cost: z.number().optional(),
+    //   upstream_inference_completions_cost: z.number().optional(),
+    // }).optional(),
   }).nullable();
 
   /**
@@ -456,8 +487,8 @@ export namespace OpenAIWire_API_Chat_Completions {
     audio: z.object({
       id: z.string(),
       data: z.string(), // Base64 encoded audio data
-      expires_at: z.number(), // Unix timestamp
       transcript: z.string().optional(),
+      expires_at: z.number(), // Unix timestamp
     }).nullable().optional(),
 
   });
@@ -560,7 +591,15 @@ export namespace OpenAIWire_API_Chat_Completions {
     role: z.literal('assistant').optional()
       .nullable(), // [Deepseek] added .nullable()
     // delta-text content
-    content: z.string().nullable().optional(),
+    content: z.string().nullish()
+      // [Mistral, 2025-10-15] Mistral SPEC-BREAKING thinking fragments
+      .or(z.array(z.object({
+        type: z.string(), // 'thinking', but relaxed
+        thinking: z.array(z.object({
+          type: z.string(),
+          text: z.string(),
+        })).optional(),
+      }))),
     // delta-reasoning content
     reasoning_content: z.string().nullable().optional(), // [Deepseek, 2025-01-20]
     reasoning: z.string().optional() // [OpenRouter, 2025-01-24]
@@ -574,6 +613,16 @@ export namespace OpenAIWire_API_Chat_Completions {
      * not documented yet in the API guide; shall improve this once defined
      */
     annotations: z.array(OpenAIWire_ContentParts.OpenAI_AnnotationObject_schema).optional(),
+    /**
+     * [OpenAI, 2024-10-17] Audio streaming
+     * NOTE: this has been observed from the stream on 2025-10-13 - seems the same as the NS version
+     */
+    audio: z.object({
+      id: z.string().optional(), // omitted in subsequent chunks
+      data: z.string().optional(), // incremental base64 audio data
+      transcript: z.string().optional(), // incremental transcript
+      expires_at: z.number().optional(), // seems to be only in the last chunk
+    }).optional(),
   });
 
   const ChunkChoice_schema = z.object({
@@ -595,8 +644,14 @@ export namespace OpenAIWire_API_Chat_Completions {
     object: z.enum([
       'chat.completion.chunk',
       'chat.completion', // [Perplexity] sent an email on 2024-07-14 to inform them about the misnomer
+      /**
+       * [Perplexity, 2025-10-20] Undocumented full-response-like message type
+       * - it's a .chunk, delta with delta='', and finish_reason set (to 'stop') and 'usage.costs' set
+       */
+      'chat.completion.done',
       '', // [Azure] bad response: the first packet communicates 'prompt_filter_results'
     ])
+      // .or(z.string()) // [Perplexity, 2025-10-20] future resiliency post perplexity still breaking the openai compatibility
       .optional(), // [FastAPI, 2025-04-24] the FastAPI dialect sadly misses the 'chat.completion.chunk' type
     id: z.string(),
 
@@ -1360,7 +1415,7 @@ export namespace OpenAIWire_API_Responses {
     // Unused
     // metadata: z.record(z.string(), z.any()).optional(), // set of 16 key-value pairs that can be attached to an object
     // service_tier: z.enum(['auto', 'default', 'flex', 'priority']).nullish(),
-    // prompt: z.object({
+    // prompt: z.object({ // reference to a prompt template and its variables
     //   id: z.string(),
     //   version: z.string().optional(),
     //   variables: z.record(z.string(), z.any()).optional(),
@@ -1378,7 +1433,9 @@ export namespace OpenAIWire_API_Responses {
     id: z.string(), // unique ID for this response
     created_at: z.number(), // unix timestamp (in seconds)
     status: z.enum(['completed', 'failed', 'in_progress', 'cancelled', 'queued', 'incomplete']),
-    incomplete_details: z.object({ reason: z.string() }).nullish(), // why the response is incomplete
+    incomplete_details: z.object({
+      reason: z.union([z.enum(['max_output_tokens']), z.string()]),
+    }).nullish(), // why the response is incomplete
     error: z.object({ code: z.string(), message: z.string() }).nullish(), // (null)
 
     model: z.string(), // model used for the response
@@ -1397,23 +1454,29 @@ export namespace OpenAIWire_API_Responses {
       total_tokens: z.number(),
     }).nullish(),
 
+    // Echo State management & API options (with defaults)
+    background: z.boolean().optional(), // (false)
+    store: z.boolean().optional(), // (true)
+
     // NOTE: the following fields seem an exact echo of what's in the request - let's ignore these for now
-    // background: ... (false)
-    // instructions: ...
-    // max_output_tokens: ...
-    // metadata: ...
-    // parallel_tool_calls: ...
-    // previous_response_id: ... (null)
-    // prompt: ...
-    // reasoning: ...
-    // service_tier: ...
-    // temperature: ...
-    // text: ...
-    // tool_choice: ...
-    // tools: ...
-    // top_p: ...
-    // truncation: ...
-    // user: ...
+    // instructions: z.string().nullable(), // null
+    // max_output_tokens: z.number(),
+    // max_tool_calls: z.number().nullable(), // null
+    // metadata: ... (optional)
+    // parallel_tool_calls: z.boolean(), // true
+    // previous_response_id: z.string().nullable(), // null
+    // prompt_cache_key: z.string().nullable(), // (optional)
+    // prompt: ... // (optional)
+    // reasoning: ... // { ... }
+    // service_tier: ... // 'auto'
+    // temperature: ... // 1
+    // text: ... // { .. }
+    // tool_choice: ... // 'auto'
+    // tools: ... // e.g. [{ type: 'web_search_preview', search_context_size: 'medium', ... }]
+    // top_logprobs: ... // 0
+    // top_p: ... // 1
+    // truncation: ... // 'disabled'
+    // user: ... // null
 
   });
 

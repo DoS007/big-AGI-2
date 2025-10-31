@@ -6,12 +6,16 @@ import ClearIcon from '@mui/icons-material/Clear';
 import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 
+import type { DLLMMaxOutputTokens } from '~/common/stores/llms/llms.types';
 import { DModelParameterId, DModelParameterRegistry, DModelParameterSpec, DModelParameterValues, FALLBACK_LLM_PARAM_RESPONSE_TOKENS, FALLBACK_LLM_PARAM_TEMPERATURE, getAllModelParameterValues } from '~/common/stores/llms/llms.parameters';
 import { FormSelectControl } from '~/common/components/forms/FormSelectControl';
 import { FormSliderControl } from '~/common/components/forms/FormSliderControl';
 import { FormSwitchControl } from '~/common/components/forms/FormSwitchControl';
 import { InlineError } from '~/common/components/InlineError';
+import { useUIComplexityMode } from '~/common/stores/store-ui';
 import { webGeolocationRequest } from '~/common/util/webGeolocationUtils';
+
+import { AnthropicSkillsConfig } from './AnthropicSkillsConfig';
 
 
 const _UNSPECIFIED = '_UNSPECIFIED' as const;
@@ -59,17 +63,40 @@ const _geminiAspectRatioOptions = [
   { value: '3:2', label: '3:2', description: 'Landscape' },
   { value: '3:4', label: '3:4', description: 'Portrait' },
   { value: '4:3', label: '4:3', description: 'Landscape' },
-  { value: '4:5', label: '4:5', description: 'Portrait' },
-  { value: '5:4', label: '5:4', description: 'Landscape' },
   { value: '9:16', label: '9:16', description: 'Tall portrait' },
   { value: '16:9', label: '16:9', description: 'Wide landscape' },
   { value: '21:9', label: '21:9', description: 'Ultra wide' },
+] as const;
+
+const _geminiGoogleSearchOptions = [
+  { value: 'unfiltered', label: 'On', description: 'Web Search' },
+  { value: '1d', label: 'Last Day', description: 'Last 24 hours' },
+  { value: '1w', label: 'Last Week', description: 'Recent results' },
+  { value: '1m', label: 'Last Month', description: 'Results from last month' },
+  { value: '1y', label: 'Last Year', description: 'Results since last year' },
+  // { value: '6m', label: 'Last 6 Months', description: 'Results from last 6 months' },
+  { value: _UNSPECIFIED, label: 'Off', description: 'Default (disabled)' },
 ] as const;
 
 const _xaiSearchModeOptions = [
   { value: 'auto', label: 'Auto', description: 'Model decides (default)' },
   { value: 'on', label: 'On', description: 'Always search active sources' },
   { value: 'off', label: 'Off', description: 'Never perform a search' },
+] as const;
+
+const _antWebSearchOptions = [
+  { value: 'auto', label: 'On', description: 'Enable web search for real-time information' },
+  { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
+] as const;
+
+const _antWebFetchOptions = [
+  { value: 'auto', label: 'On', description: 'Enable fetching web content and PDFs' },
+  { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
+] as const;
+
+const _ortWebSearchOptions = [
+  { value: 'auto', label: 'On', description: 'Enable web search (native for OpenAI/Anthropic, Exa for others)' },
+  { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
 ] as const;
 
 const _imageGenerationOptions = [
@@ -89,9 +116,10 @@ const _xaiDateFilterOptions = [
   { value: '1y', label: 'Last Year', description: 'Results from last 12 months' },
 ] as const;
 
+
 export function LLMParametersEditor(props: {
   // constants
-  maxOutputTokens: number | null,
+  maxOutputTokens: DLLMMaxOutputTokens,
   parameterSpecs: DModelParameterSpec<DModelParameterId>[],
   parameterOmitTemperature?: boolean,
   baselineParameters: DModelParameterValues,
@@ -104,6 +132,10 @@ export function LLMParametersEditor(props: {
   // rendering options
   simplified?: boolean,
 }) {
+
+  // external state
+  const isExtra = useUIComplexityMode() === 'extra';
+
 
   // registry (const) values
   const defAntTB = DModelParameterRegistry['llmVndAntThinkingBudget'];
@@ -123,8 +155,13 @@ export function LLMParametersEditor(props: {
     llmResponseTokens = FALLBACK_LLM_PARAM_RESPONSE_TOKENS, // fallback for undefined, result is number | null
     llmTemperature = FALLBACK_LLM_PARAM_TEMPERATURE, // fallback for undefined, result is number | null
     llmForceNoStream,
+    llmVndAnt1MContext,
+    llmVndAntSkills,
     llmVndAntThinkingBudget,
+    llmVndAntWebFetch,
+    llmVndAntWebSearch,
     llmVndGeminiAspectRatio,
+    llmVndGeminiGoogleSearch,
     llmVndGeminiShowThoughts,
     llmVndGeminiThinkingBudget,
     llmVndOaiReasoningEffort,
@@ -134,6 +171,7 @@ export function LLMParametersEditor(props: {
     llmVndOaiWebSearchGeolocation,
     llmVndOaiImageGeneration,
     llmVndOaiVerbosity,
+    llmVndOrtWebSearch,
     llmVndPerplexityDateFilter,
     llmVndPerplexitySearchMode,
     llmVndXaiSearchMode,
@@ -243,6 +281,50 @@ export function LLMParametersEditor(props: {
       />
     )}
 
+    {showParam('llmVndAntWebSearch') && (
+      <FormSelectControl
+        title='Web Search'
+        tooltip='Enable web search for real-time information retrieval'
+        value={llmVndAntWebSearch ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value || value === 'off') onRemoveParameter('llmVndAntWebSearch');
+          else onChangeParameter({ llmVndAntWebSearch: value });
+        }}
+        options={_antWebSearchOptions}
+      />
+    )}
+
+    {showParam('llmVndAntWebFetch') && (
+      <FormSelectControl
+        title='Web Fetch'
+        tooltip='Enable fetching full content from web pages and PDF documents'
+        value={llmVndAntWebFetch ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value || value === 'off') onRemoveParameter('llmVndAntWebFetch');
+          else onChangeParameter({ llmVndAntWebFetch: value });
+        }}
+        options={_antWebFetchOptions}
+      />
+    )}
+
+    {showParam('llmVndAnt1MContext') && (
+      <FormSwitchControl
+        title='1M Context Window (Beta)'
+        description='Enable 1M token context'
+        tooltip='Enables the 1M token context window with premium pricing for &gt;200K input tokens. - https://docs.claude.com/en/docs/build-with-claude/context-windows#1m-token-context-window'
+        checked={!!llmVndAnt1MContext}
+        onChange={checked => {
+          if (!checked) onRemoveParameter('llmVndAnt1MContext');
+          else onChangeParameter({ llmVndAnt1MContext: true });
+        }}
+      />
+    )}
+
+    {isExtra && showParam('llmVndAntSkills') && (
+      <AnthropicSkillsConfig llmVndAntSkills={llmVndAntSkills} onChangeParameter={onChangeParameter} onRemoveParameter={onRemoveParameter} />
+    )}
+
+
     {showParam('llmVndGeminiAspectRatio') && (
       <FormSelectControl
         title='Aspect Ratio'
@@ -299,6 +381,19 @@ export function LLMParametersEditor(props: {
             </IconButton>
           </Tooltip>
         }
+      />
+    )}
+
+    {showParam('llmVndGeminiGoogleSearch') && (
+      <FormSelectControl
+        title='Google Search'
+        // tooltip='Enable Google Search grounding to ground responses in real-time web content. Optionally filter results by publication date.'
+        value={llmVndGeminiGoogleSearch ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiGoogleSearch');
+          else onChangeParameter({ llmVndGeminiGoogleSearch: value });
+        }}
+        options={_geminiGoogleSearchOptions}
       />
     )}
 
@@ -457,6 +552,21 @@ export function LLMParametersEditor(props: {
         }}
       />
     )}
+
+
+    {showParam('llmVndOrtWebSearch') && (
+      <FormSelectControl
+        title='Web Search'
+        tooltip='Enable OpenRouter web search plugin. Uses native search for OpenAI/Anthropic models, Exa for others. Adds web citations to responses.'
+        value={llmVndOrtWebSearch ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndOrtWebSearch');
+          else onChangeParameter({ llmVndOrtWebSearch: value });
+        }}
+        options={_ortWebSearchOptions}
+      />
+    )}
+
 
     {showParam('llmVndXaiSearchMode') && (
       <FormSelectControl

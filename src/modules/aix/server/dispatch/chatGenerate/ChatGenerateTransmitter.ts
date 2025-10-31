@@ -3,11 +3,12 @@ import { serverSideId } from '~/server/trpc/trpc.nanoid';
 
 import type { AixWire_Particles } from '../../api/aix.wiretypes';
 
-import type { IParticleTransmitter } from './IParticleTransmitter';
+import type { IParticleTransmitter } from './parsers/IParticleTransmitter';
 
 
 // configuration
 const ENABLE_EXTRA_DEV_MESSAGES = true;
+const DEBUG_REQUEST_MAX_BODY_LENGTH = 100_000;
 /**
  * This is enabled by default because probabilistically unlikely -- however there will be false positives/negatives.
  *
@@ -59,7 +60,7 @@ export class ChatGenerateTransmitter implements IParticleTransmitter {
   private freshMetrics: boolean = false;
 
 
-  constructor(private readonly prettyDialect: string, _throttleTimeMs: number | undefined) {
+  constructor(private readonly prettyDialect: string /*, _throttleTimeMs: number | undefined */) {
     // TODO: implement throttling on a particle basis
 
     // Not really used for now
@@ -126,14 +127,26 @@ export class ChatGenerateTransmitter implements IParticleTransmitter {
     this.setEnded('issue-rpc');
   }
 
-  addDebugRequest(hideSensitiveData: boolean, url: string, headers: HeadersInit, body: object) {
+  addDebugRequest(hideSensitiveData: boolean, url: string, headers: HeadersInit, body?: object) {
+    const bodyStr = body === undefined ? '' : JSON.stringify(body, null, 2);
+
+    // ellipsize large bodies (e.g., many base64 images) to avoid huge debug packets
+    let processedBody = bodyStr;
+    if (bodyStr.length > DEBUG_REQUEST_MAX_BODY_LENGTH) {
+      const omittedCount = bodyStr.length - DEBUG_REQUEST_MAX_BODY_LENGTH;
+      const ellipsis = `\n...[${omittedCount.toLocaleString()} chars omitted]...\n`;
+      const half = Math.floor((DEBUG_REQUEST_MAX_BODY_LENGTH - ellipsis.length) / 2);
+      processedBody = bodyStr.slice(0, half) + ellipsis + bodyStr.slice(-half);
+    }
+
     this.transmissionQueue.push({
       cg: '_debugDispatchRequest',
       security: 'dev-env',
       dispatchRequest: {
         url: url,
         headers: hideSensitiveData ? '(hidden sensitive data)' : JSON.stringify(headers, null, 2),
-        body: JSON.stringify(body, null, 2),
+        body: processedBody,
+        bodySize: body === undefined ? 0 : JSON.stringify(body).length, // actual size, without pretty-printing or truncation
       },
     });
   }
@@ -305,8 +318,10 @@ export class ChatGenerateTransmitter implements IParticleTransmitter {
 
   /** Undocumented, internal, as the IPartTransmitter callers will call setDialectTerminatingIssue instead */
   private _addIssue(issueId: AixWire_Particles.CGIssueId, issueText: string, forceLogWarn: boolean) {
-    if (forceLogWarn || ENABLE_EXTRA_DEV_MESSAGES || SERVER_DEBUG_WIRE)
-      console.warn(`Aix.${this.prettyDialect} (${issueId}): ${issueText}`);
+    if (forceLogWarn || ENABLE_EXTRA_DEV_MESSAGES || SERVER_DEBUG_WIRE) {
+      const logLevel = issueId === 'dispatch-fetch' ? 'log' : 'warn';
+      console[logLevel](`Aix.${this.prettyDialect} ${issueId}: ${issueText}`);
+    }
 
     // queue the issue
     this.endMessagePart();
@@ -423,6 +438,23 @@ export class ChatGenerateTransmitter implements IParticleTransmitter {
     // send it right away if there's no other content (this may be the first particle)
     if (this.currentPart === null && this.currentText === null)
       this._queueParticleS();
+  }
+
+  /** Communicates the upstream response handle, for remote control/resumability */
+  setUpstreamHandle(handle: string, _type: 'oai-responses' /* the only one for now, used for type safety */) {
+    if (SERVER_DEBUG_WIRE)
+      console.log('|response-handle|', handle);
+    // NOTE: if needed, we could store the handle locally for server-side resumability, but we just implement client-side (correction, manual) for now
+    this.transmissionQueue.push({
+      cg: 'set-upstream-handle',
+      handle: {
+        uht: 'vnd.oai.responses',
+        responseId: handle,
+        expiresAt: Date.now() + 30 * 24 * 3600 * 1000, // default: 30 days expiry
+      },
+    });
+    // send it right away, in case the connection closes soon
+    this._queueParticleS();
   }
 
   /** Update the metrics, sent twice (after the first call, and then at the end of the transmission) */

@@ -1,23 +1,30 @@
 import * as React from 'react';
 import TimeAgo from 'react-timeago';
 
-import { Box, Button, ButtonGroup, Divider, FormControl, Input, Switch, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, ButtonGroup, Divider, FormControl, Grid, IconButton, Input, Link, Switch, Tooltip, Typography } from '@mui/joy';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import StarIcon from '@mui/icons-material/Star';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 
-import type { DLLMId } from '~/common/stores/llms/llms.types';
 import type { DPricingChatGenerate } from '~/common/stores/llms/llms.pricing';
+import { DLLMId, getLLMContextTokens, getLLMMaxOutputTokens, isLLMVisible } from '~/common/stores/llms/llms.types';
 import { FormLabelStart } from '~/common/components/forms/FormLabelStart';
 import { GoodModal } from '~/common/components/modals/GoodModal';
 import { ModelDomainsList, ModelDomainsRegistry } from '~/common/stores/llms/model.domains.registry';
+import { TooltipOutlined } from '~/common/components/TooltipOutlined';
 import { llmsStoreActions } from '~/common/stores/llms/store-llms';
+import { useIsMobile } from '~/common/components/useMatchMedia';
 import { useModelDomains } from '~/common/stores/llms/hooks/useModelDomains';
 import { useLLM } from '~/common/stores/llms/llms.hooks';
 
 import { LLMOptionsGlobal } from './LLMOptionsGlobal';
+
+
+// configuration
+export const ENABLE_STARRING_ICON = true;
+const ENABLE_HIDING_ICON = false;
 
 
 function prettyPricingComponent(pricingChatGenerate: DPricingChatGenerate): React.ReactNode {
@@ -70,28 +77,82 @@ export function LLMOptionsModal(props: { id: DLLMId, onClose: () => void }) {
   const [showDetails, setShowDetails] = React.useState(false);
 
   // external state
+  const isMobile = useIsMobile();
   const llm = useLLM(props.id);
   const domainAssignments = useModelDomains();
-  const { removeLLM, updateLLM, assignDomainModelId } = llmsStoreActions();
+  const { removeLLM, updateLLM, assignDomainModelId, resetLLMUserParameters } = llmsStoreActions();
+
+  const handleResetParameters = React.useCallback(() => llm?.id && resetLLMUserParameters(llm?.id), [llm?.id, resetLLMUserParameters]);
 
   if (!llm)
     return <>Options issue: LLM not found for id {props.id}</>;
 
   const handleLlmLabelSet = (event: React.ChangeEvent<HTMLInputElement>) => updateLLM(llm.id, { label: event.target.value || '' });
 
-  const handleLlmVisibilityToggle = () => updateLLM(llm.id, { hidden: !llm.hidden });
+  const handleLlmVisibilityToggle = () => updateLLM(llm.id, { userHidden: isLLMVisible(llm) });
 
   const handleLlmStarredToggle = () => updateLLM(llm.id, { userStarred: !llm.userStarred });
+
+  const handleContextTokensChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const value = event.target.value;
+    updateLLM(llm.id, { userContextTokens: value ? parseInt(value, 10) : undefined });
+  };
+
+  const handleContextTokensReset = () => updateLLM(llm.id, { userContextTokens: undefined });
+
+  const handleMaxOutputTokensChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const value = event.target.value;
+    updateLLM(llm.id, { userMaxOutputTokens: value ? parseInt(value, 10) : undefined });
+  };
+
+  const handleMaxOutputTokensReset = () => updateLLM(llm.id, { userMaxOutputTokens: undefined });
 
   const handleLlmDelete = () => {
     removeLLM(llm.id);
     props.onClose();
   };
 
+  const visible = isLLMVisible(llm);
+
+  const hasUserParameters = llm.userParameters && Object.keys(llm.userParameters).length > 0;
+  const resetButton = !hasUserParameters ? null : (
+    <Link
+      component='button'
+      color='neutral'
+      level='body-sm'
+      onClick={handleResetParameters}
+    >
+      Reset to defaults ...
+    </Link>
+  );
+
   return (
 
     <GoodModal
-      title={<><b>{llm.label}</b> options</>}
+      autoOverflow
+      // strongerTitle
+      title={
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: { xs: 1, md: 3 } }}>
+
+          {/* Star + Model Name */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0, md: 1 } }}>
+            {ENABLE_STARRING_ICON && <TooltipOutlined title={llm.userStarred ? 'Unstar this model' : 'Star this model for quick access'}>
+              <IconButton size='sm' onClick={handleLlmStarredToggle} sx={{ ml: -0.5 }}>
+                {llm.userStarred ? <StarIcon sx={{ color: '#fad857', fontSize: 'xl2' }} /> : <StarBorderIcon />}
+              </IconButton>
+            </TooltipOutlined>}
+            {ENABLE_HIDING_ICON && <TooltipOutlined title={visible ? 'Show this model in the app' : 'Hide this model from the app'}>
+              <IconButton size='sm' onClick={handleLlmVisibilityToggle} sx={{ ml: -0.5 }}>
+                {visible ? <VisibilityIcon sx={{ fontSize: 'xl' }} /> : <VisibilityOffIcon />}
+              </IconButton>
+            </TooltipOutlined>}
+            <span><b>{llm.label}</b> options</span>
+          </Box>
+
+          {/* [Desktop] Reset to default - show only when user has customized parameters */}
+          {!isMobile && resetButton}
+        </Box>
+      }
       open={!!props.id} onClose={props.onClose}
       startButton={
         <Button variant='plain' color='neutral' onClick={handleLlmDelete} startDecorator={<DeleteOutlineIcon />}>
@@ -102,14 +163,33 @@ export function LLMOptionsModal(props: { id: DLLMId, onClose: () => void }) {
 
       <Box sx={{ display: 'grid', gap: 'var(--Card-padding)' }}>
         <LLMOptionsGlobal llm={llm} />
+        {/* On Mobile, display the button below the settings */}
+        {isMobile && resetButton}
       </Box>
 
       <Divider />
 
-      <FormControl orientation='horizontal' sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
-        <FormLabelStart title='Name' sx={{ minWidth: 80 }} />
-        <Input variant='outlined' value={llm.label} onChange={handleLlmLabelSet} />
-      </FormControl>
+      <Grid container spacing={2} alignItems='center'>
+
+        <Grid xs={12} md={8}>
+          <FormControl orientation='horizontal' sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
+            <FormLabelStart title='Name' sx={{ minWidth: 80 }} />
+            <Input variant='outlined' value={llm.label} onChange={handleLlmLabelSet} />
+          </FormControl>
+        </Grid>
+
+        <Grid xs={12} md={4}>
+          {!ENABLE_HIDING_ICON && <FormControl orientation='horizontal' sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
+            <FormLabelStart title='Visible' sx={{ minWidth: 80 }} />
+            <Tooltip title={visible ? 'Show this model in the list of Chat models' : 'Hide this model from the list of Chat models'}>
+              <Switch checked={visible} onChange={handleLlmVisibilityToggle}
+                      endDecorator={visible ? <VisibilityIcon /> : <VisibilityOffIcon />}
+                      slotProps={{ endDecorator: { sx: { minWidth: 26 } } }} />
+            </Tooltip>
+          </FormControl>}
+        </Grid>
+
+      </Grid>
 
       <FormControl orientation='horizontal' sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
         <FormLabelStart title='Assignment' description='Default model' sx={{ minWidth: 80 }} />
@@ -128,7 +208,7 @@ export function LLMOptionsModal(props: { id: DLLMId, onClose: () => void }) {
         </ButtonGroup>
       </FormControl>
 
-      <FormControl orientation='horizontal' sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
+      {!ENABLE_STARRING_ICON && <FormControl orientation='horizontal' sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
         <FormLabelStart title='Starred' sx={{ minWidth: 80 }} />
         <Tooltip title={llm.userStarred ? 'Unstar this model' : 'Star this model for quick access'}>
           <Switch checked={!!llm.userStarred} onChange={handleLlmStarredToggle}
@@ -136,30 +216,33 @@ export function LLMOptionsModal(props: { id: DLLMId, onClose: () => void }) {
                   slotProps={{ endDecorator: { sx: { minWidth: 26 } } }}
           />
         </Tooltip>
-      </FormControl>
+      </FormControl>}
 
-      <FormControl orientation='horizontal' sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
-        <FormLabelStart title='Visible' sx={{ minWidth: 80 }} />
-        <Tooltip title={!llm.hidden ? 'Show this model in the list of Chat models' : 'Hide this model from the list of Chat models'}>
-          <Switch checked={!llm.hidden} onChange={handleLlmVisibilityToggle}
-                  endDecorator={!llm.hidden ? <VisibilityIcon /> : <VisibilityOffIcon />}
-                  slotProps={{ endDecorator: { sx: { minWidth: 26 } } }} />
-        </Tooltip>
-      </FormControl>
+      <FormControl orientation='horizontal' sx={{ flexWrap: 'nowrap', gap: 1 }}>
 
-      <FormControl orientation='horizontal' sx={{ flexWrap: 'nowrap' }}>
-        <FormLabelStart title='Details' sx={{ minWidth: 80 }} onClick={() => setShowDetails(!showDetails)} />
+        <Link
+          component='button'
+          color='neutral'
+          level='title-sm'
+          onClick={() => setShowDetails(!showDetails)}
+          sx={{ color: 'text.primary', whiteSpace: 'nowrap', mb: 'auto', textDecoration: 'underline' }}
+        >
+          {showDetails ? 'Details:' : 'Details...'}
+        </Link>
+
         {showDetails && <Box sx={{ display: 'flex', flexDirection: 'column', wordBreak: 'break-word', gap: 1 }}>
-          {!!llm.description && <Typography level='body-sm'>
+          {!!llm.description && <Typography level='title-sm'>
             {llm.description}
           </Typography>}
+
           {!!llm.pricing?.chat?._isFree && <Typography level='body-xs'>
             🎁 Free model - note: refresh models to check for updates in pricing
           </Typography>}
+
           <Typography level='body-xs'>
             llm id: {llm.id}<br />
-            context tokens: <b>{llm.contextTokens ? llm.contextTokens.toLocaleString() : 'not provided'}</b>{` · `}
-            max output tokens: <b>{llm.maxOutputTokens ? llm.maxOutputTokens.toLocaleString() : 'not provided'}</b><br />
+            context tokens: <b>{getLLMContextTokens(llm)?.toLocaleString() ?? 'not provided'}</b>{` · `}
+            max output tokens: <b>{getLLMMaxOutputTokens(llm)?.toLocaleString() ?? 'not provided'}</b><br />
             {!!llm.created && <>created: <TimeAgo date={new Date(llm.created * 1000)} /><br /></>}
             {/*· tags: {llm.tags.join(', ')}*/}
             {!!llm.pricing?.chat && prettyPricingComponent(llm.pricing.chat)}
@@ -168,6 +251,52 @@ export function LLMOptionsModal(props: { id: DLLMId, onClose: () => void }) {
             {Object.keys(llm.initialParameters || {}).length > 0 && <>initial parameters: {JSON.stringify(llm.initialParameters, null, 2)}<br /></>}
             {Object.keys(llm.userParameters || {}).length > 0 && <>user parameters: {JSON.stringify(llm.userParameters, null, 2)}<br /></>}
           </Typography>
+
+          {/* Advanced: Token Overrides */}
+          <Grid container spacing={2} alignItems='center' sx={{ mt: 0.5 }}>
+            <Grid xs={12} md={6}>
+              <FormControl orientation='horizontal' sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
+                <FormLabelStart title='Context Window' description='Tokens Override' sx={{ minWidth: 120 }} />
+                <Input
+                  type='number'
+                  variant='outlined'
+                  placeholder={
+                    // NOTE: direct access to the underlying, instead of via getLLMContextTokens
+                    llm.contextTokens?.toLocaleString() ?? 'default'
+                  }
+                  value={llm.userContextTokens ?? ''}
+                  onChange={handleContextTokensChange}
+                  endDecorator={llm.userContextTokens !== undefined && (
+                    <Button size='sm' variant='plain' onClick={handleContextTokensReset}>Reset</Button>
+                  )}
+                  slotProps={{ input: { min: 1 } }}
+                  sx={{ flex: 1 }}
+                />
+              </FormControl>
+            </Grid>
+
+            <Grid xs={12} md={6}>
+              <FormControl orientation='horizontal' sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
+                <FormLabelStart title='Max Output' description='Tokens Override' sx={{ minWidth: 120 }} />
+                <Input
+                  type='number'
+                  variant='outlined'
+                  placeholder={
+                    // NOTE: direct access to the underlying, instead of via getLLMMaxOutputTokens
+                    llm.maxOutputTokens?.toLocaleString() ?? 'default'
+                  }
+                  value={llm.userMaxOutputTokens ?? ''}
+                  onChange={handleMaxOutputTokensChange}
+                  slotProps={{ input: { min: 1 } }}
+                  endDecorator={llm.userMaxOutputTokens !== undefined && (
+                    <Button size='sm' variant='plain' onClick={handleMaxOutputTokensReset}>Reset</Button>
+                  )}
+                  sx={{ flex: 1 }}
+                />
+              </FormControl>
+            </Grid>
+          </Grid>
+
         </Box>}
       </FormControl>
 

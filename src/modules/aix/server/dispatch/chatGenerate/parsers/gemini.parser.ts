@@ -1,6 +1,6 @@
 import type { AixWire_Particles } from '../../../api/aix.wiretypes';
 import type { ChatGenerateParseFunction } from '../chatGenerate.dispatch';
-import type { IParticleTransmitter } from '../IParticleTransmitter';
+import type { IParticleTransmitter } from './IParticleTransmitter';
 import { IssueSymbols } from '../ChatGenerateTransmitter';
 
 import { GeminiWire_API_Generate_Content, GeminiWire_Safety } from '../../wiretypes/gemini.wiretypes';
@@ -38,14 +38,26 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
   let groundingIndexNumber = 0;
 
   // this can throw, it's caught by the caller
-  return function(pt: IParticleTransmitter, eventData: string): void {
+  return function(pt: IParticleTransmitter, rawEventData: string): void {
 
     // Time to first event
     if (timeToFirstEvent === undefined)
       timeToFirstEvent = Date.now() - parserCreationTimestamp;
 
     // Throws on malformed event data
-    const generationChunk = GeminiWire_API_Generate_Content.Response_schema.parse(JSON.parse(eventData));
+    const eventData = JSON.parse(rawEventData);
+
+    // [Gemini, 2025-10-22] Early detection of proxy errors - being sent as an assistant message
+    if (eventData?.candidates?.length === 1) {
+      const candidate = eventData.candidates[0];
+      if (typeof candidate.finishReason === 'string' && candidate.finishReason.includes('503 Service Unavailable') /*candidate.finishReason.startsWith('Proxy error')*/) {
+        // pt.setTokenStopReason('cg-issue');
+        return pt.setDialectTerminatingIssue(`Gemini Internal Proxy Error detected: ${candidate.finishReason}`, null);
+      }
+    }
+
+    // Validate schema and parse
+    const generationChunk = GeminiWire_API_Generate_Content.Response_schema.parse(eventData);
 
     // -> Model
     if (generationChunk.modelVersion && !sentActualModelName) {
@@ -181,13 +193,28 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
          * - follow up Google Search queries (.webSearchQueries)
          * - include the 'renderedContent' from .searchEntryPoint
          */
-        for (const { web } of candidate0.groundingMetadata.groundingChunks) {
+        for (const { web } of candidate0.groundingMetadata.groundingChunks)
           pt.appendUrlCitation(web.title, web.uri, ++groundingIndexNumber, undefined, undefined, undefined, undefined);
+      }
+
+      // -> Candidates[0] -> URL Context Metadata
+      if (candidate0.urlContextMetadata?.urlMetadata?.length) {
+        for (const urlMeta of candidate0.urlContextMetadata.urlMetadata) {
+          // Only add URLs that were successfully retrieved
+          if (urlMeta.urlRetrievalStatus === 'URL_RETRIEVAL_STATUS_SUCCESS')
+            pt.appendUrlCitation('', urlMeta.retrievedUrl, ++groundingIndexNumber, undefined, undefined, undefined, undefined);
+          else if (urlMeta.urlRetrievalStatus !== 'URL_RETRIEVAL_STATUS_UNSPECIFIED')
+            console.warn(`[Gemini] URL retrieval ${urlMeta.urlRetrievalStatus}: ${urlMeta.retrievedUrl}`); // log for debugging
         }
       }
 
       // -> Candidates[0] -> Token Stop Reason
       if (candidate0.finishReason) {
+        // Helper to append finishMessage if available
+        // NOTE: unused for now, hasn't been tested
+        // const withFinishMessage = (baseMessage: string) =>
+        //   candidate0.finishMessage ? `${baseMessage}: ${candidate0.finishMessage}` : baseMessage;
+
         switch (candidate0.finishReason) {
           case 'STOP':
             // this is expected for every fragment up to the end, when it may switch to one of the reasons below in the last packet
@@ -196,48 +223,54 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
 
           case 'MAX_TOKENS':
             pt.setTokenStopReason('out-of-tokens');
-            // NOTE: we call setEnded instread of setDialectTerminatingIssue, because we don't want an extra message appended,
+            // NOTE: we call setEnded instead of setDialectTerminatingIssue, because we don't want an extra message appended,
             // as we know that 'out-of-tokens' will likely append a brick wall (simple/universal enough).
             return pt.setEnded('issue-dialect');
 
+          // will set both TokenStop and TerminatingIssue
           case 'SAFETY':
-            pt.setTokenStopReason('filter-content');
-            return pt.setDialectTerminatingIssue(`Generation stopped due to SAFETY: ${_explainGeminiSafetyIssues(candidate0.safetyRatings)}`, null);
-
           case 'RECITATION':
-            pt.setTokenStopReason('filter-recitation');
-            return pt.setDialectTerminatingIssue(`Generation stopped due to RECITATION`, IssueSymbols.Recitation);
-
           case 'LANGUAGE':
-            pt.setTokenStopReason('filter-content');
-            return pt.setDialectTerminatingIssue(`Generation stopped due to LANGUAGE`, IssueSymbols.Language);
-
           case 'OTHER':
-            pt.setTokenStopReason('filter-content');
-            return pt.setDialectTerminatingIssue(`Generation stopped due to 'OTHER' (unknown reason)`, null);
-
-          case 'BLOCKLIST':
-            pt.setTokenStopReason('filter-content');
-            return pt.setDialectTerminatingIssue(`Generation stopped due the content containing forbidden terms`, null);
-
-          case 'PROHIBITED_CONTENT':
-            pt.setTokenStopReason('filter-content');
-            return pt.setDialectTerminatingIssue(`Generation stopped due to potentially containing prohibited content`, null);
-
-          case 'SPII':
-            pt.setTokenStopReason('filter-content');
-            return pt.setDialectTerminatingIssue(`Generation stopped due to potentially containing Sensitive Personally Identifiable Information (SPII)`, null);
-
-          case 'MALFORMED_FUNCTION_CALL':
-            pt.setTokenStopReason('cg-issue');
-            return pt.setDialectTerminatingIssue(`Generation stopped due to the function call generated by the model being invalid`, null);
-
-          case 'IMAGE_SAFETY':
-            pt.setTokenStopReason('filter-content');
-            return pt.setDialectTerminatingIssue(`Generation stopped due the generated images contain safety violations`, null);
+          case 'BLOCKLIST': // Token generation stopped because the content contains forbidden terms
+          case 'PROHIBITED_CONTENT': // Token generation stopped for potentially containing prohibited content
+          case 'SPII': // Token generation stopped because the content potentially contains Sensitive Personally Identifiable Information
+          case 'MALFORMED_FUNCTION_CALL': // The function call generated by the model is invalid
+          case 'IMAGE_SAFETY': // Token generation stopped because generated images contain safety violations
+          case 'IMAGE_PROHIBITED_CONTENT': // Image generation stopped because generated images have prohibited content
+          case 'IMAGE_RECITATION': // Image generation stopped due to recitation
+          case 'IMAGE_OTHER': // Image generation stopped because of other miscellaneous issue
+          case 'NO_IMAGE': // The model was expected to generate an image, but none was generated
+          case 'UNEXPECTED_TOOL_CALL': // Model generated a tool call but no tools were enabled in the request
+          case 'TOO_MANY_TOOL_CALLS': // Model called too many tools consecutively, execution limit exceeded
+          case 'FINISH_REASON_UNSPECIFIED':
+            const reasonMap: Record<typeof candidate0.finishReason, [AixWire_Particles.GCTokenStopReason, string, string | null]> = {
+              'SAFETY': ['filter-content', `Generation stopped due to SAFETY: ${_explainGeminiSafetyIssues(candidate0.safetyRatings)}`, null],
+              'RECITATION': ['filter-recitation', 'Generation stopped due to RECITATION', IssueSymbols.Recitation],
+              'LANGUAGE': ['filter-refusal', 'Generation stopped due to unsupported LANGUAGE', IssueSymbols.Language],
+              'OTHER': ['cg-issue', `Generation stopped due to 'OTHER' (unknown reason)`, null],
+              'BLOCKLIST': ['filter-content', 'Generation stopped: content contains forbidden terms', null],
+              'PROHIBITED_CONTENT': ['filter-content', 'Generation stopped: potentially prohibited content', null],
+              'SPII': ['filter-content', 'Generation stopped: potentially contains Sensitive PII (SPII)', null],
+              'MALFORMED_FUNCTION_CALL': ['cg-issue', 'Generation stopped: invalid function call generated by model', null],
+              'IMAGE_SAFETY': ['filter-content', 'Image generation stopped: safety violations', null],
+              'IMAGE_PROHIBITED_CONTENT': ['filter-content', 'Image generation stopped: prohibited content', null],
+              'IMAGE_RECITATION': ['filter-recitation', 'Image generation stopped: recitation detected', IssueSymbols.Recitation],
+              'IMAGE_OTHER': ['cg-issue', 'Image generation stopped: miscellaneous issue', null],
+              'NO_IMAGE': ['cg-issue', 'Image generation failed: no image generated', null],
+              'UNEXPECTED_TOOL_CALL': ['cg-issue', 'Generation stopped: tool call made but no tools enabled', null],
+              'TOO_MANY_TOOL_CALLS': ['cg-issue', 'Generation stopped: too many consecutive tool calls', null],
+              'FINISH_REASON_UNSPECIFIED': ['cg-issue', 'Generation stopped and no reason was given', null],
+            } as const;
+            const reason = reasonMap[candidate0.finishReason];
+            pt.setTokenStopReason(reason[0]);
+            return pt.setDialectTerminatingIssue(reason[1], reason[2]);
 
           default:
-            throw new Error(`unexpected empty generation (finish reason: ${candidate0?.finishReason})`);
+            // Exhaustiveness check - if we get here, Gemini added a new finishReason
+            const _exhaustiveCheck: never = candidate0.finishReason as Exclude<typeof candidate0.finishReason, string>;
+            pt.setTokenStopReason('cg-issue');
+            return pt.setDialectTerminatingIssue(`unexpected Gemini finish reason: ${candidate0?.finishReason})`, null);
         }
       }
     } /* end of .candidates */

@@ -48,9 +48,9 @@ export function AnthropicServiceSetup(props: { serviceId: DModelsServiceId }) {
 
   return <>
 
-    <ApproximateCosts serviceId={service?.id} whoSaved='Big-AGI saved you'>
+    <ApproximateCosts serviceId={service?.id}>
       <Box sx={{ level: 'body-sm' }}>
-        Enjoy <b>Sonnet</b>, <b>Opus</b> and <b>Haiku</b>. Experiencing Issues? Check <Link href='https://status.anthropic.com/' level='body-sm' target='_blank'>Anthropic status</Link>.
+        Supports <b>Sonnet</b>, <b>Opus</b> and <b>Haiku</b>. Experiencing Issues? Check <Link href='https://status.anthropic.com/' level='body-sm' target='_blank'>Anthropic status</Link>.
       </Box>
     </ApproximateCosts>
 
@@ -66,16 +66,16 @@ export function AnthropicServiceSetup(props: { serviceId: DModelsServiceId }) {
       placeholder='sk-...'
     />
 
-    <FormSwitchControl
+    {advanced.on && <FormSwitchControl
       title='Auto-Caching' on='Enabled' off='Disabled'
       tooltip='Auto-breakpoints: 3 breakpoints are always set on the System instruction and on the last 2 User messages. This leaves the user with 1 breakpoint of their choice. (max 4)'
       description={autoVndAntBreakpoints ? <>Last 2 user messages</> : 'Disabled'}
       checked={autoVndAntBreakpoints}
       onChange={setAutoVndAntBreakpoints}
-    />
+    />}
 
 
-    <FormControl orientation='horizontal' sx={{ flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center' }}>
+    {advanced.on && <FormControl orientation='horizontal' sx={{ flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center' }}>
       <FormLabelStart
         title='Caching'
         description='Toggle per-Message'
@@ -84,7 +84,7 @@ export function AnthropicServiceSetup(props: { serviceId: DModelsServiceId }) {
       <Typography level='title-sm'>
         {autoVndAntBreakpoints ? 'User & Auto' : 'User-driven'}
       </Typography>
-    </FormControl>
+    </FormControl>}
 
     {advanced.on && <FormTextField
       autoCompleteId='anthropic-host'

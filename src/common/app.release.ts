@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2024 Enrico Ros
+ * Copyright (c)2024-2025 Enrico Ros
  *
  * This file is include by both the frontend and backend, however depending on the time
  * of the build, the values may be different.
@@ -13,11 +13,6 @@ export const Release = {
   // CHANGE ME - this is the tenant ID, 'dev' reserved for development only, 'open' reserved for GitHub
   TenantSlug: 'open',
 
-  App: {
-    versionCode: '2.0.0-open-rc3',       // 1.92.0 sequentially...
-    versionName: 'Big-AGI 2',
-  },
-
   // Future compatibility
   Features: {
     // ...
@@ -28,13 +23,13 @@ export const Release = {
 
   // this is here to trigger revalidation of data, e.g. models refresh
   Monotonics: {
-    Aix: 30,
-    NewsVersion: 192,
+    Aix: 37,
+    NewsVersion: 200,
   },
 
   // Frontend: pretty features
   TechLevels: {
-    AIX: '1.1', Apply: '0.8', Beam: '2.0', LFS: '0.5', /*Precog: '0.1',*/ React: '1.5',
+    AIX: '2', Apply: '0.8', Beam: '2', LFS: '0.9', /*Precog: '0.1',*/ React: '1.6',
   },
   AiFunctions: [
     // from `ContextChatGenerate_schema`
@@ -65,5 +60,5 @@ export const Release = {
 
 export const BaseProduct = {
   ReleaseNotes: '',
-  SupportForm: (_userId?: string) => 'https://github.com/enricoros/big-agi/issues',
+  SupportForm: (_userId?: string) => 'https://github.com/enricoros/big-AGI/issues/new',
 } as const;

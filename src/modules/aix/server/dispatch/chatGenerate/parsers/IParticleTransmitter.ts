@@ -60,12 +60,15 @@ export interface IParticleTransmitter {
   appendUrlCitation(title: string, url: string, citationNumber?: number, startIndex?: number, endIndex?: number, textSnippet?: string, pubTs?: number): void;
 
   /** Sends a void placeholder particle - temporary status that gets wiped when real content arrives */
-  sendVoidPlaceholder(mot: 'search-web' | 'gen-image', text: string): void;
+  sendVoidPlaceholder(mot: 'search-web' | 'gen-image' | 'code-exec', text: string): void;
 
   // Non-parts data //
 
   /** Communicates the model name to the client */
   setModelName(modelName: string): void;
+
+  /** Communicates the upstream response handle, for remote control/resumability */
+  setUpstreamHandle(handle: string, type: 'oai-responses'): void;
 
   /** Communicates the finish reason to the client */
   setTokenStopReason(reason: AixWire_Particles.GCTokenStopReason): void;

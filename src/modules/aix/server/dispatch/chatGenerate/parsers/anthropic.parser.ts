@@ -2,10 +2,15 @@ import { safeErrorString } from '~/server/wire';
 
 import type { AixWire_Particles } from '../../../api/aix.wiretypes';
 import type { ChatGenerateParseFunction } from '../chatGenerate.dispatch';
-import type { IParticleTransmitter } from '../IParticleTransmitter';
+import type { IParticleTransmitter } from './IParticleTransmitter';
 import { IssueSymbols } from '../ChatGenerateTransmitter';
 
 import { AnthropicWire_API_Message_Create } from '../../wiretypes/anthropic.wiretypes';
+import { RequestRetryError } from '../chatGenerate.retrier';
+
+
+// configuration
+const ANTHROPIC_DEBUG_EVENT_SEQUENCE = false; // true: shows the sequence of events
 
 
 /**
@@ -13,7 +18,7 @@ import { AnthropicWire_API_Message_Create } from '../../wiretypes/anthropic.wire
  *
  * Anthropic uses a events-based, chunk-based streaming protocol for its chat completions:
  * 1. 'message_start': Initializes a new message with metadata (id, model, usage) and empty content.
- * 2. 'content_block_start': Begins a new content block (text or tool_use).
+ * 2. 'content_block_start': Begins a new content block (text, tool_use, server_tool_use, or tool results).
  * 3. 'content_block_delta': Streams incremental updates to the current content block.
  * 4. 'content_block_stop': Signals the end of the current content block.
  * 5. 'message_delta': Provides updates to message-level information (e.g., stop_reason, usage).
@@ -23,12 +28,28 @@ import { AnthropicWire_API_Message_Create } from '../../wiretypes/anthropic.wire
  *
  * Delta Types:
  * - 'text_delta': Incremental text updates for text blocks.
- * - 'input_json_delta': Partial JSON strings for tool_use inputs.
+ * - 'input_json_delta': Partial JSON strings for tool_use and server_tool_use inputs.
+ * - 'thinking_delta': Incremental thinking content updates.
+ * - 'signature_delta': Signature for thinking blocks.
+ * - 'citations_delta': Citations that stream incrementally for text blocks.
+ *
+ * Client Tools vs Server Tools
+ *
+ * Client Tools: Traditional function calling where the model returns a `tool_use` block, the client
+ *               executes the function, and returns results via `tool_result` in the next message.
+ *
+ * FIXME: we haven't decided yet at the AIX and DMessage/DMessageFragment level how to handle Server-side tools, Server/Client mixed tools, or even Client tools, incl client-driven MCP
+ *        so for now we have a TEMPORARY IMPLEMENTATION: Server tools are currently handled with void placeholders rather than creating particles to build execution graphs.
+ *
+ * Server Tools: Tools executed by Anthropic's infrastructure. The model emits `server_tool_use`
+ *               blocks and the server executes them internally, returning specialized result blocks
+ *               like `web_search_tool_result` or `web_fetch_tool_result`. No client execution required.
  *
  * Assumptions:
  * - Content blocks are indexed and streamed sequentially, with no gaps, 'index' is 0-based and reliable.
  * - 'text' parts are incremental and meant to be concatenated via 'text_delta'
- * - 'tool_use' parts are only function calls, and meant to have arguments as an incremental string via 'input_json_delta'
+ * - 'tool_use' and 'server_tool_use' parts have arguments as an incremental string via 'input_json_delta'
+ * - Server tool result blocks arrive fully formed in 'content_block_start' (no deltas)
  * - There could be multiple messages, but we only handle 1 at this time, with multiple parts.
  * - Message Deltas will provide a 'stop reason' on the message
  * - Begin/End are explicit
@@ -41,7 +62,7 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
   let messageStartTime: number | undefined = undefined;
   let chatInTokens: number | undefined = undefined;
 
-  return function(pt: IParticleTransmitter, eventData: string, eventName?: string): void {
+  return function(pt: IParticleTransmitter, eventData: string, eventName?: string, context?: { retriesAvailable: boolean }): void {
 
     // Time to first event
     if (timeToFirstEvent === undefined)
@@ -54,6 +75,7 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
     switch (eventName) {
       // Ignore pings
       case 'ping':
+        if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log('ant ping');
         break;
 
       // M1. Initialize the message content for a new message
@@ -61,7 +83,7 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
         messageStartTime = Date.now();
         const isFirstMessage = !responseMessage;
         if (!isFirstMessage)
-          throw new Error('Unexpected second message - we only support 1 Antrhopic message at a time');
+          throw new Error('Unexpected second message - we only support 1 Anthropic message at a time');
 
         // Throws on malformed event data, or even role != 'assistant'
         responseMessage = AnthropicWire_API_Message_Create.event_MessageStart_schema.parse(JSON.parse(eventData)).message;
@@ -77,6 +99,21 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
         // -> Model
         if (isFirstMessage)
           pt.setModelName(responseMessage.model);
+
+        // -> Container metadata (for Skills)
+        if (responseMessage.container) {
+          // TODO: [PRIORITY] Accumulate in DMessage.sessionMetadata:
+          //   pt.setSessionMetadata('anthropic.container.id', container.id)
+          //   pt.setSessionMetadata('anthropic.container.expiresAt', Date.parse(container.expires_at))
+          // Request builder will find latest values and reuse container across turns for file access.
+
+          console.log('[Anthropic] Container active:', {
+            id: responseMessage.container.id,
+            expires_at: responseMessage.container.expires_at,
+            skills: responseMessage.container.skills,
+          });
+        }
+
         if (responseMessage.usage) {
           chatInTokens = responseMessage.usage.input_tokens;
           const metricsUpdate: AixWire_Particles.CGSelectMetrics = {
@@ -85,157 +122,398 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
             dtStart: timeToFirstEvent,
           };
           if (responseMessage.usage.cache_read_input_tokens || responseMessage.usage.cache_creation_input_tokens) {
-            if (responseMessage.usage.cache_read_input_tokens !== undefined)
+            if (typeof responseMessage.usage.cache_read_input_tokens === 'number')
               metricsUpdate.TCacheRead = responseMessage.usage.cache_read_input_tokens;
-            if (responseMessage.usage.cache_creation_input_tokens !== undefined)
+            if (typeof responseMessage.usage.cache_creation_input_tokens === 'number')
               metricsUpdate.TCacheWrite = responseMessage.usage.cache_creation_input_tokens;
           }
           pt.updateMetrics(metricsUpdate);
         }
+
+        if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log(`ant message_start: model=${responseMessage.model}, TIn=${chatInTokens || 0}, container=${responseMessage.container?.id || 'none'}`);
         break;
 
       // M2. Initialize content block if needed
-      case 'content_block_start':
-        if (responseMessage) {
-          const { index, content_block } = AnthropicWire_API_Message_Create.event_ContentBlockStart_schema.parse(JSON.parse(eventData));
-          if (responseMessage.content[index] !== undefined)
-            throw new Error(`Unexpected content block start location (${index})`);
-          responseMessage.content[index] = content_block;
-
-          switch (content_block.type) {
-            case 'text':
-              pt.appendText(content_block.text);
-              break;
-
-            case 'tool_use':
-              // [Anthropic] Note: .input={} and is parsed as an object - if that's the case, we zap it to ''
-              if (content_block && typeof content_block.input === 'object' && Object.keys(content_block.input).length === 0)
-                content_block.input = null;
-              pt.startFunctionCallInvocation(content_block.id, content_block.name, 'incr_str', content_block.input! ?? null);
-              break;
-
-            case 'thinking':
-              pt.appendReasoningText(content_block.thinking);
-              pt.setReasoningSignature(content_block.signature);
-              break;
-
-            case 'redacted_thinking':
-              pt.addReasoningRedactedData(content_block.data);
-              break;
-
-            default:
-              const _exhaustiveCheck: never = content_block;
-              throw new Error(`Unexpected content block type: ${(content_block as any).type}`);
-          }
-        } else
+      case 'content_block_start': {
+        if (!responseMessage)
           throw new Error('Unexpected content_block_start');
+
+        const { index, content_block } = AnthropicWire_API_Message_Create.event_ContentBlockStart_schema.parse(JSON.parse(eventData));
+        if (responseMessage.content[index] !== undefined)
+          throw new Error(`Unexpected content block start location (${index})`);
+        responseMessage.content[index] = content_block;
+
+        if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) {
+          const debugInfo = content_block.type === 'tool_use' ? `tool=${content_block.name}`
+            : content_block.type === 'server_tool_use' ? `server_tool=${content_block.name}`
+              : content_block.type === 'text' ? `text_len=${content_block.text.length}`
+                : content_block.type === 'thinking' ? `thinking_len=${content_block.thinking.length}`
+                  : content_block.type === 'container_upload' ? `file_id=${content_block.file_id}`
+                    : content_block.type;
+          console.log(`ant content_block_start[${index}]: type=${content_block.type}, ${debugInfo}`);
+        }
+
+        switch (content_block.type) {
+          case 'text':
+            pt.appendText(content_block.text);
+            // Note: In streaming mode, citations arrive via citations_delta events, not on content_block_start
+            break;
+
+          case 'thinking':
+            pt.appendReasoningText(content_block.thinking);
+            if (content_block.signature)
+              pt.setReasoningSignature(content_block.signature);
+            break;
+
+          case 'redacted_thinking':
+            pt.addReasoningRedactedData(content_block.data);
+            break;
+
+          case 'tool_use':
+            // [Anthropic] Note: .input={} and is parsed as an object - if that's the case, we zap it to ''
+            if (content_block && typeof content_block.input === 'object' && Object.keys(content_block.input).length === 0)
+              content_block.input = null;
+            pt.startFunctionCallInvocation(content_block.id, content_block.name, 'incr_str', content_block.input! ?? null);
+            break;
+
+          case 'server_tool_use':
+            // Server-side tool execution (e.g., web_search, web_fetch, Skills API tools)
+            // NOTE: We don't create tool invocations for server tools - just show placeholders
+            if (content_block && typeof content_block.input === 'object' && Object.keys(content_block.input).length === 0)
+              content_block.input = null;
+
+            // Show placeholder for known server tools
+            switch (content_block.name) {
+              case 'web_search':
+                pt.sendVoidPlaceholder('search-web', 'Searching the web...');
+                break;
+              case 'web_fetch':
+                pt.sendVoidPlaceholder('search-web', 'Fetching web content...');
+                break;
+              // Skills API tools (server-side execution)
+              case 'bash_code_execution':
+                pt.sendVoidPlaceholder('code-exec', '⚡ Running bash script...');
+                break;
+              case 'text_editor_code_execution':
+                pt.sendVoidPlaceholder('code-exec', '⚡ Executing code...');
+                break;
+              default:
+                // For unknown server tools (e.g., future Skills), show a generic placeholder instead of throwing
+                console.warn(`[Anthropic Parser] Unknown server tool: ${content_block.name}`);
+                pt.sendVoidPlaceholder('code-exec', `⚡ Using ${content_block.name}...`);
+                break;
+            }
+
+            // TODO: Store server tool invocation when we add executedBy:'server' support to DMessage tool_response parts
+            // pt.startFunctionCallInvocation(content_block.id, content_block.name, 'incr_str', content_block.input! ?? null);
+            break;
+
+          case 'web_search_tool_result':
+            // Web search results arrive fully formed (no deltas)
+            // TODO: Store server tool result when we add executedBy:'server' support to DMessage tool_response parts
+            if (Array.isArray(content_block.content)) {
+              // Success - array of search results
+              // NOTE: We don't add citations for bulk search results (too noisy - could be 20+ URLs)
+              //       Only high-quality citations that appear in text annotations should be shown
+              pt.sendVoidPlaceholder('search-web', `Search completed: ${content_block.content.length} results`);
+            } else if (content_block.content.type === 'web_search_tool_result_error') {
+              // Error during web search
+              pt.sendVoidPlaceholder('search-web', `Search error: ${content_block.content.error_code}`);
+            }
+            break;
+
+          case 'web_fetch_tool_result':
+            // Web fetch results arrive fully formed (no deltas)
+            // TODO: Store server tool result when we add executedBy:'server' support to DMessage tool_response parts
+            if (content_block.content.type === 'web_fetch_result') {
+              // Success - fetched a URL
+              pt.sendVoidPlaceholder('search-web', `Retrieved ${content_block.content.url}`);
+
+              // Add citation for the fetched content
+              const fetchedContent = content_block.content.content;
+              pt.appendUrlCitation(
+                fetchedContent?.title || 'Web Content',
+                content_block.content.url,
+                undefined, // citationNumber
+                undefined, // startIndex
+                undefined, // endIndex
+                undefined, // textSnippet
+                content_block.content.retrieved_at ? Date.parse(content_block.content.retrieved_at) : undefined,
+              );
+            } else if (content_block.content.type === 'web_fetch_tool_result_error') {
+              // Error during web fetch
+              pt.sendVoidPlaceholder('search-web', `Fetch error: ${content_block.content.error_code}`);
+            }
+            break;
+
+          case 'code_execution_tool_result':
+            // Code execution result from Skills container - extract file IDs from output
+            if (content_block.content.type === 'code_execution_result') {
+              // Success - check for generated files in content array
+              const fileIds: string[] = [];
+              if (Array.isArray(content_block.content.content)) {
+                for (const outputBlock of content_block.content.content) {
+                  if (outputBlock.type === 'code_execution_output' && outputBlock.file_id) {
+                    fileIds.push(outputBlock.file_id);
+                  }
+                }
+              }
+
+              // Build text message describing execution result
+              let resultText = '\n\n⚡ Code executed by Skill';
+              if (fileIds.length > 0) {
+                resultText += '\n';
+                for (const fileId of fileIds) {
+                  resultText += `\n📎 File: \`${fileId}\``;
+                }
+              } else {
+                resultText += ' (no files generated)';
+              }
+              resultText += '\n';
+              pt.appendText(resultText);
+
+              // Log for debugging
+              console.log('[Anthropic] Code execution result:', {
+                return_code: content_block.content.return_code,
+                file_count: fileIds.length,
+                file_ids: fileIds,
+              });
+            } else if (content_block.content.type === 'code_execution_tool_result_error') {
+              // Error during code execution
+              pt.appendText(`\n\n⚠️ Skill execution error: ${content_block.content.error_code}\n`);
+            }
+            break;
+
+          case 'bash_code_execution_tool_result':
+            // Bash code execution result from Skills container - extract file IDs from output
+            if (content_block.content.type === 'bash_code_execution_result') {
+              // Success - check for generated files in content array
+              const fileIds: string[] = [];
+              if (Array.isArray(content_block.content.content)) {
+                for (const outputBlock of content_block.content.content) {
+                  if (outputBlock.type === 'bash_code_execution_output' && outputBlock.file_id) {
+                    fileIds.push(outputBlock.file_id);
+                  }
+                }
+              }
+
+              // Build text message describing execution result
+              let resultText = '\n\n⚡ Bash executed by Skill';
+              if (fileIds.length > 0) {
+                resultText += '\n';
+                for (const fileId of fileIds) {
+                  resultText += `\n📎 File: \`${fileId}\``;
+                }
+              } else {
+                resultText += ' (no files generated)';
+              }
+              resultText += '\n';
+              pt.appendText(resultText);
+
+              // Log for debugging
+              console.log('[Anthropic] Bash code execution result:', {
+                return_code: content_block.content.return_code,
+                file_count: fileIds.length,
+                file_ids: fileIds,
+              });
+            } else if (content_block.content.type === 'bash_code_execution_tool_result_error') {
+              // Error during bash execution
+              pt.appendText(`\n\n⚠️ Bash execution error: ${content_block.content.error_code}\n`);
+            }
+            break;
+
+          case 'text_editor_code_execution_tool_result':
+            // Text editor code execution result from Skills container
+            pt.sendVoidPlaceholder('code-exec', '⚡ Text editor code executed by Skill');
+
+            // Log for debugging
+            console.log('[Anthropic] Text editor code execution result from Skills');
+            break;
+
+          case 'mcp_tool_use':
+            throw new Error(`Server tool type 'mcp_tool_use' is not yet implemented. Please report this to request support.`);
+
+          case 'mcp_tool_result':
+            throw new Error(`Server tool type 'mcp_tool_result' is not yet implemented. Please report this to request support.`);
+
+          case 'container_upload':
+            // Container upload - this is when a Skill has generated a file
+            // The file_id can be used with the Files API to download the file
+            pt.sendVoidPlaceholder('code-exec', `📎 File generated (ID: ${content_block.file_id})`);
+
+            // Log for debugging
+            console.log('[Anthropic] Container upload:', {
+              file_id: content_block.file_id,
+              container: responseMessage.container?.id,
+            });
+
+            // TODO: Future enhancement - could trigger automatic file download here
+            // using the Files API with content_block.file_id
+            break;
+
+          default:
+            const _exhaustiveCheck: never = content_block;
+            throw new Error(`Unexpected content block type: ${(content_block as any).type}`);
+        }
         break;
+      }
 
       // M3+. Append delta text to the current message content
-      case 'content_block_delta':
-        if (responseMessage) {
-          const { index, delta } = AnthropicWire_API_Message_Create.event_ContentBlockDelta_schema.parse(JSON.parse(eventData));
-          if (responseMessage.content[index] === undefined)
-            throw new Error(`Unexpected content block delta location (${index})`);
-
-          switch (delta.type) {
-            case 'text_delta':
-              if (responseMessage.content[index].type === 'text') {
-                responseMessage.content[index].text += delta.text;
-                pt.appendText(delta.text);
-              } else
-                throw new Error('Unexpected text delta');
-              break;
-
-            case 'input_json_delta':
-              if (responseMessage.content[index].type === 'tool_use') {
-                responseMessage.content[index].input += delta.partial_json;
-                pt.appendFunctionCallInvocationArgs(responseMessage.content[index].id, delta.partial_json);
-              } else
-                throw new Error('Unexpected input_json_delta');
-              break;
-
-            case 'thinking_delta':
-              if (responseMessage.content[index].type === 'thinking') {
-                responseMessage.content[index].thinking += delta.thinking;
-                pt.appendReasoningText(delta.thinking);
-              } else
-                throw new Error('Unexpected thinking delta');
-              break;
-
-            case 'signature_delta':
-              if (responseMessage.content[index].type === 'thinking') {
-                responseMessage.content[index].signature = delta.signature;
-                pt.setReasoningSignature(delta.signature);
-              } else
-                throw new Error('Unexpected signature delta');
-              break;
-
-            // note: redacted_thinking doesn't have deltas, only start (with payload) and stop
-
-            default:
-              const _exhaustiveCheck: never = delta;
-              throw new Error(`Unexpected content block delta type: ${(delta as any).type}`);
-          }
-        } else
+      case 'content_block_delta': {
+        if (!responseMessage)
           throw new Error('Unexpected content_block_delta');
+
+        const { index, delta } = AnthropicWire_API_Message_Create.event_ContentBlockDelta_schema.parse(JSON.parse(eventData));
+        const contentBlock = responseMessage.content[index];
+        if (contentBlock === undefined)
+          throw new Error(`Unexpected content block delta location (${index})`);
+
+        if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) {
+          const debugInfo = delta.type === 'text_delta' ? `len=${delta.text.length}`
+            : delta.type === 'input_json_delta' ? `json_len=${delta.partial_json.length}`
+              : delta.type === 'thinking_delta' ? `len=${delta.thinking.length}`
+                : delta.type === 'signature_delta' ? `sig=${delta.signature}`
+                  : delta.type === 'citations_delta' ? `citation_type=${delta.citation.type}`
+                    : (delta as any)?.type;
+          console.log(`ant content_block_delta[${index}]: type=${delta.type}, ${debugInfo}`);
+        }
+
+        switch (delta.type) {
+          case 'text_delta':
+            if (contentBlock.type === 'text') {
+              contentBlock.text += delta.text;
+              pt.appendText(delta.text);
+            } else
+              throw new Error('Unexpected text delta');
+            break;
+
+          case 'input_json_delta':
+            if (contentBlock.type === 'tool_use') {
+              contentBlock.input += delta.partial_json;
+              pt.appendFunctionCallInvocationArgs(contentBlock.id, delta.partial_json);
+            } else if (contentBlock.type === 'server_tool_use') {
+              // Server tools also receive input_json_delta for their inputs
+              contentBlock.input += delta.partial_json;
+              // TODO: Stream server tool args when we add executedBy:'server' support to DMessage tool_response parts
+              // pt.appendFunctionCallInvocationArgs(contentBlock.id, delta.partial_json);
+            } else
+              throw new Error('Unexpected input_json_delta');
+            break;
+
+          case 'thinking_delta':
+            if (contentBlock.type === 'thinking') {
+              contentBlock.thinking += delta.thinking;
+              pt.appendReasoningText(delta.thinking);
+            } else
+              throw new Error('Unexpected thinking delta');
+            break;
+
+          case 'signature_delta':
+            if (contentBlock.type === 'thinking') {
+              contentBlock.signature = delta.signature;
+              pt.setReasoningSignature(delta.signature);
+            } else
+              throw new Error('Unexpected signature delta');
+            break;
+
+          case 'citations_delta':
+            // Citations arrive incrementally during streaming - add to current text block
+            if (contentBlock.type === 'text') {
+              const citation = delta.citation;
+              if (citation.type === 'web_search_result_location') {
+                // Web search citation from server-side search
+                pt.appendUrlCitation(
+                  citation.title || citation.url,
+                  citation.url,
+                  undefined, // citationNumber
+                  undefined, // startIndex
+                  undefined, // endIndex
+                  citation.cited_text, // textSnippet
+                  undefined, // pubTs
+                );
+              }
+              // TODO: Handle other citation types (char_location, page_location, content_block_location, search_result_location)
+            } else
+              throw new Error('Unexpected citations_delta on non-text block');
+            break;
+
+          // note: redacted_thinking doesn't have deltas, only start (with payload) and stop
+
+          default:
+            const _exhaustiveCheck: never = delta;
+            throw new Error(`Unexpected content block delta type: ${(delta as any).type}`);
+        }
         break;
+      }
 
       // Finalize content block if needed.
-      case 'content_block_stop':
-        if (responseMessage) {
-          const { index } = AnthropicWire_API_Message_Create.event_ContentBlockStop_schema.parse(JSON.parse(eventData));
-          if (responseMessage.content[index] === undefined)
-            throw new Error(`Unexpected content block stop location (${index})`);
+      case 'content_block_stop': {
+        if (!responseMessage) throw new Error('Unexpected content_block_stop');
 
-          // Signal that the tool is ready? (if it is...)
-          pt.endMessagePart();
-        } else
-          throw new Error('Unexpected content_block_stop');
+        const { index } = AnthropicWire_API_Message_Create.event_ContentBlockStop_schema.parse(JSON.parse(eventData));
+        if (responseMessage.content[index] === undefined)
+          throw new Error(`Unexpected content block stop location (${index})`);
+
+        if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log(`ant content_block_stop[${index}]: type=${responseMessage.content[index].type}`);
+
+        // Signal that the tool is ready? (if it is...)
+        pt.endMessagePart();
         break;
+      }
 
       // Optionally handle top-level message changes. Example: updating stop_reason
-      case 'message_delta':
-        if (responseMessage) {
-          const { delta, usage } = AnthropicWire_API_Message_Create.event_MessageDelta_schema.parse(JSON.parse(eventData));
+      case 'message_delta': {
+        if (!responseMessage) throw new Error('Unexpected message_delta');
 
-          Object.assign(responseMessage, delta);
+        const { delta, usage } = AnthropicWire_API_Message_Create.event_MessageDelta_schema.parse(JSON.parse(eventData));
 
-          // -> Token Stop Reason
-          const tokenStopReason = _fromAnthropicStopReason(delta.stop_reason);
-          if (tokenStopReason !== null)
-            pt.setTokenStopReason(tokenStopReason);
+        Object.assign(responseMessage, delta);
 
-          if (usage?.output_tokens && messageStartTime) {
-            const elapsedTimeMilliseconds = Date.now() - messageStartTime;
-            const elapsedTimeSeconds = elapsedTimeMilliseconds / 1000;
-            const chatOutRate = elapsedTimeSeconds > 0 ? usage.output_tokens / elapsedTimeSeconds : 0;
-            pt.updateMetrics({
-              TIn: chatInTokens !== undefined ? chatInTokens : -1,
-              TOut: usage.output_tokens,
-              vTOutInner: Math.round(chatOutRate * 100) / 100, // Round to 2 decimal places
-              dtStart: timeToFirstEvent,
-              dtInner: elapsedTimeMilliseconds,
-              dtAll: Date.now() - parserCreationTimestamp,
-            });
-          }
-        } else
-          throw new Error('Unexpected message_delta');
+        // -> Token Stop Reason
+        const tokenStopReason = _fromAnthropicStopReason(delta.stop_reason);
+        if (tokenStopReason !== null)
+          pt.setTokenStopReason(tokenStopReason);
+
+        if (usage?.output_tokens && messageStartTime) {
+          const elapsedTimeMilliseconds = Date.now() - messageStartTime;
+          const elapsedTimeSeconds = elapsedTimeMilliseconds / 1000;
+          const chatOutRate = elapsedTimeSeconds > 0 ? usage.output_tokens / elapsedTimeSeconds : 0;
+          pt.updateMetrics({
+            TIn: chatInTokens !== undefined ? chatInTokens : -1,
+            TOut: usage.output_tokens,
+            vTOutInner: Math.round(chatOutRate * 100) / 100, // Round to 2 decimal places
+            dtStart: timeToFirstEvent,
+            dtInner: elapsedTimeMilliseconds,
+            dtAll: Date.now() - parserCreationTimestamp,
+          });
+        }
+
+        if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log(`ant message_delta: stop_reason=${delta.stop_reason || 'none'}, TOut=${usage?.output_tokens || 'none'}`);
         break;
+      }
 
       // We can now close the message
       case 'message_stop':
         AnthropicWire_API_Message_Create.event_MessageStop_schema.parse(JSON.parse(eventData));
+        if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log('ant message_stop');
         return pt.setEnded('done-dialect');
 
-      // UNDOCUMENTED - Occasionaly, the server will send errors, such as {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+      // UNDOCUMENTED - Occasionally, the server will send errors, such as {'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'Overloaded'}}
       case 'error':
         hasErrored = true;
         const { error } = JSON.parse(eventData);
         const errorText = (error.type && error.message) ? `${error.type}: ${error.message}` : safeErrorString(error);
+        if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log(`ant error: ${errorText}`);
+
+        // Throw retryable error for overload/timeout conditions (only if retries available)
+        if (error.type === 'overloaded_error' && context?.retriesAvailable)
+          throw new RequestRetryError(`Anthropic: ${errorText}`);
+
+        // Non-retryable errors (or no retries left): show to user
         return pt.setDialectTerminatingIssue(errorText || 'unknown server issue.', IssueSymbols.Generic);
 
       default:
+        if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log(`ant unknown event: ${eventName}`);
         throw new Error(`Unexpected event name: ${eventName}`);
     }
   };
@@ -245,7 +523,7 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
 export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
   const parserCreationTimestamp = Date.now();
 
-  return function(pt: IParticleTransmitter, fullData: string): void {
+  return function(pt: IParticleTransmitter, fullData: string /*, eventName?: string, context?: { retriesAvailable: boolean } */): void {
 
     // parse with validation (e.g. type: 'message' && role: 'assistant')
     const {
@@ -264,6 +542,27 @@ export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
       const contentBlock = content[i];
       const isLastBlock = i === content.length - 1;
       switch (contentBlock.type) {
+        case 'text':
+          pt.appendText(contentBlock.text);
+          // Handle citations if present (non-streaming mode has all citations attached)
+          if (contentBlock.citations && Array.isArray(contentBlock.citations)) {
+            for (const citation of contentBlock.citations) {
+              if (citation.type === 'web_search_result_location') {
+                pt.appendUrlCitation(
+                  citation.title || citation.url,
+                  citation.url,
+                  undefined, // citationNumber
+                  undefined, // startIndex
+                  undefined, // endIndex
+                  citation.cited_text, // textSnippet
+                  undefined, // pubTs
+                );
+              }
+              // TODO: Handle other citation types (char_location, page_location, content_block_location, search_result_location)
+            }
+          }
+          break;
+
         case 'thinking':
           pt.appendReasoningText(contentBlock.thinking);
           contentBlock.signature && pt.setReasoningSignature(contentBlock.signature);
@@ -273,14 +572,174 @@ export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
           pt.addReasoningRedactedData(contentBlock.data);
           break;
 
-        case 'text':
-          pt.appendText(contentBlock.text);
-          break;
-
         case 'tool_use':
           // NOTE: this gets parsed as an object, not string deltas of a json!
           pt.startFunctionCallInvocation(contentBlock.id, contentBlock.name, 'json_object', (contentBlock.input as object) || null);
           pt.endMessagePart();
+          break;
+
+        case 'server_tool_use':
+          // Server tool use in non-streaming mode
+          // NOTE: We don't create tool invocations for server tools - just show placeholders
+          switch (contentBlock.name) {
+            case 'web_search':
+              pt.sendVoidPlaceholder('search-web', 'Searching the web...');
+              break;
+            case 'web_fetch':
+              pt.sendVoidPlaceholder('search-web', 'Fetching web content...');
+              break;
+            case 'bash_code_execution':
+              pt.sendVoidPlaceholder('code-exec', '⚡ Running bash script...');
+              break;
+            case 'text_editor_code_execution':
+              pt.sendVoidPlaceholder('code-exec', '⚡ Executing code...');
+              break;
+            default:
+              console.warn(`[Anthropic Parser] Unknown server tool (non-streaming): ${contentBlock.name}`);
+              pt.sendVoidPlaceholder('code-exec', `⚡ Using ${contentBlock.name}...`);
+              break;
+          }
+          // TODO: Store server tool invocation when we add executedBy:'server' support to DMessage tool_response parts
+          // pt.startFunctionCallInvocation(contentBlock.id, contentBlock.name, 'json_object', (contentBlock.input as object) || null);
+          // pt.endMessagePart();
+          break;
+
+        case 'web_search_tool_result':
+          // Web search results in non-streaming mode
+          // TODO: Store server tool result when we add executedBy:'server' support to DMessage tool_response parts
+          if (Array.isArray(contentBlock.content)) {
+            // Success - array of search results
+            // NOTE: We don't add citations for bulk search results (too noisy - could be 20+ URLs)
+            //       Only high-quality citations that appear in text annotations should be shown
+            pt.sendVoidPlaceholder('search-web', `Search completed: ${contentBlock.content.length} results`);
+          } else if (contentBlock.content.type === 'web_search_tool_result_error') {
+            // Error during web search
+            pt.sendVoidPlaceholder('search-web', `Search error: ${contentBlock.content.error_code}`);
+          }
+          // pt.endMessagePart(); // Not needed for placeholders
+          break;
+
+        case 'web_fetch_tool_result':
+          // Web fetch results in non-streaming mode
+          // TODO: Store server tool result when we add executedBy:'server' support to DMessage tool_response parts
+          if (contentBlock.content.type === 'web_fetch_result') {
+            // Success - fetched a URL
+            pt.sendVoidPlaceholder('search-web', `Retrieved ${contentBlock.content.url}`);
+
+            // Add citation for the fetched content
+            const fetchedContent = contentBlock.content.content;
+            pt.appendUrlCitation(
+              fetchedContent?.title || 'Web Content',
+              contentBlock.content.url,
+              undefined, // citationNumber
+              undefined, // startIndex
+              undefined, // endIndex
+              undefined, // textSnippet
+              contentBlock.content.retrieved_at ? Date.parse(contentBlock.content.retrieved_at) : undefined,
+            );
+          } else if (contentBlock.content.type === 'web_fetch_tool_result_error') {
+            // Error during web fetch
+            pt.sendVoidPlaceholder('search-web', `Fetch error: ${contentBlock.content.error_code}`);
+          }
+          // pt.endMessagePart(); // Not needed for placeholders
+          break;
+
+        case 'code_execution_tool_result':
+          // Code execution result from Skills container (non-streaming)
+          if (contentBlock.content.type === 'code_execution_result') {
+            // Success - check for generated files in content array
+            const fileIds: string[] = [];
+            if (Array.isArray(contentBlock.content.content)) {
+              for (const outputBlock of contentBlock.content.content) {
+                if (outputBlock.type === 'code_execution_output' && outputBlock.file_id) {
+                  fileIds.push(outputBlock.file_id);
+                }
+              }
+            }
+
+            // Build text message describing execution result
+            let resultText = '\n\n⚡ Code executed by Skill';
+            if (fileIds.length > 0) {
+              resultText += '\n';
+              for (const fileId of fileIds) {
+                resultText += `\n📎 File: \`${fileId}\``;
+              }
+            } else {
+              resultText += ' (no files generated)';
+            }
+            resultText += '\n';
+            pt.appendText(resultText);
+
+            // Log for debugging
+            console.log('[Anthropic] Code execution result (non-streaming):', {
+              return_code: contentBlock.content.return_code,
+              file_count: fileIds.length,
+              file_ids: fileIds,
+            });
+          } else if (contentBlock.content.type === 'code_execution_tool_result_error') {
+            // Error during code execution
+            pt.appendText(`\n\n⚠️ Skill execution error: ${contentBlock.content.error_code}\n`);
+          }
+          break;
+
+        case 'bash_code_execution_tool_result':
+          // Bash code execution result from Skills container (non-streaming)
+          if (contentBlock.content.type === 'bash_code_execution_result') {
+            // Success - check for generated files in content array
+            const fileIds: string[] = [];
+            if (Array.isArray(contentBlock.content.content)) {
+              for (const outputBlock of contentBlock.content.content) {
+                if (outputBlock.type === 'bash_code_execution_output' && outputBlock.file_id) {
+                  fileIds.push(outputBlock.file_id);
+                }
+              }
+            }
+
+            // Build text message describing execution result
+            let resultText = '\n\n⚡ Bash executed by Skill';
+            if (fileIds.length > 0) {
+              resultText += '\n';
+              for (const fileId of fileIds) {
+                resultText += `\n📎 File: \`${fileId}\``;
+              }
+            } else {
+              resultText += ' (no files generated)';
+            }
+            resultText += '\n';
+            pt.appendText(resultText);
+
+            // Log for debugging
+            console.log('[Anthropic] Bash code execution result (non-streaming):', {
+              return_code: contentBlock.content.return_code,
+              file_count: fileIds.length,
+              file_ids: fileIds,
+            });
+          } else if (contentBlock.content.type === 'bash_code_execution_tool_result_error') {
+            // Error during bash execution
+            pt.appendText(`\n\n⚠️ Bash execution error: ${contentBlock.content.error_code}\n`);
+          }
+          break;
+
+        case 'text_editor_code_execution_tool_result':
+          // Text editor code execution result from Skills container (non-streaming)
+          pt.sendVoidPlaceholder('code-exec', '⚡ Text editor code executed by Skill');
+          console.log('[Anthropic] Text editor code execution result from Skills (non-streaming)');
+          break;
+
+        case 'mcp_tool_use':
+          throw new Error(`Server tool 'mcp_tool_use' is not yet implemented. Please report this issue to request support.`);
+
+        case 'mcp_tool_result':
+          throw new Error(`Server tool 'mcp_tool_result' is not yet implemented. Please report this issue to request support.`);
+
+        case 'container_upload':
+          // Container upload - this is when a Skill has generated a file
+          pt.sendVoidPlaceholder('code-exec', `📎 File generated (ID: ${contentBlock.file_id})`);
+
+          // Log for debugging
+          console.log('[Anthropic] Container upload (non-streaming):', {
+            file_id: contentBlock.file_id,
+          });
           break;
 
         default:
@@ -308,9 +767,9 @@ export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
         dtAll: elapsedTimeMilliseconds,
       };
       if (usage.cache_read_input_tokens || usage.cache_creation_input_tokens) {
-        if (usage.cache_read_input_tokens !== undefined)
+        if (typeof usage.cache_read_input_tokens === 'number')
           metricsUpdate.TCacheRead = usage.cache_read_input_tokens;
-        if (usage.cache_creation_input_tokens !== undefined)
+        if (typeof usage.cache_creation_input_tokens === 'number')
           metricsUpdate.TCacheWrite = usage.cache_creation_input_tokens;
       }
       pt.updateMetrics(metricsUpdate);
@@ -329,8 +788,21 @@ function _fromAnthropicStopReason(stopReason: AnthropicWire_API_Message_Create.R
     case 'tool_use':
       return 'ok-tool_invocations';
 
+    /**
+     * https://docs.claude.com/en/api/handling-stop-reasons#pause-turn
+     * Used with server tools like web search when Claude needs to pause a long-running operation.
+     */
+    case 'pause_turn':
+      return 'ok-pause_continue';
+
     case 'max_tokens':
       return 'out-of-tokens';
+
+    case 'model_context_window_exceeded':
+      return 'out-of-tokens'; // Best practice: Allows requesting maximum tokens without calculating input size
+
+    case 'refusal':
+      return 'filter-refusal'; // Safety concerns - refusal to answer
 
     default:
       console.warn(`_fromAnthropicStopReason: unknown stop reason: ${stopReason}`);

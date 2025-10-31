@@ -26,13 +26,13 @@ export interface DLLM {
   created: number | 0;
   updated?: number | 0;
   description: string;
-  hidden: boolean;                  // hidden from UI selectors
+  hidden: boolean;                  // default hidden state (can change underlying between refreshes)
 
   // hard properties (overwritten on update)
-  contextTokens: number | null;     // null: must assume it's unknown
-  maxOutputTokens: number | null;   // null: must assume it's unknown
-  trainingDataCutoff?: string;      // 'Apr 2029'
-  interfaces: DModelInterfaceV1[];  // if set, meaning this is the known and comprehensive set of interfaces
+  contextTokens: DLLMContextTokens;     // null: must assume it's unknown
+  maxOutputTokens: DLLMMaxOutputTokens; // null: must assume it's unknown
+  trainingDataCutoff?: string;          // 'Apr 2029'
+  interfaces: DModelInterfaceV1[];      // if set, meaning this is the known and comprehensive set of interfaces
   benchmark?: { cbaElo?: number, cbaMmlu?: number }; // benchmark values
   pricing?: DModelPricing;
 
@@ -49,6 +49,76 @@ export interface DLLM {
   userHidden?: boolean;
   userStarred?: boolean;
   userParameters?: DModelParameterValues; // user has set these parameters
+  userContextTokens?: DLLMContextTokens;       // user override for context window
+  userMaxOutputTokens?: DLLMMaxOutputTokens;   // user override for max output tokens
+}
+
+
+/**
+ * Context window size in tokens.
+ * - number: The context window size in tokens
+ * - null: Unset (do not set in the output, do not assume a max value in the UI)
+ */
+export type DLLMContextTokens = number | null;
+
+/**
+ * Maximum output tokens.
+ * - number: The maximum number of tokens the model can generate
+ * - null: Unset (do not set in the output, do not assume a max value in the UI)
+ */
+export type DLLMMaxOutputTokens = number | null;
+
+
+/**
+ * Computes the effective visibility of a model, respecting user overrides.
+ * Returns true if the model should be hidden from UI selectors.
+ *
+ * Logic: userHidden takes precedence if set, otherwise falls back to the vendor's hidden value.
+ * This allows users to override vendor defaults while still adopting new vendor visibility changes
+ * for models they haven't explicitly shown/hidden.
+ */
+export function isLLMHidden(llm: DLLM): boolean {
+  return llm.userHidden ?? llm.hidden ?? false;
+}
+
+export function isLLMVisible(llm: DLLM): boolean {
+  return !(llm.userHidden ?? llm.hidden ?? false);
+}
+
+/**
+ * Returns the effective context token limit for a model.
+ * Checks user override first, then vendor-specific parameters, then falls back to model default.
+ */
+export function getLLMContextTokens(llm: DLLM | null): DLLMContextTokens | undefined {
+  if (!llm)
+    return undefined; // undefined if no model
+
+  // 1. Check user override first
+  if (llm.userContextTokens !== undefined)
+    return llm.userContextTokens;
+
+  // 2. Check vendor-specific parameter overrides
+  // [Anthropic, 1M] Check if this is an Anthropic model with 1M context enabled
+  if (llm.vId === 'anthropic') {
+    const vndAnt1MContext = llm.userParameters?.llmVndAnt1MContext ?? llm.initialParameters?.llmVndAnt1MContext;
+    if (vndAnt1MContext === true)
+      return 1_000_000;
+  }
+
+  // 3. Fall back to model default
+  return llm.contextTokens; // null if unknown
+}
+
+/**
+ * Returns the effective max output tokens for a model.
+ * Checks user override first, then falls back to model default.
+ */
+export function getLLMMaxOutputTokens(llm: DLLM | null): DLLMMaxOutputTokens | undefined {
+  if (!llm)
+    return undefined; // undefined if no model
+
+  // Check user override first, then fall back to model default
+  return llm.userMaxOutputTokens ?? llm.maxOutputTokens;
 }
 
 

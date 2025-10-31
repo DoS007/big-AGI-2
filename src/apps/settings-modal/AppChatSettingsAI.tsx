@@ -134,7 +134,7 @@ export function AppChatSettingsAI() {
         domainId='primaryChat'
         title={<><EngineeringIcon color='warning' sx={{ fontSize: 'lg', mr: 0.5, mb: 0.25 }} />Last used model</>}
         description='Chat fallback model'
-        tooltip='The last used chat model, used as default for new conversations. This is a develoment setting used to test out auto-detection of the most fitting initial chat model.'
+        tooltip='The last used chat model, used as default for new conversations. This is a development setting used to test out auto-detection of the most fitting initial chat model.'
       />
     )}
 
@@ -144,7 +144,6 @@ export function AppChatSettingsAI() {
       options={_tokenCountingMethodOptions}
       value={tokenCountingMethod}
       onChange={setTokenCountingMethod}
-      selectSx={{ minWidth: 140 }}
     />
 
     <FormSelectControl
@@ -153,7 +152,6 @@ export function AppChatSettingsAI() {
       options={_keepThinkingBlocksOptions}
       value={chatKeepLastThinkingOnly ? 'last-only' : 'all'}
       onChange={(value) => setChatKeepLastThinkingOnly(value === 'last-only')}
-      selectSx={{ minWidth: 140 }}
     />
 
     <ListDivider inset='gutter'>Automatic AI Functions</ListDivider>

@@ -3,8 +3,13 @@
     "allow": [
       "Bash(cat:*)",
       "Bash(cp:*)",
+      "Bash(curl:*)",
       "Bash(find:*)",
       "Bash(git branch:*)",
+      "Bash(git describe:*)",
+      "Bash(git log:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
       "Bash(grep:*)",
       "Bash(ls:*)",
       "Bash(mkdir:*)",
@@ -16,9 +21,12 @@
       "Bash(rg:*)",
       "Bash(rm:*)",
       "Bash(sed:*)",
+      "Read(//tmp/**)"
+      "WebFetch",
       "WebFetch(domain:big-agi.com)",
-      "WebFetch(domain:github.com)",
       "WebSearch",
+      "mcp__chrome-devtools",
+      "mcp__github",
       "mcp__ide__getDiagnostics"
     ],
     "deny": [

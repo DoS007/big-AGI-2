@@ -36,11 +36,21 @@ parameterSpecs: [
 **Parameter Visibility**: The `hidden` flag removes parameters from the UI while keeping them functional. Models can also mark parameters as `required`.
 
 ### Layer 3: Client Configuration
+
+The system provides two UI configurators with different scopes:
+
+#### Full Model Configuration Dialog
 **File**: `src/modules/llms/models-modal/LLMParametersEditor.tsx`
+Shows all non-hidden parameters from model's `parameterSpecs`. Used in the models modal for complete configuration.
 
-The UI dynamically renders controls based on model specifications. Parameter visibility is determined by the `showParam()` function, which checks both model support and hidden flags.
+#### ChatPanel Quick Controls
+**File**: `src/apps/chat/components/layout-panel/ChatPanelModelParameters.tsx`
+Shows only parameters that are:
+- In model's `parameterSpecs`
+- Listed in `_interestingParameters` array
+- Not marked as `hidden`
 
-**Value Resolution**: The client merges three value sources via `getAllModelParameterValues()`:
+**Value Resolution**: Both UIs use `getAllModelParameterValues()` to merge:
 1. **Fallback values** - Required parameters get their `requiredFallback` values
 2. **Initial values** - Model's `initialParameters` (populated during model creation)
 3. **User values** - User's `userParameters` (highest priority)
@@ -50,7 +60,7 @@ The UI dynamically renders controls based on model specifications. Parameter vis
 
 The AIX client transforms DLLM parameters to wire protocol format. This layer handles parameter precedence rules and name transformations:
 
-```typescript
+```
 // Parameter precedence: newer 4-value version takes priority over 3-value
 ...((llmVndOaiReasoningEffort4 || llmVndOaiReasoningEffort) ?
   { vndOaiReasoningEffort: llmVndOaiReasoningEffort4 || llmVndOaiReasoningEffort } : {})
@@ -97,6 +107,12 @@ The system maintains type safety through:
 - `DModelParameterValue<T>` conditional types for values
 - `DModelParameterSpec<T>` interfaces for specifications
 - Runtime validation via Zod schemas at API boundaries
+
+## Model Variant Pattern
+
+Some vendors use model variants to enable features, for instance:
+- **Anthropic**: Creates separate `idVariant: 'thinking'` entries forcing value of hidden parameters
+- **Google/OpenAI**: Parameters directly on base models
 
 ## Migration and Compatibility
 
