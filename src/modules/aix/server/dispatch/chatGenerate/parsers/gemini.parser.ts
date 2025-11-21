@@ -9,6 +9,7 @@ import { geminiConvertPCM2WAV } from './gemini.audioutils';
 
 
 // configuration
+const COLLAPSE_EMPTY_TEXT_PARTS = true;
 const ENABLE_RECITATIONS_AS_CITATIONS = false;
 
 
@@ -34,6 +35,7 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
   let sentRequestedModelName = false;
   let sentActualModelName = false;
   let timeToFirstEvent: number;
+  let collapsedTextPartForReasoning = false;
   let skipComputingTotalsOnce = isStreaming;
   let groundingIndexNumber = 0;
 
@@ -49,11 +51,32 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
 
     // [Gemini, 2025-10-22] Early detection of proxy errors - being sent as an assistant message
     if (eventData?.candidates?.length === 1) {
-      const candidate = eventData.candidates[0];
-      if (typeof candidate.finishReason === 'string' && candidate.finishReason.includes('503 Service Unavailable') /*candidate.finishReason.startsWith('Proxy error')*/) {
-        // pt.setTokenStopReason('cg-issue');
-        return pt.setDialectTerminatingIssue(`Gemini Internal Proxy Error detected: ${candidate.finishReason}`, null);
-      }
+      const finishReason = eventData.candidates[0]?.finishReason;
+      if (typeof finishReason === 'string')
+
+        // FIXME: potential point for throwing RequestRetryError (using 'srv-warn' for now)
+        //        in case of transient errors (502, 503, proxy queue, etc.) - not for good codes.
+
+        switch (true) {
+          case finishReason.includes('503 Service Unavailable'):
+            // pt.setTokenStopReason('cg-issue');
+            // TODO: tell the client about a classification code?
+            //       E.g. send a TRPCFetcherError-compatible `error` downstream, or also send
+            //       the equivalent of .aixFCategory/.aixFHttpStatus/.aixFNetError (see trpc.server.ts)
+            return pt.setDialectTerminatingIssue(`Gemini Internal Proxy Error detected: ${finishReason}`, null, 'srv-warn');
+
+          case finishReason.startsWith('Proxy queue error'):
+            // pt.setTokenStopReason('cg-issue');
+            return pt.setDialectTerminatingIssue(`Gemini Internal Proxy Queue Error detected: ${finishReason}`, null, 'srv-warn');
+
+          case finishReason.startsWith('Proxy error'):
+            // pt.setTokenStopReason('cg-issue');
+            return pt.setDialectTerminatingIssue(`Gemini Internal Proxy Error detected: ${finishReason}`, null, 'srv-warn');
+
+          default:
+            // NOTE: the 'GOOD' default values shall be GeminiWire_API_Generate_Content.FinishReason_enum, e.g. STOP, MAX_TOKENS, SAFETY, .. TOO_MANY_TOOL_CALLS, etc.
+            break;
+        }
     }
 
     // Validate schema and parse
@@ -72,7 +95,7 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
     // -> Prompt Safety Blocking
     if (generationChunk.promptFeedback?.blockReason) {
       const { blockReason, safetyRatings } = generationChunk.promptFeedback;
-      return pt.setDialectTerminatingIssue(`Input not allowed: ${blockReason}: ${_explainGeminiSafetyIssues(safetyRatings)}`, IssueSymbols.PromptBlocked);
+      return pt.setDialectTerminatingIssue(`Input not allowed: ${blockReason}: ${_explainGeminiSafetyIssues(safetyRatings)}`, IssueSymbols.PromptBlocked, false);
     }
 
     // candidates may be an optional field (started happening on 2024-09-27)
@@ -87,15 +110,29 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
 
       // -> Candidates[0] -> Content
       for (const mPart of (candidate0.content?.parts || [])) {
+
+        // [Gemini 3, 2025-11-18] Extract thoughtSignature once (can appear on any part type)
+        // https://ai.google.dev/gemini-api/docs/gemini-3?thinking=high#thought_signatures
+        const thoughtSignature = ('thoughtSignature' in mPart && mPart.thoughtSignature) ? mPart.thoughtSignature : undefined;
+
         switch (true) {
 
           // <- TextPart
           case 'text' in mPart:
             // [Gemini, 2025-01-23] CoT support
-            if (mPart.thought)
-              pt.appendReasoningText(mPart.text || '');
-            else
-              pt.appendText(mPart.text || '');
+            if (mPart.thought) {
+              pt.appendReasoningText(mPart.text || '', collapsedTextPartForReasoning ? { restart: true } : undefined);
+              collapsedTextPartForReasoning = false;
+            } else {
+              // NOTE: considering the below, but not yet
+              // don't send an empty text part, which may happen in between reasoning parts
+              // and this way we can merge them
+              // if (mPart.text?.length)
+              if (!COLLAPSE_EMPTY_TEXT_PARTS || mPart.text)
+                pt.appendText(mPart.text || '');
+              else
+                collapsedTextPartForReasoning = true;
+            }
             break;
 
           // <- InlineDataPart
@@ -125,15 +162,16 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
                 );
               } catch (error) {
                 console.warn('[Gemini] Failed to convert audio:', error);
-                pt.setDialectTerminatingIssue(`Failed to process audio: ${error}`, null);
+                pt.setDialectTerminatingIssue(`Failed to process audio: ${error}`, null, 'srv-warn');
               }
             } else
-              pt.setDialectTerminatingIssue(`Unsupported inline data type: ${mPart.inlineData.mimeType}`, null);
+              pt.setDialectTerminatingIssue(`Unsupported inline data type: ${mPart.inlineData.mimeType}`, null, 'srv-warn');
             break;
 
           // <- FunctionCallPart
           case 'functionCall' in mPart:
             let { id: fcId, name: fcName, args: fcArgs } = mPart.functionCall;
+
             // Validate the function call arguments - we expect a JSON object, not just any JSON value
             if (!fcArgs || typeof fcArgs !== 'object')
               console.warn(`[Gemini] Invalid function call arguments: ${JSON.stringify(fcArgs)} for ${fcName}`);
@@ -170,6 +208,9 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
             const _exhaustiveCheck: never = mPart;
             throw new Error(`unexpected content part: ${JSON.stringify(mPart)}`);
         }
+
+        // Set the thought signature if available
+        thoughtSignature && pt.sendSetVendorState('gemini', { thoughtSignature: mPart.thoughtSignature });
       }
 
       // -> Candidates[0] -> Safety Ratings
@@ -264,13 +305,13 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
             } as const;
             const reason = reasonMap[candidate0.finishReason];
             pt.setTokenStopReason(reason[0]);
-            return pt.setDialectTerminatingIssue(reason[1], reason[2]);
+            return pt.setDialectTerminatingIssue(reason[1], reason[2], false);
 
           default:
             // Exhaustiveness check - if we get here, Gemini added a new finishReason
             const _exhaustiveCheck: never = candidate0.finishReason as Exclude<typeof candidate0.finishReason, string>;
             pt.setTokenStopReason('cg-issue');
-            return pt.setDialectTerminatingIssue(`unexpected Gemini finish reason: ${candidate0?.finishReason})`, null);
+            return pt.setDialectTerminatingIssue(`unexpected Gemini finish reason: ${candidate0?.finishReason})`, null, 'srv-warn');
         }
       }
     } /* end of .candidates */

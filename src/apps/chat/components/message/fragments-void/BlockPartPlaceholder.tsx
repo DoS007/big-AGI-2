@@ -5,13 +5,14 @@ import { Box, Chip } from '@mui/joy';
 import BrushRoundedIcon from '@mui/icons-material/BrushRounded';
 import CodeIcon from '@mui/icons-material/Code';
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
+import RepeatIcon from '@mui/icons-material/Repeat';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 
 import { BlocksContainer } from '~/modules/blocks/BlocksContainers';
 import { ScaledTextBlockRenderer } from '~/modules/blocks/ScaledTextBlockRenderer';
 
 import type { DMessageRole } from '~/common/stores/chat/chat.message';
-import type { DVoidPlaceholderModelOp } from '~/common/stores/chat/chat.fragments';
+import type { DVoidPlaceholderModelOp, DVoidPlaceholderPart } from '~/common/stores/chat/chat.fragments';
 import { adjustContentScaling, ContentScaling, themeScalingMap } from '~/common/app.theme';
 import { DataStreamViz } from '~/common/components/DataStreamViz';
 import { animationSpinHalfPause } from '~/common/util/animUtils';
@@ -31,6 +32,10 @@ const _styles = {
     outline: '1px solid',
     outlineColor: 'primary.solidBg', // .outlinedBorder
     boxShadow: `1px 2px 4px -3px var(--joy-palette-primary-solidBg)`,
+
+    // wrap text if needed - introduced for retry error messages
+    whiteSpace: 'normal',
+    wordBreak: 'break-word',
   } as const,
 
   followUpChipIcon: {
@@ -113,8 +118,9 @@ function ModelOperationChip(props: {
 
 export function BlockPartPlaceholder(props: {
   placeholderText: string,
-  placeholderType?: 'chat-gen-follow-up',
+  placeholderType?: DVoidPlaceholderPart['pType'],
   placeholderModelOp?: DVoidPlaceholderModelOp,
+  placeholderAixControl?: DVoidPlaceholderPart['aixControl'],
   messageRole: DMessageRole,
   contentScaling: ContentScaling,
   showAsItalic?: boolean,
@@ -146,7 +152,8 @@ export function BlockPartPlaceholder(props: {
 
 
   // Type-based visualization
-  if (props.placeholderType === 'chat-gen-follow-up') return (
+  const isFollowUp = props.placeholderType === 'chat-gen-follow-up';
+  if (isFollowUp) return (
     <Chip
       color='primary'
       variant='soft'
@@ -157,6 +164,34 @@ export function BlockPartPlaceholder(props: {
       {props.placeholderText}
     </Chip>
   );
+
+  // AIX Control renderer (e.g., error correction retry)
+  if (props.placeholderAixControl?.ctl === 'ec-retry') {
+    const { rScope, rCauseHttp, rCauseConn } = props.placeholderAixControl;
+    const color = rScope === 'srv-dispatch' ? 'primary' : rScope === 'srv-op' ? 'warning' : 'danger';
+    return (
+      <Chip
+        // size='sm'
+        color={color}
+        variant='soft'
+        startDecorator={<div style={{ opacity: 0.75 }}>{rCauseHttp || rCauseConn || rScope}</div>}
+        endDecorator={<RepeatIcon style={{ opacity: 0.5 }} />}
+        onClick={() => console.log({ props })}
+        sx={{
+          gap: 1.5,
+          px: 1.5,
+          py: 0.375,
+          my: '1px', // to not crop the outline on mobile, or on beam
+          boxShadow: `1px 2px 4px -3px var(--joy-palette-${color}-solidBg)`,
+          // wrap text if needed - introduced for retry error messages
+          whiteSpace: 'normal',
+          wordBreak: 'break-word',
+        }}
+      >
+        {props.placeholderText}
+      </Chip>
+    );
+  }
 
   // Model operation renderer
   if (props.placeholderModelOp)

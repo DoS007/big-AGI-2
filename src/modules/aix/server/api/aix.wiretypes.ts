@@ -93,14 +93,28 @@ export namespace OpenAPI_Schema {
 
 export namespace AixWire_Parts {
 
+  /** Parts that come from the model shall inherit this, so they can echo-back vendor data */
+  const _BasePart_schema = z.object({
+
+    /** DMessageFragment.vendorState <- model-generated, vendor-specific opaque state (protocol continuity, not content) */
+    _vnd: z.object({
+      gemini: z.object({
+        thoughtSignature: z.string().optional(),
+      }).optional(),
+    }).optional(),
+    // _vnd: z.record(z.string(), z.unknown()).optional(),
+
+  });
+
+
   // User Input Parts
 
-  export const TextPart_schema = z.object({
+  export const TextPart_schema = _BasePart_schema.extend({
     pt: z.literal('text'),
     text: z.string(),
   });
 
-  export const InlineAudioPart_schema = z.object({
+  export const InlineAudioPart_schema = _BasePart_schema.extend({
     pt: z.literal('inline_audio'),
     /**
      * Minimal audio format support for browser compatibility:
@@ -116,7 +130,7 @@ export namespace AixWire_Parts {
   });
 
   // NOTE: different from DMessageImageRefPart, in that the image data is inlined rather than being referred to
-  export const InlineImagePart_schema = z.object({
+  export const InlineImagePart_schema = _BasePart_schema.extend({
     pt: z.literal('inline_image'),
     /**
      * The MIME type of the image.
@@ -177,7 +191,7 @@ export namespace AixWire_Parts {
     code: z.string(),
   });
 
-  export const ToolInvocationPart_schema = z.object({
+  export const ToolInvocationPart_schema = _BasePart_schema.extend({
     pt: z.literal('tool_invocation'),
     id: z.string(),
     invocation: z.discriminatedUnion('type', [
@@ -200,7 +214,7 @@ export namespace AixWire_Parts {
     // _variant: z.literal('gemini_auto_inline').optional(),
   });
 
-  export const ToolResponsePart_schema = z.object({
+  export const ToolResponsePart_schema = _BasePart_schema.extend({
     pt: z.literal('tool_response'),
     id: z.string(),
     response: z.discriminatedUnion('type', [
@@ -213,6 +227,7 @@ export namespace AixWire_Parts {
 
   // Model Auxiliary Part (for thinking blocks)
 
+  // NOTE: not a _BasePart_schema for now, may become if we put the vndAnt attributes there
   export const ModelAuxPart_schema = z.object({
     pt: z.literal('ma'),
     aType: z.literal('reasoning'),
@@ -407,24 +422,38 @@ export namespace AixWire_API {
     maxTokens: z.number().min(1).optional(),
     topP: z.number().min(0).max(1).optional(),
     forceNoStream: z.boolean().optional(),
+    // Anthropic
     vndAnt1MContext: z.boolean().optional(),
     vndAntSkills: z.string().optional(),
     vndAntThinkingBudget: z.number().nullable().optional(),
     vndAntWebFetch: z.enum(['auto']).optional(),
     vndAntWebSearch: z.enum(['auto']).optional(),
+    // Gemini
     vndGeminiAspectRatio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9']).optional(),
+    vndGeminiCodeExecution: z.enum(['auto']).optional(),
+    vndGeminiComputerUse: z.enum(['browser']).optional(),
     vndGeminiGoogleSearch: z.enum(['unfiltered', '1d', '1w', '1m', '6m', '1y']).optional(),
+    vndGeminiImageSize: z.enum(['1K', '2K', '4K']).optional(),
+    vndGeminiMediaResolution: z.enum(['mr_high', 'mr_medium', 'mr_low']).optional(),
     vndGeminiShowThoughts: z.boolean().optional(),
-    vndGeminiThinkingBudget: z.number().optional(),
+    vndGeminiThinkingBudget: z.number().optional(), // old param
+    vndGeminiThinkingLevel: z.enum(['high', 'medium', 'low']).optional(), // new param
+    vndGeminiUrlContext: z.enum(['auto']).optional(),
+    // Moonshot
+    vndMoonshotWebSearch: z.enum(['auto']).optional(),
+    // OpenAI
     vndOaiResponsesAPI: z.boolean().optional(),
     vndOaiReasoningEffort: z.enum(['minimal', 'low', 'medium', 'high']).optional(),
     vndOaiRestoreMarkdown: z.boolean().optional(),
     vndOaiVerbosity: z.enum(['low', 'medium', 'high']).optional(),
     vndOaiWebSearchContext: z.enum(['low', 'medium', 'high']).optional(),
     vndOaiImageGeneration: z.enum(['mq', 'hq', 'hq_edit', 'hq_png']).optional(),
+    // OpenRouter
     vndOrtWebSearch: z.enum(['auto']).optional(),
+    // Perplexity
     vndPerplexityDateFilter: z.enum(['unfiltered', '1m', '3m', '6m', '1y']).optional(),
     vndPerplexitySearchMode: z.enum(['default', 'academic']).optional(),
+    // xAI
     vndXaiSearchMode: z.enum(['auto', 'on', 'off']).optional(),
     vndXaiSearchSources: z.string().optional(),
     vndXaiSearchDateFilter: z.enum(['unfiltered', '1d', '1w', '1m', '6m', '1y']).optional(),
@@ -470,6 +499,7 @@ export namespace AixWire_API {
       // streaming AI operations
       'ai-diagram',               // making a diagram - messageId
       'ai-flattener',             // flattening a thread - messageId of the first message
+      'aifn-image-caption',       // generating image captions - attachmentId
       'beam-gather',              // fusing beam rays - fusionId
       'beam-scatter',             // scattering beam rays - rayId
       'call',                     // having a phone conversation - messageId of the first message
@@ -567,10 +597,11 @@ export namespace AixWire_Particles {
 
   // ChatControl
 
-  type ChatControlOp =
+  export type ChatControlOp =
   // | { cg: 'start' } // not really used for now
     | { cg: 'end', reason: CGEndReason, tokenStopReason: GCTokenStopReason }
     | { cg: 'issue', issueId: CGIssueId, issueText: string }
+    | { cg: 'retry-reset', rScope: 'srv-dispatch' | 'srv-op' | 'cli-ll', rShallClear: boolean, reason: string, attempt: number, maxAttempts: number, delayMs: number, causeHttp?: number, causeConn?: string }
     | { cg: 'set-metrics', metrics: CGSelectMetrics }
     | { cg: 'set-model', name: string }
     | { cg: 'set-upstream-handle', handle: { uht: 'vnd.oai.responses', responseId: string, expiresAt: number | null } }
@@ -640,7 +671,7 @@ export namespace AixWire_Particles {
 
   export type PartParticleOp =
     | { p: '❤' } // heart beat
-    | { p: 'tr_', _t: string, weak?: 'tag' } // reasoning text, incremental; could be a 'weak' detection, e.g. heuristic from '<think>' rather than API-provided
+    | { p: 'tr_', _t: string, weak?: 'tag', restart?: boolean } // reasoning text, incremental; could be a 'weak' detection, e.g. heuristic from '<think>' rather than API-provided
     | { p: 'trs', signature: string } // reasoning signature
     | { p: 'trr_', _data: string } // reasoning raw (or redacted) data
     // | { p: 'ii', mimeType: string, i_b64?: string /* never undefined */ }
@@ -654,6 +685,7 @@ export namespace AixWire_Particles {
     | { p: 'ia', mimeType: string, a_b64: string, label?: string, generator?: string, durationMs?: number } // inline audio, complete
     | { p: 'ii', mimeType: string, i_b64: string, label?: string, generator?: string, prompt?: string } // inline image, complete
     | { p: 'urlc', title: string, url: string, num?: number, from?: number, to?: number, text?: string, pubTs?: number } // url citation - pubTs: publication timestamp
+    | { p: 'svs', vendor: string, state: Record<string, unknown> } // set vendor state - applies to the last emitted part (opaque protocol state)
     | { p: 'vp', text: string, mot: 'search-web' | 'gen-image' | 'code-exec' }; // void placeholder - temporary status text that gets wiped when real content arrives
 
 }

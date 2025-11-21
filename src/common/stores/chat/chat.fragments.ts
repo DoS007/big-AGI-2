@@ -33,7 +33,7 @@ export type DMessageContentFragment = _DMessageFragmentWrapper<'content',
   | DMessageTextPart              // plain text or mixed content -> BlockRenderer
   | DMessageReferencePart         // reference (e.g. zync entity) Content, such as a Asset (image, audio, PFD, etc.), chat, persona, etc.
   | DMessageImageRefPart          // large image
-  | DMessageToolInvocationPart    // shown to dev only, singature of the llm function call
+  | DMessageToolInvocationPart    // shown to dev only, signature of the llm function call
   | DMessageToolResponsePart      // shown to dev only, response of the llm
   | DMessageErrorPart             // red message, e.g. non-content application issues
   | _SentinelPart
@@ -66,6 +66,11 @@ export type DMessageVoidFragment = _DMessageFragmentWrapper<'void',
   | _SentinelPart
 >;
 
+export type DVoidFragmentModelAnnotations = _NarrowFragmentToPart<DMessageVoidFragment, DVoidModelAnnotationsPart>;
+type _DVoidFragmentModelAux = _NarrowFragmentToPart<DMessageVoidFragment, DVoidModelAuxPart>;
+type _DVoidFragmentPlaceholder = _NarrowFragmentToPart<DMessageVoidFragment, DVoidPlaceholderPart>;
+type _NarrowFragmentToPart<TFragment extends DMessageFragment, TPart> = TFragment & { part: TPart };
+
 
 // Future Examples: up to 1 per message, containing the Rays and Merges that would be used to restore the Beam state - could be volatile (omitted at save)
 // could not be the data store itself, but only used for save/reload
@@ -84,6 +89,19 @@ type _DMessageFragmentWrapper<TFragment, TPart extends { pt: string }> = {
   fId: DMessageFragmentId;
   part: TPart;
   originId?: string;                  // optional, for multi-model, identifies which actor produced this fragment
+  vendorState?: DMessageFragmentVendorState; // optional vendor-specific protocol state (opaque, lossy-safe)
+}
+
+/**
+ * Carries opaque vendor metadata required for protocol correctness - i.e. state continuity tokens, encrypted signatures, protocol quirks.
+ * - Lossy-safe: Can be dropped during conversion/export without breaking functionality.
+ * - Graceful-degrade on missing.
+ */
+export type DMessageFragmentVendorState = Record<string, unknown> & {
+  gemini?: {
+    thoughtSignature?: string; // Gemini 3+ - echoed back to maintain reasoning context
+  };
+  // Future: openai?: { ... }, anthropic?: { ... }
 }
 
 
@@ -119,7 +137,7 @@ type DMessageDocMeta = {
   codeLanguage?: string;
   srcFileName?: string;
   srcFileSize?: number;
-  srcOcrFrom?: 'image' | 'pdf';
+  srcOcrFrom?: 'image' | 'pdf' | 'image-caption';
 }
 
 
@@ -166,6 +184,7 @@ namespace ZYNC_Entity { export type UUID = string; }
 
 export type DMessageToolInvocationPart = {
   pt: 'tool_invocation',
+  /** Matches the corresponding tool_response's id for pairing - set by the LLM, unique per message, at least */
   id: string,
   invocation: {
     type: 'function_call'
@@ -184,6 +203,7 @@ export type DMessageToolInvocationPart = {
 
 export type DMessageToolResponsePart = {
   pt: 'tool_response',
+  /** Set by the response (or upstream server hosted response), matches the corresponding tool_invocation's id for pairing */
   id: string,
   error: boolean | string,
   response: {
@@ -224,11 +244,26 @@ export type DVoidModelAuxPart = {
   redactedData?: readonly string[],
 };
 
-type DVoidPlaceholderPart = { pt: 'ph', pText: string, pType?: 'chat-gen-follow-up' /* 2025-02-23: added for non-pure-text placeholders */, modelOp?: DVoidPlaceholderModelOp };
+export type DVoidPlaceholderPart = {
+  pt: 'ph',
+  pText: string,
+  pType?: 'chat-gen-follow-up',  // a follow-up is being generated
+  modelOp?: DVoidPlaceholderModelOp,
+  aixControl?: DVoidPlaceholderAixControlRetry,
+};
 
 export type DVoidPlaceholderModelOp = {
   mot: 'search-web' | 'gen-image' | 'code-exec',
   cts: number, // client-based timestamp
+};
+
+type DVoidPlaceholderAixControlRetry = {
+  ctl: 'ec-retry',  // control type: error correction retry
+  rScope: 'srv-dispatch' | 'srv-op' | 'cli-ll',  // srv-dispatch: dispatch fetch, srv-op: operation-level, cli-ll: client low-level
+  rAttempt?: number,  // attempt number (starts from 2 to be clear it's a retry)
+  rStrat?: 'cli-ll-reconnect' | 'cli-ll-resume',  // strategy for cli-ll scope (reconnect: new request, resume: continue from handle)
+  rCauseHttp?: number,  // HTTP status code if available (e.g., 429, 503, 502)
+  rCauseConn?: string,  // connection error type if available (e.g., 'net-disconnected', 'timeout')
 };
 
 type _SentinelPart = { pt: '_pt_sentinel' };
@@ -273,11 +308,15 @@ export function isVoidFragment(fragment: DMessageFragment): fragment is DMessage
   return fragment.ft === 'void' && !!fragment.part?.pt;
 }
 
-export function isVoidAnnotationsFragment(fragment: DMessageFragment): fragment is DMessageVoidFragment & { part: DVoidModelAnnotationsPart } {
+export function isVoidAnnotationsFragment(fragment: DMessageFragment): fragment is DVoidFragmentModelAnnotations {
   return fragment.ft === 'void' && fragment.part.pt === 'annotations';
 }
 
-export function isVoidThinkingFragment(fragment: DMessageFragment): fragment is DMessageVoidFragment & { part: DVoidModelAuxPart } {
+export function isVoidPlaceholderFragment(fragment: DMessageFragment): fragment is _DVoidFragmentPlaceholder {
+  return fragment.ft === 'void' && fragment.part.pt === 'ph';
+}
+
+export function isVoidThinkingFragment(fragment: DMessageFragment): fragment is _DVoidFragmentModelAux {
   return fragment.ft === 'void' && fragment.part.pt === 'ma' && fragment.part.aType === 'reasoning';
 }
 
@@ -406,8 +445,8 @@ export function createModelAuxVoidFragment(aType: DVoidModelAuxPart['aType'], aT
   return _createVoidFragment(_create_ModelAux_Part(aType, aText, textSignature, redactedData));
 }
 
-export function createPlaceholderVoidFragment(placeholderText: string, placeholderType?: DVoidPlaceholderPart['pType'], modelOp?: DVoidPlaceholderModelOp): DMessageVoidFragment {
-  return _createVoidFragment(_create_Placeholder_Part(placeholderText, placeholderType, modelOp));
+export function createPlaceholderVoidFragment(placeholderText: string, placeholderType?: DVoidPlaceholderPart['pType'], modelOp?: DVoidPlaceholderModelOp, aixControl?: DVoidPlaceholderPart['aixControl']): DMessageVoidFragment {
+  return _createVoidFragment(_create_Placeholder_Part(placeholderText, placeholderType, modelOp, aixControl));
 }
 
 function _createVoidFragment(part: DMessageVoidFragment['part']): DMessageVoidFragment {
@@ -428,18 +467,20 @@ export function duplicateDMessageFragments(fragments: Readonly<DMessageFragment[
 }
 
 /**
- * NOTE: a duplicate fragment gets a new ID, and also loses any originId, if set (not sure why, but it's the way it is now)
+ * Duplicates a fragment with a new ID while preserving content-related metadata:
+ * - Preserved: originId, vendorState, mutability
+ * - Cleared: fId (new ID), identity (per spec: "removed on duplication (new edit)")
  */
 function _duplicateFragment(fragment: DMessageFragment): DMessageFragment {
   switch (fragment.ft) {
     case 'content':
-      return _createContentFragment(_duplicate_Part(fragment.part));
+      return _carryMeta(fragment, _createContentFragment(_duplicate_Part(fragment.part)));
 
     case 'attachment':
-      return _createAttachmentFragment(fragment.title, fragment.caption, _duplicate_Part(fragment.part), fragment.liveFileId);
+      return _carryMeta(fragment, _createAttachmentFragment(fragment.title, fragment.caption, _duplicate_Part(fragment.part), fragment.liveFileId));
 
     case 'void':
-      return _createVoidFragment(_duplicate_Part(fragment.part));
+      return _carryMeta(fragment, _createVoidFragment(_duplicate_Part(fragment.part)));
 
     case '_ft_sentinel':
       return _createSentinelFragment();
@@ -448,6 +489,22 @@ function _duplicateFragment(fragment: DMessageFragment): DMessageFragment {
       console.warn('[DEV] _duplicateFragment: Unknown fragment type, will duplicate as Error', { fragment });
       return createErrorContentFragment(`Unknown fragment type '${(fragment as any)?.ft || '(undefined)'}'`);
   }
+}
+
+/** Duplication: Preserves optional DMessageFragment metadata from source to target. */
+function _carryMeta<T extends DMessageFragment>(source: Readonly<DMessageFragment>, target: T): T {
+  // quick-out: sentinels don't have metadata
+  if (source.ft === '_ft_sentinel' || target.ft === '_ft_sentinel')
+    return target;
+
+  let enriched = target;
+  if ('originId' in source && source.originId)
+    enriched = { ...enriched, originId: source.originId };
+
+  if ('vendorState' in source && source.vendorState)
+    enriched = { ...enriched, vendorState: structuredClone(source.vendorState) };
+
+  return enriched;
 }
 
 
@@ -520,8 +577,8 @@ function _create_ModelAux_Part(aType: DVoidModelAuxPart['aType'], aText: string,
   };
 }
 
-function _create_Placeholder_Part(placeholderText: string, pType?: DVoidPlaceholderPart['pType'], modelOp?: DVoidPlaceholderModelOp): DVoidPlaceholderPart {
-  return { pt: 'ph', pText: placeholderText, ...(pType ? { pType } : undefined), ...(modelOp ? { modelOp: { ...modelOp } } : undefined) };
+function _create_Placeholder_Part(placeholderText: string, pType?: DVoidPlaceholderPart['pType'], modelOp?: DVoidPlaceholderModelOp, aixControl?: DVoidPlaceholderPart['aixControl']): DVoidPlaceholderPart {
+  return { pt: 'ph', pText: placeholderText, ...(pType ? { pType } : undefined), ...(modelOp ? { modelOp: { ...modelOp } } : undefined), ...(aixControl ? { aixControl: { ...aixControl } } : undefined) };
 }
 
 function _create_Sentinel_Part(): _SentinelPart {
@@ -576,7 +633,7 @@ function _duplicate_Part<TPart extends (DMessageContentFragment | DMessageAttach
       return _create_ModelAux_Part(part.aType, part.aText, part.textSignature, part.redactedData) as TPart;
 
     case 'ph':
-      return _create_Placeholder_Part(part.pText, part.pType, part.modelOp) as TPart;
+      return _create_Placeholder_Part(part.pText, part.pType, part.modelOp, part.aixControl) as TPart;
 
     case 'text':
       return _create_Text_Part(part.text) as TPart;

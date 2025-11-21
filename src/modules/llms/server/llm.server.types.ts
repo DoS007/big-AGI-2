@@ -77,15 +77,26 @@ const ModelParameterSpec_schema = z.object({
   paramId: z.enum([
     'llmTopP',
     'llmForceNoStream',
+    // Anthropic
     'llmVndAnt1MContext',
     'llmVndAntSkills',
     'llmVndAntThinkingBudget',
     'llmVndAntWebFetch',
     'llmVndAntWebSearch',
+    // Gemini
     'llmVndGeminiAspectRatio',
+    'llmVndGeminiCodeExecution',
+    'llmVndGeminiComputerUse',
     'llmVndGeminiGoogleSearch',
+    'llmVndGeminiImageSize',
+    'llmVndGeminiMediaResolution',
     'llmVndGeminiShowThoughts',
     'llmVndGeminiThinkingBudget',
+    'llmVndGeminiThinkingLevel',
+    // 'llmVndGeminiUrlContext',
+    // Moonshot
+    'llmVndMoonshotWebSearch',
+    // OpenAI
     'llmVndOaiReasoningEffort',
     'llmVndOaiReasoningEffort4',
     'llmVndOaiRestoreMarkdown',
@@ -93,9 +104,12 @@ const ModelParameterSpec_schema = z.object({
     'llmVndOaiWebSearchContext',
     'llmVndOaiWebSearchGeolocation',
     'llmVndOaiImageGeneration',
+    // OpenRouter
     'llmVndOrtWebSearch',
+    // Perplexity
     'llmVndPerplexityDateFilter',
     'llmVndPerplexitySearchMode',
+    // xAI
     'llmVndXaiSearchMode',
     'llmVndXaiSearchSources',
     'llmVndXaiSearchDateFilter',

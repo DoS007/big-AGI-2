@@ -2,17 +2,24 @@ import type { AixAPI_Model, AixAPIChatGenerate_Request, AixMessages_ChatMessage,
 import { GeminiWire_API_Generate_Content, GeminiWire_ContentParts, GeminiWire_Messages, GeminiWire_Safety, GeminiWire_ToolDeclarations } from '../../wiretypes/gemini.wiretypes';
 
 import { aixSpillSystemToUser, approxDocPart_To_String, approxInReferenceTo_To_XMLString } from './adapters.common';
-import { OPS } from 'pdfjs-dist';
 
 
 // configuration
 const hotFixImagePartsFirst = true; // https://ai.google.dev/gemini-api/docs/image-understanding#tips-best-practices
 const hotFixReplaceEmptyMessagesWithEmptyTextPart = true;
 
+// [Gemini 3, 2025-11-20] Bypass dummy thoughtSignature for Gemini 3+ validation
+// https://ai.google.dev/gemini-api/docs/thought-signatures
+const GEMINI_BYPASS_THOUGHT_SIGNATURE = 'context_engineering_is_the_way_to_go';
+
 
 export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: AixAPIChatGenerate_Request, geminiSafetyThreshold: GeminiWire_Safety.HarmBlockThreshold, jsonOutput: boolean, _streaming: boolean): TRequest {
 
-  // Note: the streaming setting is ignored as it only belongs in the path
+  // Hotfixes - reduce these to the minimum, as they shall be higher-level resolved
+  const isFamilyNanoBanana = model.id.includes('nano-banana') || model.id.includes('gemini-3-pro-image-preview');
+  const api3RequiresSignatures = isFamilyNanoBanana;
+
+  // Note: the streaming setting is ignored here as it only belongs in the path
 
   // Pre-process CGR - approximate spill of System to User message - note: no need to flush as every message is not batched
   const chatGenerate = aixSpillSystemToUser(_chatGenerate);
@@ -52,7 +59,7 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
   }
 
   // Chat Messages
-  const contents: TRequest['contents'] = _toGeminiContents(chatGenerate.chatSequence);
+  const contents: TRequest['contents'] = _toGeminiContents(chatGenerate.chatSequence, api3RequiresSignatures);
 
   // Construct the request payload
   const payload: TRequest = {
@@ -78,15 +85,20 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
   }
 
   // Thinking models: thinking budget and show thoughts
-  if (model.vndGeminiShowThoughts === true || model.vndGeminiThinkingBudget !== undefined) {
+  if (model.vndGeminiShowThoughts === true || model.vndGeminiThinkingBudget !== undefined || model.vndGeminiThinkingLevel) {
     const thinkingConfig: Exclude<TRequest['generationConfig'], undefined>['thinkingConfig'] = {};
 
-    // This seems deprecated keep it in case Gemini turns it on again
-    if (model.vndGeminiShowThoughts)
+    // This shows mainly 'summaries' of thoughts, and we enable it for most cases where thinking is requested
+    if (model.vndGeminiShowThoughts || (model.vndGeminiThinkingBudget ?? 0) > 1 || model.vndGeminiThinkingLevel === 'high' || model.vndGeminiThinkingLevel === 'medium')
       thinkingConfig.includeThoughts = true;
 
-    // 0 disables thinking explicitly
-    if (model.vndGeminiThinkingBudget !== undefined) {
+    // [Gemini 3, 2025-11-18] Thinking Level (replaces thinkingBudget for Gemini 3)
+    // CRITICAL: Cannot use both thinkingLevel and thinkingBudget (400 error)
+    if (model.vndGeminiThinkingLevel) {
+      thinkingConfig.thinkingLevel = model.vndGeminiThinkingLevel;
+    }
+    // [Gemini 2.x] Thinking Budget (0 disables thinking explicitly)
+    else if (model.vndGeminiThinkingBudget !== undefined) {
       if (model.vndGeminiThinkingBudget > 0)
         thinkingConfig.includeThoughts = true;
       thinkingConfig.thinkingBudget = model.vndGeminiThinkingBudget;
@@ -95,10 +107,21 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
     payload.generationConfig!.thinkingConfig = thinkingConfig;
   }
 
-  // [Gemini, 2025-10-02] Image generation: aspect ratio configuration
-  if (model.vndGeminiAspectRatio) {
+  // [Gemini, 2025-11-18] Media Resolution: controls vision processing quality
+  if (model.vndGeminiMediaResolution) {
+    const mediaResolutionValuesMap = {
+      'mr_low': 'MEDIA_RESOLUTION_LOW',
+      'mr_medium': 'MEDIA_RESOLUTION_MEDIUM',
+      'mr_high': 'MEDIA_RESOLUTION_HIGH',
+    } as const;
+    payload.generationConfig!.mediaResolution = mediaResolutionValuesMap[model.vndGeminiMediaResolution];
+  }
+
+  // [Gemini, 2025-10-02] [Gemini, 2025-11-20] Image generation: aspect ratio and size configuration
+  if (model.vndGeminiAspectRatio || model.vndGeminiImageSize) {
     payload.generationConfig!.imageConfig = {
-      aspectRatio: model.vndGeminiAspectRatio,
+      ...(model.vndGeminiAspectRatio ? { aspectRatio: model.vndGeminiAspectRatio } : {}),
+      ...(model.vndGeminiImageSize ? { imageSize: model.vndGeminiImageSize } : {}),
     };
   }
 
@@ -136,9 +159,9 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
   // Allow/deny auto-adding hosted tools when custom tools are present
   const hasCustomTools = chatGenerate.tools?.some(t => t.type === 'function_call');
   const hasRestrictivePolicy = chatGenerate.toolsPolicy?.type === 'any' || chatGenerate.toolsPolicy?.type === 'function_call';
-  const skipHostedToolsDueToCustomTools = hasCustomTools && hasRestrictivePolicy;
+  const skipHostedToolsDueToCustomTools = hasCustomTools && hasRestrictivePolicy; // FIXME: re-evaluate in the future whether this shall be on higher information levels (callers)
 
-  // Custom tools
+  // Function Calls (Custom Tools)
   if (chatGenerate.tools) {
     payload.tools = _toGeminiTools(chatGenerate.tools);
     if (chatGenerate.toolsPolicy)
@@ -146,11 +169,38 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
   }
 
   // Hosted tools
+
+  // [Gemini, 2025-11-18] Code Execution: add tool when enabled
+  if (model.vndGeminiCodeExecution === 'auto' && !skipHostedToolsDueToCustomTools) {
+    if (!payload.tools) payload.tools = [];
+
+    // Build the Code Execution tool configuration (empty object)
+    const codeExecutionTool: NonNullable<TRequest['tools']>[number] = {
+      codeExecution: {},
+    };
+
+    // Add to tools array
+    payload.tools.push(codeExecutionTool);
+  }
+
+  // [Gemini, 2025-11-01] Computer Use: add tool when environment is specified
+  if (model.vndGeminiComputerUse && !skipHostedToolsDueToCustomTools) {
+    if (!payload.tools) payload.tools = [];
+
+    // Build the Computer Use tool configuration
+    const computerUseTool: NonNullable<TRequest['tools']>[number] = {
+      computerUse: {
+        environment: model.vndGeminiComputerUse === 'browser' ? 'ENVIRONMENT_BROWSER' : 'ENVIRONMENT_BROWSER',
+      },
+    };
+
+    // Add to tools array
+    payload.tools.push(computerUseTool);
+  }
+
   // [Gemini, 2025-10-13] Google Search Grounding: add tool when enabled
   if (model.vndGeminiGoogleSearch && !skipHostedToolsDueToCustomTools) {
-    // Initialize tools array if not present
-    if (!payload.tools)
-      payload.tools = [];
+    if (!payload.tools) payload.tools = [];
 
     // Build the Google Search tool configuration
     const googleSearchTool: NonNullable<TRequest['tools']>[number] = {
@@ -161,6 +211,18 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
     payload.tools.push(googleSearchTool);
   }
 
+  // [Gemini, 2025-08-18] URL Context: add tool when enabled
+  if (model.vndGeminiUrlContext === 'auto' && !isFamilyNanoBanana && !skipHostedToolsDueToCustomTools) {
+    if (!payload.tools) payload.tools = [];
+
+    // Build the URL Context tool configuration (empty object)
+    const urlContextTool: NonNullable<TRequest['tools']>[number] = {
+      urlContext: {},
+    };
+
+    // Add to tools array
+    payload.tools.push(urlContextTool);
+  }
 
   // Preemptive error detection with server-side payload validation before sending it upstream
   const validated = GeminiWire_API_Generate_Content.Request_schema.safeParse(payload);
@@ -175,7 +237,7 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
 type TRequest = GeminiWire_API_Generate_Content.Request;
 
 
-function _toGeminiContents(chatSequence: AixMessages_ChatMessage[]): GeminiWire_Messages.Content[] {
+function _toGeminiContents(chatSequence: AixMessages_ChatMessage[], apiRequiresSignatures: boolean): GeminiWire_Messages.Content[] {
 
   // Remove messages that are made of empty parts
   // if (hotFixRemoveEmptyMessages)
@@ -204,15 +266,22 @@ function _toGeminiContents(chatSequence: AixMessages_ChatMessage[]): GeminiWire_
     }
 
     for (const part of message.parts) {
+      let partRequiresSignature = false;
       switch (part.pt) {
 
         case 'text':
           parts.push(GeminiWire_ContentParts.TextPart(part.text));
+
+          // [Gemini, 2025-11-20] Nano Banana Pro requires thoughtSignature on the first model text part
+          if (apiRequiresSignatures && message.role === 'model')
+            partRequiresSignature = true;
           break;
 
         case 'inline_audio':
         case 'inline_image':
           parts.push(GeminiWire_ContentParts.InlineDataPart(part.mimeType, part.base64));
+          if (apiRequiresSignatures)
+            partRequiresSignature = true;
           break;
 
         case 'doc':
@@ -302,6 +371,21 @@ function _toGeminiContents(chatSequence: AixMessages_ChatMessage[]): GeminiWire_
         default:
           const _exhaustiveCheck: never = part;
           throw new Error(`Unsupported part type in Chat message: ${(part as any).pt}`);
+      }
+
+      // apply thoughtSignature if present
+      if (parts.length) {
+        const tsTarget = parts[parts.length - 1];
+
+        // apply thoughtSignature to the last part if applicable
+        if ('_vnd' in part && part._vnd?.gemini?.thoughtSignature) {
+          tsTarget.thoughtSignature = part._vnd.gemini.thoughtSignature;
+        }
+        // if not applied yet, and required for this part type, apply bypass dummy and warn
+        else if (partRequiresSignature) {
+          tsTarget.thoughtSignature = GEMINI_BYPASS_THOUGHT_SIGNATURE;
+          console.log('[Gemini 3] Message part missing thoughtSignature - using bypass dummy (cross-provider or edited content)');
+        }
       }
     }
 

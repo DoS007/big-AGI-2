@@ -126,6 +126,24 @@ export const DModelParameterRegistry = {
     // No initial value - when undefined, the model decides the aspect ratio
   } as const,
 
+  llmVndGeminiCodeExecution: {
+    label: 'Code Execution',
+    type: 'enum' as const,
+    description: 'Enable automatic Python code generation and execution by the model',
+    values: ['auto'] as const,
+    // No initialValue - undefined means off
+  } as const,
+
+  llmVndGeminiComputerUse: {
+    label: 'Computer Use Environment',
+    type: 'enum' as const,
+    description: 'Environment type for Computer Use tool (required for Computer Use model)',
+    values: ['browser'] as const,
+    initialValue: 'browser',
+    // requiredFallback: 'browser', // See `const _requiredParamId: DModelParameterId[]` in llms.parameters.ts for why custom params don't have required values at AIX invocation...
+    hidden: true,
+  } as const,
+
   llmVndGeminiGoogleSearch: {
     label: 'Google Search',
     type: 'enum' as const,
@@ -134,11 +152,27 @@ export const DModelParameterRegistry = {
     // No initialValue - undefined means off
   } as const,
 
+  llmVndGeminiImageSize: { // [Gemini, 2025-11-20] Nano Banana launch
+    label: 'Image Size',
+    type: 'enum' as const,
+    description: 'Controls the resolution of generated images',
+    values: ['1K', '2K', '4K'] as const,
+    // No initial value - when undefined, the model decides the image size
+  } as const,
+
+  llmVndGeminiMediaResolution: {
+    label: 'Media Resolution',
+    type: 'enum' as const,
+    description: 'Controls vision processing quality for multimodal inputs. Higher resolution improves text reading and detail identification but increases token usage.',
+    values: ['mr_high', 'mr_medium', 'mr_low'] as const,
+    // No initialValue - undefined: "If unspecified, the model uses optimal defaults based on the media type." (Images: high, PDFs: medium, Videos: low/medium (rec: high for OCR))
+  } as const,
+
   llmVndGeminiShowThoughts: {
     label: 'Show Thoughts',
     type: 'boolean' as const,
     description: 'Show Gemini\'s reasoning process',
-    initialValue: true,
+    // initialValue: true, // no initial value
   } as const,
 
   llmVndGeminiThinkingBudget: {
@@ -153,6 +187,35 @@ export const DModelParameterRegistry = {
     // initialValue: unset, // auto-budgeting
     description: 'Budget for extended thinking. 0 disables thinking. If not set, the model chooses automatically.',
   } as const,
+
+  llmVndGeminiThinkingLevel: {
+    label: 'Thinking Level',
+    type: 'enum' as const,
+    description: 'Controls internal reasoning depth. Replaces thinking_budget for Gemini 3 models. When unset, the model decides dynamically.',
+    values: ['high', 'medium' /* not present at launch */, 'low' /* default when unset */] as const,
+    // No initialValue - undefined means 'dynamic', which for Gemini Pro is the same as 'high' (which is the equivalent of 'medium' for OpenAI's effort levels.. somehow)
+  } as const,
+
+  // NOTE: we don't have this as a parameter, as for now we use it in tandem with llmVndGeminiGoogleSearch
+  // llmVndGeminiUrlContext: {
+  //   label: 'URL Context',
+  //   type: 'enum' as const,
+  //   description: 'Enable fetching and analyzing content from URLs provided in prompts (up to 20 URLs, 34MB each)',
+  //   values: ['auto'] as const,
+  //   // No initialValue - undefined means off
+  // } as const,
+
+  // Moonshot-specific parameters
+
+  llmVndMoonshotWebSearch: {
+    label: 'Web Search',
+    type: 'enum' as const,
+    description: 'Enable Kimi\'s $web_search builtin function for real-time web search ($0.005 per search)',
+    values: ['auto'] as const,
+    // No initialValue - undefined means off
+  } as const,
+
+  // OpenAI-specific parameters
 
   llmVndOaiReasoningEffort: {
     label: 'Reasoning Effort',
@@ -340,7 +403,7 @@ export function applyModelParameterInitialValues(destValues: DModelParameterValu
 const _requiredParamId: DModelParameterId[] = [
   // 'llmRef', // disabled: we know this can't have a fallback value in the registry
   'llmResponseTokens', // DModelParameterRegistry.llmResponseTokens.requiredFallback = FALLBACK_LLM_PARAM_RESPONSE_TOKENS
-  'llmTemperature' // DModelParameterRegistry.llmTemperature.requiredFallback = FALLBACK_LLM_PARAM_TEMPERATURE
+  'llmTemperature', // DModelParameterRegistry.llmTemperature.requiredFallback = FALLBACK_LLM_PARAM_TEMPERATURE
 ] as const;
 
 export function getAllModelParameterValues(initialParameters: undefined | DModelParameterValues, userParameters?: DModelParameterValues): DModelParameterValues {

@@ -40,11 +40,9 @@ export function aixToOpenAIResponses(
   const isOpenAIChatGPT = ['gpt-5-chat'].some(_id => model.id === _id || model.id.startsWith(_id + '-'));
   const isOpenAIComputerUse = model.id.includes('computer-use');
   const isOpenAIO1Pro = model.id === 'o1-pro' || model.id.startsWith('o1-pro-');
-  const isOpenAIDeepResearch = model.id.includes('-deep-research');
 
   const hotFixNoTemperature = isOpenAIOFamily && !isOpenAIChatGPT;
   const hotFixNoTruncateAuto = isOpenAIComputerUse;
-  const hotFixForceWebSearchTool = isOpenAIDeepResearch;
 
   const isDialectAzure = openAIDialect === 'azure';
 
@@ -126,14 +124,15 @@ export function aixToOpenAIResponses(
   const skipHostedToolsDueToCustomTools = hasCustomTools && hasRestrictivePolicy;
 
   // Tool: Web Search: for search and deep research models
-  const requestWebSearchTool = hotFixForceWebSearchTool || !!model.vndOaiWebSearchContext || !!model.userGeolocation;
+  const requestWebSearchTool = !!model.vndOaiWebSearchContext || !!model.userGeolocation;
   if (requestWebSearchTool && !skipHostedToolsDueToCustomTools) {
     /**
-     * NOTE: as of 2025-09-12, we still get the "Hosted tool 'web_search_preview' is not supported with gpt-5-mini-2025-08-07"
+     * NOTE: as of 2025-09-12, we still get the "Hosted tool 'web_search' is not supported with gpt-5-mini-2025-08-07"
      *       warning from Azure OpenAI V1. We shall check in the future if this is resolved.
      */
     if (isDialectAzure) {
-      // Azure OpenAI doesn't support web search tool yet (as of Aug 2025)
+      // [2025-11-18] Azure OpenAI still doesn't support web search tool yet - confirmed
+      // [2025-09-12] Azure OpenAI doesn't support web search tool yet, and we also remove the "parameter" so we shall not come here
       console.log('[DEV] Azure OpenAI Responses: skipping web search tool due to Azure limitations');
     } else if (payload.reasoning?.effort === 'minimal') {
       // Web search is not supported when the reasoning effort is 'minimal'
@@ -144,12 +143,13 @@ export function aixToOpenAIResponses(
       if (!payload.tools?.length)
         payload.tools = [];
       const webSearchTool: TRequestTool = {
-        type: 'web_search_preview',
+        type: 'web_search',
         search_context_size: model.vndOaiWebSearchContext ?? undefined,
         user_location: model.userGeolocation && {
           type: 'approximate',
           ...model.userGeolocation, // .city, .country, .region, .timezone
         },
+        external_web_access: true, // true: live internet access, false: cache-only
       };
       payload.tools.push(webSearchTool);
 
@@ -164,26 +164,30 @@ export function aixToOpenAIResponses(
   // Tool: Image Generation: configurable per model
   const requestImageGenerationTool = !!model.vndOaiImageGeneration;
   if (requestImageGenerationTool && !skipHostedToolsDueToCustomTools) {
-    if (isDialectAzure) {
-      // Azure OpenAI may not support image generation tool yet
-      console.log('[DEV] Azure OpenAI Responses: skipping image generation tool due to Azure limitations');
-    } else {
-      // Add the image generation tool to the request
-      if (!payload.tools?.length)
-        payload.tools = [];
+    /**
+     * [2025-11-18] Azure OpenAI Image Generation limitations:
+     * - does not support image generation tool at all ({"type":"error","error":{"type":"invalid_request_error","code":null,"message":"There was an issue with your request. Please check your inputs and try again","param":null}})
+     * - does not support WebP output format
+     */
+    const azureImageWorkarounds = isDialectAzure;
+    if (azureImageWorkarounds)
+      console.warn('[DEV] Azure OpenAI Responses: trying image generation tool despite Azure limitations');
 
-      // Map enum values to tool configuration
-      const imageMode = model.vndOaiImageGeneration;
-      const imageGenerationTool: Extract<TRequestTool, { type: 'image_generation' }> = {
-        type: 'image_generation',
-        ...(imageMode === 'mq' ? { quality: 'medium' } : { /* quality: 'high' -- auto */ }),
-        // ...(imageMode === 'hq' ? ... auto ... ),
-        ...(imageMode === 'hq_edit' && { input_fidelity: 'high' }),
-        ...(imageMode !== 'hq_png' && { output_format: 'webp' }),
-        moderation: 'low',
-      };
-      payload.tools.push(imageGenerationTool);
-    }
+    // Add the image generation tool to the request
+    if (!payload.tools?.length)
+      payload.tools = [];
+
+    // Map enum values to tool configuration
+    const imageMode = model.vndOaiImageGeneration;
+    const imageGenerationTool: Extract<TRequestTool, { type: 'image_generation' }> = {
+      type: 'image_generation',
+      ...(imageMode === 'mq' ? { quality: 'medium' } : { /* quality: 'high' -- auto */ }),
+      // ...(imageMode === 'hq' ? ... auto ... ),
+      ...(imageMode === 'hq_edit' && { input_fidelity: 'high' }),
+      ...(imageMode !== 'hq_png' && !azureImageWorkarounds && { output_format: 'webp' }),
+      moderation: 'low',
+    };
+    payload.tools.push(imageGenerationTool);
   }
 
 

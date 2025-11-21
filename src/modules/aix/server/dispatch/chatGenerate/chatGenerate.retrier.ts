@@ -7,7 +7,7 @@ import { executeChatGenerate } from './chatGenerate.executor';
 
 
 // configuration
-const AIX_DISABLE_OPERATION_RETRY = true; // still validating
+const AIX_DISABLE_OPERATION_RETRY = false;
 const AIX_DEBUG_OPERATION_RETRY = true; // prints the execution retries
 
 
@@ -19,8 +19,16 @@ const AIX_DEBUG_OPERATION_RETRY = true; // prints the execution retries
  */
 export class RequestRetryError extends Error {
   override readonly name = 'RequestRetryError';
-  constructor(message: string) {
-    super(message);
+
+  readonly reason: string;
+  readonly causeHttp?: number;
+  readonly causeConn?: string;
+
+  constructor(reason: string, options?: { causeHttp?: number; causeConn?: string }) {
+    super(reason); // keep message as reason for Error compatibility
+    this.reason = reason;
+    this.causeHttp = options?.causeHttp;
+    this.causeConn = options?.causeConn;
     Object.setPrototypeOf(this, RequestRetryError.prototype);
   }
 }
@@ -64,7 +72,7 @@ export async function* executeChatGenerateWithRetry(
         throw error; // unexpected
       }
 
-      // sanity: exhausted attempts - must be a Parser error
+      // sanity: exhausted attempts - must be a Parser error - as it shall have not thrown in this case
       if (attemptNumber >= maxAttempts) {
         if (AIX_DEBUG_OPERATION_RETRY)
           console.warn(`[operation.retrier] ⚠️ Retry error on final attempt (parser bug?) - ${error?.message || error}`);
@@ -77,6 +85,16 @@ export async function* executeChatGenerateWithRetry(
         console.log(`[operation.retrier] 🔄 Retrying after ${delayMs}ms (attempt ${attemptNumber}/${maxAttempts - 1}): ${error?.message || error}`);
 
       attemptNumber++;
+
+      // -> retry-server-operation - parent loop of retry-server-dispatch
+      yield {
+        cg: 'retry-reset', rScope: 'srv-op',
+        rShallClear: true, // requesting a reassembler reset, however there are likely low/no particles yet
+        reason: error.reason || error.message || 'retrying operation',
+        attempt: attemptNumber, maxAttempts: maxAttempts, delayMs: delayMs,
+        ...(error.causeHttp ? { causeHttp: error.causeHttp } : undefined),
+        ...(error.causeConn ? { causeConn: error.causeConn } : undefined),
+      };
 
       // If aborted during delay, let next attempt detect it and create proper terminating particle
       // (throwing here would bypass executor's particle-based messaging contract)
