@@ -19,6 +19,10 @@ export class AudioLivePlayer {
     this.audioElement.src = URL.createObjectURL(this.mediaSource);
     this.audioElement.autoplay = true;
 
+    // Suppress Android media notification by clearing media session metadata
+    if ('mediaSession' in navigator)
+      navigator.mediaSession.metadata = null;
+
     // Connect the audio element to the audio context
     const sourceNode = this.audioContext.createMediaElementSource(this.audioElement);
     sourceNode.connect(this.audioContext.destination);
@@ -60,14 +64,12 @@ export class AudioLivePlayer {
   private onSourceBufferUpdateEnd = () => {
     this.isSourceBufferUpdating = false;
 
-    // Continue appending if there's more data
-    if (!this.isMediaSourceEnded) {
+    // Always continue appending if there's more data in the queue
+    if (this.chunkQueue.length > 0) {
       this.appendNextChunk();
-    } else {
-      // End the stream if all data has been appended
-      if (this.sourceBuffer && !this.sourceBuffer.updating && this.chunkQueue.length === 0) {
-        this.mediaSource.endOfStream();
-      }
+    } else if (this.isMediaSourceEnded) {
+      // Only end the stream when queue is fully drained
+      this._safeEndOfStream();
     }
   };
 
@@ -86,9 +88,17 @@ export class AudioLivePlayer {
         }
       }
     } else if (this.isMediaSourceEnded) {
-      if (this.sourceBuffer && !this.sourceBuffer.updating) {
-        this.mediaSource.endOfStream();
-      }
+      if (this.sourceBuffer && !this.sourceBuffer.updating)
+        this._safeEndOfStream();
+    }
+  }
+
+  private _safeEndOfStream() {
+    if (this.mediaSource.readyState !== 'open') return;
+    try {
+      this.mediaSource.endOfStream();
+    } catch (e) {
+      // Ignore - MediaSource may have already ended
     }
   }
 
@@ -106,9 +116,8 @@ export class AudioLivePlayer {
   public endPlayback() {
     this.isMediaSourceEnded = true;
     // If the sourceBuffer is not updating, we can end the stream
-    if (this.sourceBuffer && !this.sourceBuffer.updating && this.chunkQueue.length === 0) {
-      this.mediaSource.endOfStream();
-    }
+    if (this.sourceBuffer && !this.sourceBuffer.updating && this.chunkQueue.length === 0)
+      this._safeEndOfStream();
   }
 
   /**
@@ -119,14 +128,13 @@ export class AudioLivePlayer {
     this.chunkQueue = [];
     this.isMediaSourceEnded = true;
 
-    if (this.sourceBuffer) {
+    // only abort SourceBuffer when MediaSource is 'open'
+    if (this.sourceBuffer && this.mediaSource.readyState === 'open') {
       try {
-        if (this.mediaSource.readyState === 'open') {
-          this.mediaSource.endOfStream();
-        }
         this.sourceBuffer.abort();
+        this.mediaSource.endOfStream();
       } catch (e) {
-        console.warn('Error stopping playback:', e);
+        // Ignore - may race with natural stream end
       }
     }
 

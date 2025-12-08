@@ -99,6 +99,22 @@ export const _knownOpenAIChatModels: ManualMappings = [
     // benchmark: TBD
   },
 
+  // GPT-5.1 Codex Max
+  {
+    idPrefix: 'gpt-5.1-codex-max',
+    label: 'GPT-5.1 Codex Max',
+    description: 'Our most intelligent coding model optimized for long-horizon, agentic coding tasks.',
+    contextWindow: 400000,
+    maxCompletionTokens: 128000,
+    trainingDataCutoff: 'Sep 30, 2024',
+    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
+    parameterSpecs: [
+      { paramId: 'llmVndOaiReasoningEffort4' },
+      { paramId: 'llmForceNoStream' },
+    ],
+    chatPrice: { input: 1.25, cache: { cType: 'oai-ac', read: 0.125 }, output: 10 },
+    // benchmark: TBD
+  },
   // GPT-5.1 Codex
   {
     idPrefix: 'gpt-5.1-codex',
@@ -457,26 +473,6 @@ export const _knownOpenAIChatModels: ManualMappings = [
   },
 
 
-  // o1-mini (deprecated - shutdown 2025-10-27)
-  {
-    hidden: true, // DEPRECATED - shutdown 2025-10-27
-    idPrefix: 'o1-mini-2024-09-12',
-    label: 'o1 Mini (2024-09-12)', // ⏱️
-    description: 'DEPRECATED: Will be shut down on 2025-10-27. Fast, cost-efficient reasoning model tailored to coding, math, and science use cases.',
-    contextWindow: 128000,
-    maxCompletionTokens: 65536,
-    trainingDataCutoff: 'Oct 2023',
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_PromptCaching, LLM_IF_OAI_Reasoning, LLM_IF_HOTFIX_StripImages, LLM_IF_HOTFIX_Sys0ToUsr0],
-    chatPrice: { input: 1.1, cache: { cType: 'oai-ac', read: 0.55 }, output: 4.4 },
-    benchmark: { cbaElo: 1304 },
-    isLegacy: true,
-  },
-  {
-    idPrefix: 'o1-mini',
-    label: 'o1 Mini',
-    symLink: 'o1-mini-2024-09-12',
-  },
-
   /// GPT-4.1 series
 
   // GPT-4.1
@@ -664,19 +660,6 @@ export const _knownOpenAIChatModels: ManualMappings = [
     hidden: true, // old
     idPrefix: 'gpt-4o-audio-preview-2024-12-17',
     label: 'GPT-4o Audio Preview (2024-12-17)',
-    description: 'Snapshot for the Audio API model.',
-    contextWindow: 128000,
-    maxCompletionTokens: 16384,
-    trainingDataCutoff: 'Oct 2023',
-    interfaces: IFS_GPT_AUDIO,
-    chatPrice: { input: 2.5, output: 10 /* AUDIO PRICING UNSUPPORTED 40/80 */ },
-    // benchmarks don't apply to audio models
-    isPreview: true,
-  },
-  {
-    hidden: true, // old
-    idPrefix: 'gpt-4o-audio-preview-2024-10-01',
-    label: 'GPT-4o Audio Preview (2024-10-01)',
     description: 'Snapshot for the Audio API model.',
     contextWindow: 128000,
     maxCompletionTokens: 16384,
@@ -936,6 +919,7 @@ const _manualOrderingIdPrefixes = [
   // GPT-5.1
   'gpt-5.1-20',
   'gpt-5.1-chat-latest',
+  'gpt-5.1-codex-max',
   'gpt-5.1-codex',
   'gpt-5.1-codex-mini',
   'gpt-5.1',
@@ -970,7 +954,6 @@ const _manualOrderingIdPrefixes = [
   'o1-pro',
   'o1-20',
   'o1-preview-',
-  'o1-mini-',
   'o1-',
   // GPT-4.5
   'gpt-4.5-20',

@@ -1,13 +1,15 @@
 import { apiAsync } from '~/common/util/trpc.client';
 
-import type { GeminiAccessSchema } from '../../server/gemini/gemini.router';
 import type { GeminiWire_Safety } from '~/modules/aix/server/dispatch/wiretypes/gemini.wiretypes';
+
+import type { GeminiAccessSchema } from '../../server/gemini/gemini.access';
 import type { IModelVendor } from '../IModelVendor';
 
 
 interface DGeminiServiceSettings {
   geminiKey: string;
   geminiHost: string;
+  csf?: boolean;
   minSafetyLevel: GeminiWire_Safety.HarmBlockThreshold;
 }
 
@@ -31,6 +33,9 @@ export const ModelVendorGemini: IModelVendor<DGeminiServiceSettings, GeminiAcces
   instanceLimit: 1,
   hasServerConfigKey: 'hasLlmGemini',
 
+  /// client-side-fetch ///
+  csfAvailable: _csfGeminiAvailable,
+
   // functions
   initializeSetup: () => ({
     geminiKey: '',
@@ -42,6 +47,7 @@ export const ModelVendorGemini: IModelVendor<DGeminiServiceSettings, GeminiAcces
   },
   getTransportAccess: (partialSetup): GeminiAccessSchema => ({
     dialect: 'gemini',
+    clientSideFetch: _csfGeminiAvailable(partialSetup) && !!partialSetup?.csf,
     geminiKey: partialSetup?.geminiKey || '',
     geminiHost: partialSetup?.geminiHost || '',
     minSafetyLevel: partialSetup?.minSafetyLevel || 'HARM_BLOCK_THRESHOLD_UNSPECIFIED',
@@ -51,3 +57,7 @@ export const ModelVendorGemini: IModelVendor<DGeminiServiceSettings, GeminiAcces
   rpcUpdateModelsOrThrow: async (access) => await apiAsync.llmGemini.listModels.query({ access }),
 
 };
+
+function _csfGeminiAvailable(s?: Partial<DGeminiServiceSettings>) {
+  return !!s?.geminiKey;
+}

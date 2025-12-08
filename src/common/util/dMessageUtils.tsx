@@ -34,11 +34,11 @@ export const avatarIconSx = {
   width: 36,
 } as const;
 
-const largerAvatarIconsSx = {
-  borderRadius: 'sm',
-  width: 48,
-  height: 48,
-};
+// const largerAvatarIconsSx = {
+//   borderRadius: 'sm',
+//   width: 48,
+//   height: 48,
+// };
 
 const aixSkipBoxSx = {
   height: 36,
@@ -148,7 +148,8 @@ export function makeMessageAvatarIcon(
               : isTextToImage ? ANIM_BUSY_PAINTING
                 : isReact ? ANIM_BUSY_THINKING
                   : ANIM_BUSY_TYPING}
-            sx={larger ? largerAvatarIconsSx : avatarIconSx}
+            sx={avatarIconSx}
+            // sx={larger ? largerAvatarIconsSx : avatarIconSx}
           />;
 
         // Purpose image (if present)
@@ -428,6 +429,10 @@ export function prettyShortChatModelName(model: string | undefined): string {
       cutModel = cutModel.slice(0, cutModel.length - dateMatch[0].length); // remove '-05-15'
     }
     const geminiName = cutModel
+      // commercial aliases
+      .replace('gemini-3-pro-image', 'Nano Banana Pro')
+      .replace('gemini-2.5-flash-image', 'Nano Banana')
+      // root changes
       .replace('non-thinking', '') // NOTE: this is our variant, injected in gemini.models.ts
       .replaceAll('-', ' ')
       // products
@@ -452,8 +457,14 @@ export function prettyShortChatModelName(model: string | undefined): string {
     // start past the last /, if any
     const lastSlashIndex = model.lastIndexOf('/');
     const modelName = lastSlashIndex === -1 ? model : model.slice(lastSlashIndex + 1);
-    return modelName.replace('deepseek-', ' Deepseek ')
-      .replace('reasoner', 'R1').replace('r1', 'R1')
+    return modelName
+      // map these for each release
+      .replace('-reasoner', ' 3.2 Reasoner')
+      .replace('-chat', ' 3.2 Chat')
+      .replace('-v3', ' 3')
+      // default replacements
+      .replace('deepseek', 'Deepseek')
+      .replace('speciale', 'Speciale').replace('@', ' ')
       .replaceAll('-', ' ')
       .trim();
   }

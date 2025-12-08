@@ -1,7 +1,9 @@
-import { anthropicAccess } from '~/modules/llms/server/anthropic/anthropic.router';
-import { geminiAccess } from '~/modules/llms/server/gemini/gemini.router';
-import { ollamaAccess } from '~/modules/llms/server/ollama/ollama.router';
-import { openAIAccess } from '~/modules/llms/server/openai/openai.router';
+import { anthropicAccess } from '~/modules/llms/server/anthropic/anthropic.access';
+import { geminiAccess } from '~/modules/llms/server/gemini/gemini.access';
+import { ollamaAccess } from '~/modules/llms/server/ollama/ollama.access';
+import { openAIAccess } from '~/modules/llms/server/openai/openai.access';
+// [DeepSeek, 2025-12-01] V3.2-Speciale temporary endpoint
+import { DEEPSEEK_SPECIALE_HOST, DEEPSEEK_SPECIALE_SUFFIX } from '~/modules/llms/server/openai/models/deepseek.models';
 
 import type { AixAPI_Access, AixAPI_Model, AixAPI_ResumeHandle, AixAPIChatGenerate_Request } from '../../api/aix.wiretypes';
 import type { AixDemuxers } from '../stream.demuxers';
@@ -49,11 +51,24 @@ export function createChatGenerateDispatch(access: AixAPI_Access, model: AixAPI_
   const { dialect } = access;
   switch (dialect) {
     case 'anthropic': {
+
+      // [Anthropic, 2025-11-24] Detect if any tool uses Programmatic Tool Calling features (allowed_callers, input_examples)
+      const usesProgrammaticToolCalling = chatGenerate.tools?.some(tool =>
+          tool.type === 'function_call' && (
+            tool.function_call.allowed_callers?.includes('code_execution') ||
+            (tool.function_call.input_examples && tool.function_call.input_examples.length > 0)
+          ),
+      ) ?? false;
+
       const anthropicRequest = anthropicAccess(access, '/v1/messages', {
         modelIdForBetaFeatures: model.id,
         vndAntWebFetch: model.vndAntWebFetch === 'auto',
         vndAnt1MContext: model.vndAnt1MContext === true,
+        vndAntEffort: !!model.vndAntEffort,
         enableSkills: !!model.vndAntSkills,
+        enableStrictOutputs: !!model.strictJsonOutput || !!model.strictToolInvocations, // [Anthropic, 2025-11-13] for both JSON output and grammar-constrained tool invocations inputs
+        enableToolSearch: !!model.vndAntToolSearch,
+        enableProgrammaticToolCalling: usesProgrammaticToolCalling,
         // enableCodeExecution: ...
       });
 
@@ -96,8 +111,8 @@ export function createChatGenerateDispatch(access: AixAPI_Access, model: AixAPI_
         request: {
           ...ollamaAccess(access, '/v1/chat/completions'), // use the OpenAI-compatible endpoint
           method: 'POST',
-          // body: ollamaChatCompletionPayload(model, _hist, access.ollamaJson, streaming),
-          body: aixToOpenAIChatCompletions('openai', model, chatGenerate, access.ollamaJson, streaming),
+          // body: ollamaChatCompletionPayload(model, _hist, streaming),
+          body: aixToOpenAIChatCompletions('openai', model, chatGenerate, streaming),
         },
         // demuxerFormat: streaming ? 'json-nl' : null,
         demuxerFormat: streaming ? 'fast-sse' : null,
@@ -123,6 +138,22 @@ export function createChatGenerateDispatch(access: AixAPI_Access, model: AixAPI_
     case 'togetherai':
     case 'xai':
 
+      // [DeepSeek, 2025-12-01] V3.2-Speciale: Handle @speciale model ID marker
+      if (dialect === 'deepseek' && model.id.endsWith(DEEPSEEK_SPECIALE_SUFFIX)) {
+        const actualModelId = model.id.slice(0, -DEEPSEEK_SPECIALE_SUFFIX.length);
+        const { headers } = openAIAccess(access, actualModelId, '/v1/chat/completions');
+        return {
+          request: {
+            url: DEEPSEEK_SPECIALE_HOST + '/v1/chat/completions',
+            headers,
+            method: 'POST',
+            body: aixToOpenAIChatCompletions('deepseek', { ...model, id: actualModelId }, chatGenerate, streaming),
+          },
+          demuxerFormat: streaming ? 'fast-sse' : null,
+          chatGenerateParse: streaming ? createOpenAIChatCompletionsChunkParser() : createOpenAIChatCompletionsParserNS(),
+        };
+      }
+
       // switch to the Responses API if the model supports it
       const isResponsesAPI = !!model.vndOaiResponsesAPI;
       if (isResponsesAPI) {
@@ -130,7 +161,7 @@ export function createChatGenerateDispatch(access: AixAPI_Access, model: AixAPI_
           request: {
             ...openAIAccess(access, model.id, '/v1/responses'),
             method: 'POST',
-            body: aixToOpenAIResponses(dialect, model, chatGenerate, false, streaming, enableResumability),
+            body: aixToOpenAIResponses(dialect, model, chatGenerate, streaming, enableResumability),
           },
           demuxerFormat: streaming ? 'fast-sse' : null,
           chatGenerateParse: streaming ? createOpenAIResponsesEventParser() : createOpenAIResponseParserNS(),
@@ -141,7 +172,7 @@ export function createChatGenerateDispatch(access: AixAPI_Access, model: AixAPI_
         request: {
           ...openAIAccess(access, model.id, '/v1/chat/completions'),
           method: 'POST',
-          body: aixToOpenAIChatCompletions(dialect, model, chatGenerate, false, streaming),
+          body: aixToOpenAIChatCompletions(dialect, model, chatGenerate, streaming),
         },
         demuxerFormat: streaming ? 'fast-sse' : null,
         chatGenerateParse: streaming ? createOpenAIChatCompletionsChunkParser() : createOpenAIChatCompletionsParserNS(),
