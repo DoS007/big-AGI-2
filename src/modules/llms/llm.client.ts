@@ -1,8 +1,8 @@
 import { hasGoogleAnalytics, sendGAEvent } from '~/common/components/3rdparty/GoogleAnalytics';
 
 import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/llms.service.types';
-import { DLLM, DModelInterfaceV1, LLM_IF_HOTFIX_NoTemperature, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn } from '~/common/stores/llms/llms.types';
-import { applyModelParameterInitialValues, FALLBACK_LLM_PARAM_TEMPERATURE } from '~/common/stores/llms/llms.parameters';
+import { DLLM, DLLMId, DModelInterfaceV1, LLM_IF_HOTFIX_NoTemperature, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn } from '~/common/stores/llms/llms.types';
+import { applyModelParameterSpecsInitialValues, DModelParameterSpecAny, FALLBACK_LLM_PARAM_TEMPERATURE } from '~/common/stores/llms/llms.parameters';
 import { isModelPricingFree } from '~/common/stores/llms/llms.pricing';
 import { llmsStoreActions } from '~/common/stores/llms/store-llms';
 
@@ -10,9 +10,24 @@ import type { ModelDescriptionSchema } from './server/llm.server.types';
 import { findServiceAccessOrThrow } from './vendors/vendor.helpers';
 
 
+// configuration
+
+/**
+ * DO NOT EXPORT TO THE SERVER, as the server knows already but we don't want to cross bundles.
+ * When this prefix is used, then the variant ID will not be prefixed with a dash.
+ */
+export const LLMS_VARIANT_SEPARATOR = '::' as const;
+
+function _clientIdWithVariant(id: string, idVariant?: string): string {
+  return !idVariant ? id
+    : idVariant.startsWith(LLMS_VARIANT_SEPARATOR) ? `${id}${idVariant}`
+      : `${id}-${idVariant}`;
+}
+
+
 // LLM Model Updates Client Functions
 
-export async function llmsUpdateModelsForServiceOrThrow(serviceId: DModelsServiceId, keepUserEdits: boolean): Promise<{ models: ModelDescriptionSchema[] }> {
+export async function llmsUpdateModelsForServiceOrThrow(serviceId: DModelsServiceId, keepUserEdits: true): Promise<{ models: ModelDescriptionSchema[] }> {
 
   // get the access, assuming there's no client config and the server will do all
   const { service, vendor, transportAccess } = findServiceAccessOrThrow(serviceId);
@@ -40,9 +55,12 @@ export async function llmsUpdateModelsForServiceOrThrow(serviceId: DModelsServic
 
 
   // update the global models store
+  const factoryLLMs: ReadonlyArray<DLLM> = models.map(
+    (model: ModelDescriptionSchema) => _createDLLMFromModelDescription(model, service),
+  );
   llmsStoreActions().setServiceLLMs(
     service.id,
-    models.map(model => _createDLLMFromModelDescription(model, service)),
+    factoryLLMs,
     keepUserEdits,
     false,
   );
@@ -66,18 +84,19 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
 
   // null means unknown context/output tokens
   const contextTokens = d.contextWindow || null;
-  const maxOutputTokens = d.maxCompletionTokens || (contextTokens ? Math.round(contextTokens / 2) : null);
-  const llmResponseTokensRatio = d.maxCompletionTokens ? 1 : 1 / 4;
-  const llmResponseTokens = maxOutputTokens ? Math.round(maxOutputTokens * llmResponseTokensRatio) : null;
+  const maxOutputTokens = d.maxCompletionTokens || (contextTokens ? Math.round(contextTokens / 2) : null); // fallback to half context window
+
+  // initial (user overridable) response tokens setting: equal to the max, if the max is given, or to 1/8th of the context window (when max is set to 1/2 of context)
+  const llmResponseTokens = !maxOutputTokens ? null : !d.maxCompletionTokens ? Math.round(maxOutputTokens / 4) : d.maxCompletionTokens;
+
 
   // DLLM is a fundamental type in our application
   const dllm: DLLM = {
 
     // this id is Big-AGI specific, not the vendor's
-    id: !d.idVariant ? `${service.id}-${d.id}`
-      : `${service.id}-${d.id}-${d.idVariant}`,
+    id: `${service.id}-${_clientIdWithVariant(d.id, d.idVariant)}`,
 
-    // editable properties
+    // factory properties
     label: d.label,
     created: d.created || 0,
     updated: d.updated || 0,
@@ -87,17 +106,21 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
     // hard properties
     contextTokens,
     maxOutputTokens,
-    trainingDataCutoff: d.trainingDataCutoff,
     interfaces: d.interfaces?.length ? d.interfaces as DModelInterfaceV1[] : _fallbackInterfaces,
     benchmark: d.benchmark,
     // pricing?: ..., // set below, since it needs some adaptation
 
     // parameters system (spec and initial values)
-    parameterSpecs: d.parameterSpecs?.length ? d.parameterSpecs : [],
+    parameterSpecs: d.parameterSpecs?.length
+      ? d.parameterSpecs as DModelParameterSpecAny[] // NOTE: our force cast, assume the server (simple zod type) sent valid specs to the client (TS discriminated type)
+      : [],
     initialParameters: {
-      llmRef: d.id, // this is the vendor model id
-      llmTemperature: d.interfaces.includes(LLM_IF_HOTFIX_NoTemperature) ? null : FALLBACK_LLM_PARAM_TEMPERATURE,
-      llmResponseTokens: llmResponseTokens,
+      llmRef: d.id, // CONST - this is the vendor model id
+      llmResponseTokens: llmResponseTokens, // number | null
+      llmTemperature: // number | null
+        d.interfaces.includes(LLM_IF_HOTFIX_NoTemperature) ? null
+          : d.initialTemperature !== undefined ? d.initialTemperature
+            : FALLBACK_LLM_PARAM_TEMPERATURE,
     },
 
     // references
@@ -108,10 +131,14 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
     // userLabel: undefined,
     // userHidden: undefined
     // userStarred: undefined,
-    // userParameters: undefined,
     // userContextTokens: undefined,
     // userMaxOutputTokens: undefined,
     // userPricing: undefined,
+    // userParameters: undefined,
+
+    // clone metadata
+    // isUserClone: false,
+    // cloneSourceId: undefined,
   };
 
   // set the pricing
@@ -127,7 +154,71 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
 
   // set other params from spec's initialValues
   if (dllm.parameterSpecs?.length)
-    applyModelParameterInitialValues(dllm.initialParameters, dllm.parameterSpecs, false);
+    applyModelParameterSpecsInitialValues(dllm.initialParameters, dllm.parameterSpecs, false);
 
   return dllm;
+}
+
+
+// LLM Clone Creation
+
+/**
+ * Creates a clone DLLM object from a source LLM.
+ * The clone has its own ID and label but inherits all settings from the source.
+ *
+ * @param sourceLlm - The source LLM to clone
+ * @param cloneLabel - Display label for the clone
+ * @param cloneVariant - Variant suffix for the clone ID (will be appended as `-{variant}`)
+ * @returns The new DLLM object ready to be added to the store
+ */
+export function createDLLMUserClone(sourceLlm: DLLM, cloneLabel: string, cloneVariant: string): DLLM {
+  const cloneId = getDLLMCloneId(sourceLlm.id, cloneVariant);
+
+  return {
+    ...sourceLlm,
+    id: cloneId,
+    label: cloneLabel,
+
+    // -- Inherited Factory Properties
+    // created
+    // updated
+    // description
+    // hidden
+
+    // -- Inherited Hard Properties
+    // contextTokens
+    // maxOutputTokens
+    // interfaces
+    // benchmark
+    // pricing
+
+    // -- Inherited Parameters
+    // parameterSpecs
+    // initialParameters
+
+    // references(!)
+    // sId
+    // vId
+
+    // copy user customizations as the clone's own
+    userLabel: undefined, // use the cloneLabel as label directly
+    userHidden: sourceLlm.userHidden,
+    userStarred: false, // don't auto-star clones
+    userContextTokens: sourceLlm.userContextTokens,
+    userMaxOutputTokens: sourceLlm.userMaxOutputTokens,
+    userPricing: sourceLlm.userPricing ? { ...sourceLlm.userPricing } : undefined,
+    userParameters: sourceLlm.userParameters ? { ...sourceLlm.userParameters } : undefined,
+
+    // clone metadata
+    isUserClone: true,
+    cloneSourceId: sourceLlm.id,
+  };
+}
+
+/**
+ * Generates the clone ID that would be created for a given source and variant.
+ * Useful for checking uniqueness before creating a clone.
+ */
+export function getDLLMCloneId(sourceId: DLLMId, cloneVariant: string): DLLMId {
+  return `${sourceId}::${cloneVariant}` as DLLMId;
 }

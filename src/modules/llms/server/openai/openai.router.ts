@@ -6,7 +6,7 @@ import { fetchJsonOrTRPCThrow, TRPCFetcherError } from '~/server/trpc/trpc.route
 import { serverCapitalizeFirstLetter } from '~/server/wire';
 
 import type { T2ICreateImageAsyncStreamOp } from '~/modules/t2i/t2i.server';
-import { OpenAIWire_API_Images_Generations, OpenAIWire_API_Moderations_Create } from '~/modules/aix/server/dispatch/wiretypes/openai.wiretypes';
+import { OpenAIWire_API_Images_Generations } from '~/modules/aix/server/dispatch/wiretypes/openai.wiretypes';
 import { heartbeatsWhileAwaiting } from '~/modules/aix/server/dispatch/heartbeatsWhileAwaiting';
 
 import { wireLocalAIModelsApplyOutputSchema, wireLocalAIModelsAvailableOutputSchema, wireLocalAIModelsListOutputSchema } from './wiretypes/localai.wiretypes';
@@ -14,7 +14,7 @@ import { wireLocalAIModelsApplyOutputSchema, wireLocalAIModelsAvailableOutputSch
 import { ListModelsResponse_schema, ModelDescriptionSchema } from '../llm.server.types';
 import { listModelsRunDispatch } from '../listModels.dispatch';
 
-import { openAIAccess, OpenAIAccessSchema, openAIAccessSchema } from './openai.access';
+import { openAIAccess, OpenAIAccessSchema, openAIAccessSchema, OPENAI_API_PATHS } from './openai.access';
 
 
 // Router Input/Output Schemas
@@ -30,9 +30,9 @@ const _createImageConfigBase = z.object({
   user: z.string().optional(),
 });
 
-// GPT Image family (gpt-image-1, gpt-image-1-mini share all parameters)
+// GPT Image family (gpt-image-1.5, gpt-image-1, gpt-image-1-mini share all parameters)
 const createImageConfigGI = _createImageConfigBase.extend({
-  model: z.enum(['gpt-image-1', 'gpt-image-1-mini']),
+  model: z.enum(['gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini']),
   prompt: z.string().max(32000),
   size: z.enum([/*'auto',*/ '1024x1024', '1536x1024', '1024x1536']),
   quality: z.enum(['high', 'medium', 'low']).optional(),
@@ -109,12 +109,6 @@ const createImagesInputSchema = z.object({
 });
 
 
-const moderationInputSchema = z.object({
-  access: openAIAccessSchema,
-  text: z.string(),
-});
-
-
 export const llmOpenAIRouter = createTRPCRouter({
 
   /* [OpenAI] List the Models available */
@@ -128,10 +122,15 @@ export const llmOpenAIRouter = createTRPCRouter({
 
       // [PROD] log/warn listModel errors
       if (!result.ok && result.error) {
+
+        // Network errors: do not log it here in production - likely a user error/net inaccessible
+        const isConnRefused = result.error instanceof TRPCFetcherError && ['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND'].includes(result.error.connErrorName || '');
+        if (isConnRefused) return result;
+
         // '401 unauthorized' is expected with wrong/missing API keys - log instead of warn
         const is401 = result.error instanceof TRPCFetcherError && result.error.httpStatus === 401;
         const isLocalAI = input.access?.dialect === 'localai';
-        console[(is401 || isLocalAI) ? 'log' : 'warn'](`${path} (${input.access?.dialect || '?'}):${signal?.aborted ? ' [ABORTED]' : ''}`, result.error);
+        console[(is401 || isLocalAI) ? 'log' : 'warn'](`\n❌ [PROD] ${path}(${input.access?.dialect || '?'}):${signal?.aborted ? ' [ABORTED]' : ''}`, result.error);
       }
 
       // [DEV] NOTE: the trpc onError will also log next when in development mode, @see handlerEdgeRoutes
@@ -231,7 +230,7 @@ export const llmOpenAIRouter = createTRPCRouter({
           access,
           config.model,  // modelRefId not really needed for these endpoints
           requestBody,
-          isEdit ? '/v1/images/edits' : '/v1/images/generations',
+          isEdit ? OPENAI_API_PATHS.imageEdits : OPENAI_API_PATHS.images,
           signal, // wire the signal from the input
         )
           .catch((error: any) => {
@@ -290,28 +289,7 @@ export const llmOpenAIRouter = createTRPCRouter({
     }),
 
 
-  /* [OpenAI] check for content policy violations */
-  moderation: edgeProcedure
-    .input(moderationInputSchema)
-    .mutation(async ({ input: { access, text } }): Promise<OpenAIWire_API_Moderations_Create.Response> => {
-      try {
-
-        return await openaiPOSTOrThrow<OpenAIWire_API_Moderations_Create.Response, OpenAIWire_API_Moderations_Create.Request>(access, null, {
-          input: text,
-          model: 'text-moderation-latest',
-        }, '/v1/moderations');
-
-      } catch (error: any) {
-        if (error.code === 'ECONNRESET')
-          throw new TRPCError({ code: 'CLIENT_CLOSED_REQUEST', message: 'Connection reset by the client.' });
-
-        console.error('api/openai/moderation error:', error);
-        throw new TRPCError({ code: 'BAD_REQUEST', message: `Error: ${error?.message || error?.toString() || 'Unknown error'}` });
-      }
-    }),
-
-
-  /// Dialect-specific procedures ///
+  // --- Dialect-specific procedures ---
 
   /* [LocalAI] List all Model Galleries */
   dialectLocalAI_galleryModelsAvailable: edgeProcedure

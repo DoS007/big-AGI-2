@@ -1,5 +1,5 @@
 /**
- * Copyright (c)2024-2025 Enrico Ros
+ * Copyright (c)2024-2026 Enrico Ros
  *
  * This file is include by both the frontend and backend, however depending on the time
  * of the build, the values may be different.
@@ -23,8 +23,8 @@ export const Release = {
 
   // this is here to trigger revalidation of data, e.g. models refresh
   Monotonics: {
-    Aix: 44,
-    NewsVersion: 202,
+    Aix: 57,
+    NewsVersion: 203,
   },
 
   // Frontend: pretty features

@@ -361,7 +361,7 @@ function _prettyTokenStopReason(reason: DMessageGenerator['tokenStopReason'], co
 }
 
 
-const oaiORegex = /gpt-[345](?:o|\.\d+)?-|o[1345]-|chatgpt-[45]o?|gpt-5-chat|computer-use-/;
+const oaiORegex = /gpt-[345](?:o|\.\d+)?-|o[1345]-|osb-|chatgpt-[45]o?|gpt-5-chat|computer-use-/;
 const geminiRegex = /gemini-|gemma-|learnlm-/;
 
 
@@ -382,6 +382,7 @@ export function prettyShortChatModelName(model: string | undefined): string {
       .replace('chatgpt-', 'ChatGPT_')
       .replace('gpt-5-chat-', 'ChatGPT-5 ')
       .replace('gpt-', 'GPT_')
+      .replace('osb-', 'OSB_')
       // feature variants
       .replace('-audio', ' Audio')
       .replace('-realtime-preview', ' Realtime')
@@ -518,14 +519,15 @@ function _prettyAnthropicModelName(modelId: string): string | null {
 
   const subStr = modelId.slice(claudeIndex);
   const version =
-    subStr.includes('-4-5') ? '4.5' // fixes the -5
-      : subStr.includes('-3-5') ? '3.5' // fixes the -5
-        : subStr.includes('-5') ? '5'
-          : subStr.includes('-4-1') ? '4.1'
-            : subStr.includes('-4') ? '4'
-              : subStr.includes('-3-7') ? '3.7'
-                : subStr.includes('-3') ? '3'
-                  : '?';
+    subStr.includes('-4-6') ? '4.6'
+      : subStr.includes('-4-5') ? '4.5' // fixes the -5
+        : subStr.includes('-3-5') ? '3.5' // fixes the -5
+          : subStr.includes('-5') ? '5'
+            : subStr.includes('-4-1') ? '4.1'
+              : subStr.includes('-4') ? '4'
+                : subStr.includes('-3-7') ? '3.7'
+                  : subStr.includes('-3') ? '3'
+                    : '?';
 
   if (subStr.includes(`-opus`)) return `Claude ${version} Opus`;
   if (subStr.includes(`-sonnet`)) return `Claude ${version} Sonnet`;

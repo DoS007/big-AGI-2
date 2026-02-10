@@ -1,3 +1,5 @@
+import * as z from 'zod/v4';
+
 import type { OpenAIDialects } from '~/modules/llms/server/openai/openai.access';
 
 import { AixAPI_Model, AixAPIChatGenerate_Request, AixMessages_ChatMessage, AixMessages_SystemMessage, AixParts_DocPart, AixParts_InlineAudioPart, AixParts_MetaInReferenceToPart, AixTools_ToolDefinition, AixTools_ToolsPolicy } from '../../../api/aix.wiretypes';
@@ -10,7 +12,7 @@ import { aixSpillShallFlush, aixSpillSystemToUser, approxDocPart_To_String } fro
 // OpenAI API - Chat Adapter - Implementation Notes
 //
 // - only supports N=1, mainly because the whole ecosystem downstream only supports N=1
-// - not implemented: top_p, parallel_tool_calls, seed, stop, user
+// - not implemented: top_p, parallel_tool_calls, seed (deprecated), stop, user (deprecated -> safety_identifier, prompt_cache_key)
 // - fully ignored at the moment: frequency_penalty, presence_penalty, logit_bias, logprobs, top_logprobs, service_tier
 // - impedence mismatch: see the notes in the message conversion function for additional decisions, including:
 //   - doc parts embedded as markdown text
@@ -45,9 +47,10 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
 
   // Model incompatibilities -> Hotfixes
 
-  // [OpenAI] - o1 models
-  // - o1 models don't support system messages, we could hotfix this here once and for all, but we want to transfer the responsibility to the UI for better messaging to the user
-  // - o1 models also use the new 'max_completion_tokens' rather than 'max_tokens', breaking API compatibility, so we have to address it here
+  // [OpenAI] max_tokens is now fully deprecated in favor of max_completion_tokens for all OpenAI models
+  const hotFixUseMaxCompletionTokens = openAIDialect === 'openai' || openAIDialect === 'azure';
+
+  // [OpenAI] - o-family and reasoning models: don't support temperature/top_p, use developer role instead of system
   const hotFixOpenAIOFamily = (openAIDialect === 'openai' || openAIDialect === 'azure')
     && ['gpt-6', 'gpt-5', 'o4', 'o3', 'o1'].some(_id => model.id === _id || model.id.startsWith(_id + '-'));
 
@@ -107,13 +110,15 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
   // [OpenAI] Vendor-specific output modalities configuration
   const outputsText = model.acceptsOutputs.includes('text');
   const outputsAudio = model.acceptsOutputs.includes('audio');
-  const outputsImages = model.acceptsOutputs.includes('image');
-  if (openAIDialect === 'openai' && (outputsAudio || outputsImages)) {
+  const outputsImages = model.acceptsOutputs.includes('image')
+    || !!model.vndOaiImageGeneration; // this is here because when used in 'sweep' the 'acceptsOutputs' are not set yet
+  if ((openAIDialect === 'openai' || openAIDialect === 'openrouter') && (outputsAudio || outputsImages)) {
     // set output modalities
     const modalities = new Set(payload.modalities || []);
     if (outputsText) modalities.add('text');
     if (outputsAudio) modalities.add('audio');
-    // if (outputsImages) modalities.add('image');
+    // [OpenRouter, 2025-12-31] Extension for image output through the OpenAI ChatCompletions protocol
+    if (/*openAIDialect === 'openrouter' &&*/ outputsImages) modalities.add('image');
     payload.modalities = Array.from(modalities);
 
     // configure audio output
@@ -122,11 +127,25 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
         voice: 'alloy', // FIXME: have the voice be selectable
         format: 'pcm16', // only supported value for streaming
       };
+
+    // [OpenRouter, 2025-12-31] Extension for image output configuration through OpenAI ChatCompletions protocol
+    if (openAIDialect === 'openrouter' && (model.vndGeminiAspectRatio || model.vndGeminiImageSize)) {
+      payload.image_config = { ...payload.image_config || {} };
+      if (model.vndGeminiAspectRatio)
+        payload.image_config.aspect_ratio = model.vndGeminiAspectRatio;
+      if (model.vndGeminiImageSize)
+        payload.image_config.image_size = model.vndGeminiImageSize;
+    }
   }
 
-  // [OpenAI] Vendor-specific reasoning effort, for o1 models only as of 2024-12-24
+  // [OpenAI] Vendor-specific reasoning effort
   if (model.vndOaiReasoningEffort) {
     payload.reasoning_effort = model.vndOaiReasoningEffort;
+  }
+  // [OpenAI, 2026-02-04] Verbosity control - official OpenAI parameter (low/medium/high, default: medium)
+  if (model.vndOaiVerbosity) {
+    // [OpenRouter, 2025-01-20] Also supported via OpenRouter for Anthropic Claude Opus 4.5, GPT-5 family
+    payload.verbosity = model.vndOaiVerbosity;
   }
 
   // --- Tools ---
@@ -169,35 +188,15 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
       // search_prompt: undefined, // could be configurable in the future
     }];
 
-  // [xAI] Vendor-specific extensions for Live Search
-  if (openAIDialect === 'xai' && model.vndXaiSearchMode && model.vndXaiSearchMode !== 'off') {
-    const search_parameters: any = {
-      return_citations: true,
-    };
+  // [Moonshot] Kimi K2.5 reasoning effort -> thinking mode (only 'none' and 'high' supported for now)
+  if (openAIDialect === 'moonshot' && model.vndOaiReasoningEffort) {
+    if (model.vndOaiReasoningEffort !== 'none' && model.vndOaiReasoningEffort !== 'high')
+      throw new Error(`Moonshot Kimi K2.5 only supports reasoning effort 'none' or 'high', got '${model.vndOaiReasoningEffort}'`);
 
-    // mode defaults to 'auto' if not specified, so only include if not 'auto'
-    if (model.vndXaiSearchMode && model.vndXaiSearchMode !== 'auto')
-      search_parameters.mode = model.vndXaiSearchMode;
+    payload.thinking = { type: model.vndOaiReasoningEffort === 'none' ? 'disabled' : 'enabled' };
 
-    if (model.vndXaiSearchSources) {
-      const sources = model.vndXaiSearchSources
-        .split(',')
-        .map(s => s.trim())
-        .filter(s => !!s);
-
-      // only omit sources if it's the default ('web' and 'x')
-      const isDefaultSources = sources.length === 2 && sources.includes('web') && sources.includes('x');
-      if (!isDefaultSources)
-        search_parameters.sources = sources.map(s => ({ type: s }));
-    }
-
-    if (model.vndXaiSearchDateFilter && model.vndXaiSearchDateFilter !== 'unfiltered') {
-      const fromDate = _convertSimpleDateFilterToISO(model.vndXaiSearchDateFilter);
-      if (fromDate)
-        search_parameters.from_date = fromDate;
-    }
-
-    payload.search_parameters = search_parameters;
+    // Remove OpenAI-style reasoning_effort if it was set
+    delete payload.reasoning_effort;
   }
 
   // [Moonshot] Kimi's $web_search builtin function
@@ -232,24 +231,43 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
   if (openAIDialect === 'openrouter') {
 
     // Anthropic via OpenRouter
+    // ref: https://openrouter.ai/docs/guides/guides/model-migrations/claude-4-6-opus
     if (model.vndAntThinkingBudget !== undefined) {
       // vndAntThinkingBudget's presence indicates a user preference:
+      // - 'adaptive': adaptive thinking (4.6+) - reasoning enabled, no explicit budget
       // - a number: explicit token budget (1024-32000)
       // - null: disable thinking (don't set reasoning field)
-      if (model.vndAntThinkingBudget === null) {
-        // If null, don't set reasoning field at all (disables thinking)
-      } else
-        payload.reasoning = { max_tokens: model.vndAntThinkingBudget || 8192 };
+      if (model.vndAntThinkingBudget === 'adaptive') {
+        payload.reasoning = {
+          enabled: true,
+        };
+        delete payload.temperature;
+      } else if (model.vndAntThinkingBudget !== null) {
+        payload.reasoning = {
+          max_tokens: model.vndAntThinkingBudget,
+        };
+        delete payload.temperature;
+      } else {
+        // NOTE: with thinking disabled, we can still use temperature, so we don't delete it
+        //       see the note on llms.parameters.ts: 'llmVndAntThinkingBudget'
+      }
     }
-    // Gemini via OpenRouter
+    // Anthropic effort -> OpenRouter verbosity -> Anthropic upstream output_config.effort
+    if (model.vndAntEffort)
+      payload.verbosity = model.vndAntEffort;
+
+    // Gemini via OpenRouter - budget-based (2.5) or level-based (3.0+)
     else if (model.vndGeminiThinkingBudget !== undefined)
-      payload.reasoning = { max_tokens: model.vndGeminiThinkingBudget || 8192 };
-    // OpenAI via OpenRouter
-    else if (model.vndOaiReasoningEffort && model.vndOaiReasoningEffort !== 'minimal')
+      payload.reasoning = { max_tokens: model.vndGeminiThinkingBudget ?? 8192 };
+    else if (model.vndGeminiThinkingLevel)
+      payload.reasoning = { effort: model.vndGeminiThinkingLevel };
+
+    // OpenAI via OpenRouter - all effort levels including 'none' and 'minimal' are valid
+    else if (model.vndOaiReasoningEffort)
       payload.reasoning = { effort: model.vndOaiReasoningEffort };
 
     // FIX double-reasoning request - remove reasoning_effort after transferring it to reasoning (unless already set)
-    if (payload.reasoning_effort && payload.reasoning_effort !== 'minimal') {
+    if (payload.reasoning_effort) {
       // we don't know which one takes precedence, so we prioritize .reasoning (OpenRouter) even if .reasoning_effort (OpenAI) is present
       if (!payload.reasoning)
         payload.reasoning = { effort: payload.reasoning_effort };
@@ -259,8 +277,13 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
 
   }
 
+  // [OpenAI, 2026-02-04] max_tokens is deprecated for all OpenAI models - use max_completion_tokens
+  if (hotFixUseMaxCompletionTokens)
+    payload = _fixUseMaxCompletionTokens(payload);
+
+  // [OpenAI] o-family/reasoning models: remove temperature and top_p controls
   if (hotFixOpenAIOFamily)
-    payload = _fixRequestForOpenAIO1_maxCompletionTokens(payload);
+    payload = _fixRemoveTemperatureAndTopP(payload);
 
   if (hotFixRemoveStreamOptions)
     payload = _fixRemoveStreamOptions(payload);
@@ -269,8 +292,8 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
   // Preemptive error detection with server-side payload validation before sending it upstream
   const validated = OpenAIWire_API_Chat_Completions.Request_schema.safeParse(payload);
   if (!validated.success) {
-    console.warn('OpenAI: invalid chatCompletions payload. Error:', validated.error);
-    throw new Error(`Invalid sequence for OpenAI models: ${validated.error.issues?.[0]?.message || validated.error.message || validated.error}.`);
+    console.warn('[DEV] OpenAI: invalid chatCompletions payload. Error:', { valError: validated.error });
+    throw new Error(`Invalid request for OpenAI-compatible models: ${z.prettifyError(validated.error)}`);
   }
 
   // if (hotFixUseDeprecatedFunctionCalls)
@@ -328,17 +351,17 @@ function _fixRemoveEmptyMessages(chatMessages: TRequestMessages): TRequestMessag
   return chatMessages.filter(message => message.content !== null && message.content !== '');
 }
 
-function _fixRequestForOpenAIO1_maxCompletionTokens(payload: TRequest): TRequest {
-
-  // Remove temperature and top_p controls
-  const { max_tokens, temperature: _removeTemperature, top_p: _removeTopP, ...rest } = payload;
-
-  // Change max_tokens to max_completion_tokens:
-  // - pre-o1: max_tokens is the output amount
-  // - o1: max_completion_tokens is the output amount + reasoning amount
+/** [OpenAI, 2026-02-04] max_tokens fully deprecated - convert to max_completion_tokens for all OpenAI models */
+function _fixUseMaxCompletionTokens(payload: TRequest): TRequest {
+  const { max_tokens, ...rest } = payload;
   if (max_tokens)
     rest.max_completion_tokens = max_tokens;
+  return rest;
+}
 
+/** [OpenAI] o-family and reasoning models don't support temperature/top_p controls */
+function _fixRemoveTemperatureAndTopP(payload: TRequest): TRequest {
+  const { temperature: _removeTemperature, top_p: _removeTopP, ...rest } = payload;
   return rest;
 }
 
@@ -749,24 +772,3 @@ function _convertPerplexityDateFilter(filter: string): string {
   }
 }
 
-function _convertSimpleDateFilterToISO(filter: '1d' | '1w' | '1m' | '6m' | '1y'): string {
-  const now = new Date();
-  switch (filter) {
-    case '1d':
-      now.setDate(now.getDate() - 1);
-      break;
-    case '1w':
-      now.setDate(now.getDate() - 7);
-      break;
-    case '1m':
-      now.setMonth(now.getMonth() - 1);
-      break;
-    case '6m':
-      now.setMonth(now.getMonth() - 6);
-      break;
-    case '1y':
-      now.setFullYear(now.getFullYear() - 1);
-      break;
-  }
-  return now.toISOString().split('T')[0];
-}

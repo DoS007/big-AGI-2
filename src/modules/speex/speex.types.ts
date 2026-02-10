@@ -7,7 +7,7 @@ import type { SpeexWire_VoiceOption } from './protocols/rpc/rpc.wiretypes';
 
 // Speex Vendor Types (supported TTS providers)
 
-export type DSpeexVendorType = 'elevenlabs' | 'localai' | 'openai' | 'webspeech';
+export type DSpeexVendorType = 'elevenlabs' | 'inworld' | 'localai' | 'openai' | 'webspeech';
 
 
 // Speex Engines - instances of TTS Vendors Types - persisted in store-module-speex
@@ -33,6 +33,7 @@ export type SpeexEngineId = string; // agiUuidV4('speex.engine.instance')
 // helper for mapping credentials and voice types to the engine type
 interface _TypeMap extends Record<DSpeexVendorType, { voice: unknown; credentials: unknown }> {
   'elevenlabs': { voice: DVoiceElevenLabs; credentials: DCredentialsApiKey };
+  'inworld': { voice: DVoiceInworld; credentials: DCredentialsApiKey };
   'localai': { voice: DVoiceLocalAI; credentials: DCredentialsLLMSService | DCredentialsApiKey };
   'openai': { voice: DVoiceOpenAI; credentials: DCredentialsLLMSService | DCredentialsApiKey };
   'webspeech': { voice: DVoiceWebSpeech; credentials: DCredentialsNone };
@@ -53,6 +54,14 @@ export interface DVoiceElevenLabs {
   // ttsSimilarityBoost?: number;
   // ttsStyle?: number;
   // ttsS?: boolean;
+}
+
+export interface DVoiceInworld {
+  dialect: 'inworld';
+  ttsModel?: 'inworld-tts-1.5-max' | 'inworld-tts-1.5-mini';
+  ttsVoiceId?: string;        // e.g., 'Alex', 'Ashley', 'Dennis'
+  ttsTemperature?: number;    // 0-2, default 1.1 (controls expressiveness)
+  ttsSpeakingRate?: number;   // 0.5-1.5, default 1.0
 }
 
 // type LocalAITTSBackend = | 'coqui' | 'bark' | 'piper' | 'transformers-musicgen' | 'vall-e-x'
@@ -124,22 +133,50 @@ export type SpeexVoiceSelector =
   | { voice: Partial<DSpeexVoiceAny> } // uses first matching engine for voice.dialect, with voice override
   | { engineId: SpeexEngineId; voice?: Partial<DSpeexVoiceAny> }; // uses specific engine, optionally overriding voice
 
-export type SpeexSpeakOptions = {
-  label?: string;           // For NorthBridge queue display
-  personaUid?: string;      // For NorthBridge queue icon / controls (if the audio came from a persona)
-  // core options
-  streaming?: boolean;      // Streaming defaults to True
-  languageCode?: string;    // ISO language code (e.g., 'en', 'fr') - auto-detected from preferredLanguage if not provided
-  priority?: 'fast' | 'balanced' | 'quality'; // Hint for speed vs quality tradeoff: 'fast' = low latency (turbo models), 'quality' = highest quality
-  playback?: boolean;       // Play audio (default: true)
-  returnAudio?: boolean;    // Accumulate full audio buffer in result, even if streaming (for save/download)
+
+// speakText options
+
+export interface SpeexSpeakTextOptions {
+  // text chunking: auto-loop over text chunks and play each of them
+  maxChunkLength?: false | number; // max characters per chunk, default 500
+  // text cleanup
+  disableUnspeakable?: boolean; // disable removal of non-speakable text (e.g., URLs, emails)
+  disableCharLimit?: boolean; // disable character limit enforcement (e.g., 5000 chars)
+  // future-ui
+  label?: string;        // UNUSED: For NorthBridge queue display
+  personaUid?: string;   // UNUSED: For NorthBridge queue icon / controls (if the audio came from a persona)
 }
 
-export type SpeexSpeakResult = {
+export type SpeexSpeakTextResult = {
+  success: boolean;      // all chunks completed without error or abort
+  aborted: boolean;      // whether the session was aborted by signal
+  chunksSpoken: number;  // number of chunks that finished playing
+  totalChunks: number;   // total chunks
+  errorType?: SpeexSpeakResultErrorType;
+  errorText?: string;
+};
+
+export type SpeexSpeakResultErrorType = 'tts-no-engine' | 'tts-unconfigured' | 'tts-error' | 'tts-exception' | 'tts-playback-disabled';
+
+
+// synthesize (lower-level RPC and WebSpeech API) options
+
+export type SpeexSynthesizeOptions = {
+  // core options
+  rpcDisableStreaming?: boolean;
+  rpcReturnAudio?: boolean;    // Accumulate full audio buffer in result, even if streaming (for save/download)
+  disablePlayback?: boolean;
+  disableLivePlayback?: boolean; // Play all the audio at the end, even if receiving live chunks
+  // other options
+  languageCode?: string;    // ISO language code (e.g., 'en', 'fr') - auto-detected from preferredLanguage if not provided
+  priority?: 'fast' | 'balanced' | 'quality'; // Hint for speed vs quality tradeoff: 'fast' = low latency (turbo models), 'quality' = highest quality
+}
+
+export type SpeexSynthesizeResult = {
   success: true;
-  audioBase64?: string; // available when not streaming or when requested
+  audioBase64?: string; // MAY available only if requested - discouraged, and only for RPC
 } | {
   success: false;
-  errorType: 'tts-no-engine' | 'tts-unconfigured' | 'tts-error' | 'tts-exception';
-  error: string; // if success is false
+  errorType: SpeexSpeakResultErrorType;
+  errorText: string;
 }

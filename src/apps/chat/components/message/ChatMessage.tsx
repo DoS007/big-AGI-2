@@ -44,7 +44,7 @@ import { Release } from '~/common/app.release';
 import { TooltipOutlined } from '~/common/components/TooltipOutlined';
 import { adjustContentScaling, themeScalingMap, themeZIndexChatBubble } from '~/common/app.theme';
 import { avatarIconSx, makeMessageAvatarIcon, messageBackground, useMessageAvatarLabel } from '~/common/util/dMessageUtils';
-import { copyToClipboard, copyToClipboardHtmlMinusColors } from '~/common/util/clipboardUtils';
+import { clipboardCopyDOMSelectionOrFallback } from '~/common/util/clipboardUtils';
 import { createTextContentFragment, DMessageFragment, DMessageFragmentId, updateFragmentWithEditedText } from '~/common/stores/chat/chat.fragments';
 import { useFragmentBuckets } from '~/common/stores/chat/hooks/useFragmentBuckets';
 import { useUIPreferencesStore } from '~/common/stores/store-ui';
@@ -69,7 +69,7 @@ const ENABLE_BUBBLE = true;
 export const BUBBLE_MIN_TEXT_LENGTH = 3;
 
 // Enable the hover button to copy the whole message. The Copy button is also available in Blocks, or in the Avatar Menu.
-const ENABLE_COPY_MESSAGE_OVERLAY: boolean = false;
+// const ENABLE_COPY_MESSAGE_OVERLAY: boolean = false;
 
 
 const messageBodySx: SxProps = {
@@ -315,13 +315,8 @@ export function ChatMessage(props: {
   const handleCloseOpsMenu = React.useCallback(() => setOpsMenuAnchor(null), []);
 
   const handleOpsCopy = (e: React.MouseEvent) => {
-    const html = blocksRendererRef.current?.innerHTML;
-    if (html) {
-      // same as ChatMessageList.handleCopyHTMLWithoutColors
-      copyToClipboardHtmlMinusColors(html, textSubject, 'Message');
-    } else
-      copyToClipboard(textSubject, 'Text');
     e.preventDefault();
+    clipboardCopyDOMSelectionOrFallback(blocksRendererRef.current, textSubject, 'Message');
     handleCloseOpsMenu();
     closeContextMenu();
     closeBubble();
@@ -898,18 +893,18 @@ export function ChatMessage(props: {
 
 
       {/* Overlay copy icon */}
-      {ENABLE_COPY_MESSAGE_OVERLAY && !fromSystem && !isEditingText && (
-        <Tooltip title={messagePendingIncomplete ? null : (fromAssistant ? 'Copy message' : 'Copy input')} variant='solid'>
-          <IconButton
-            variant='outlined' onClick={handleOpsCopy}
-            sx={{
-              position: 'absolute', ...(fromAssistant ? { right: { xs: 12, md: 28 } } : { left: { xs: 12, md: 28 } }), zIndex: 10,
-              opacity: 0, transition: 'opacity 0.16s cubic-bezier(.17,.84,.44,1)',
-            }}>
-            <ContentCopyIcon />
-          </IconButton>
-        </Tooltip>
-      )}
+      {/*{ENABLE_COPY_MESSAGE_OVERLAY && !fromSystem && !isEditingText && (*/}
+      {/*  <Tooltip title={messagePendingIncomplete ? null : (fromAssistant ? 'Copy message' : 'Copy input')} variant='solid'>*/}
+      {/*    <IconButton*/}
+      {/*      variant='outlined' onClick={handleOpsCopy}*/}
+      {/*      sx={{*/}
+      {/*        position: 'absolute', ...(fromAssistant ? { right: { xs: 12, md: 28 } } : { left: { xs: 12, md: 28 } }), zIndex: 10,*/}
+      {/*        opacity: 0, transition: 'opacity 0.16s cubic-bezier(.17,.84,.44,1)',*/}
+      {/*      }}>*/}
+      {/*      <ContentCopyIcon />*/}
+      {/*    </IconButton>*/}
+      {/*  </Tooltip>*/}
+      {/*)}*/}
 
 
       {/* Message Operations Menu (3 dots) */}

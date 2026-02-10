@@ -1,3 +1,5 @@
+import * as z from 'zod/v4';
+
 import type { AixAPI_Model, AixAPIChatGenerate_Request, AixMessages_ChatMessage, AixTools_ToolDefinition, AixTools_ToolsPolicy } from '../../../api/aix.wiretypes';
 import { AnthropicWire_API_Message_Create, AnthropicWire_Blocks } from '../../wiretypes/anthropic.wiretypes';
 
@@ -8,6 +10,8 @@ import { aixSpillShallFlush, aixSpillSystemToUser, approxDocPart_To_String, appr
 const hotFixImagePartsFirst = true;
 const hotFixMapModelImagesToUser = true;
 const hotFixDisableThinkingWhenToolsForced = true; // "Thinking may not be enabled when tool_choice forces tool use."
+const hotFixAntSeparateContiguousThinkingBlocks = true; // Interleave continuous thinking blocks (without aText) with the following text block, instead of merging them into a single block - should be more robust to unexpected thinking block formats and to changes in the thinking block format, as we have seen some variations and we might see more in the future
+// const hotFixAntShipNoEmptyTextBlocks = true; // If empty text blocks are found (e.g. produced by the API), do not ship them or things will break
 
 // former fixes, now removed
 // const hackyHotFixStartWithUser = false; // 2024-10-22: no longer required
@@ -27,11 +31,11 @@ export function aixToAnthropicMessageCreate(model: AixAPI_Model, _chatGenerate: 
       switch (part.pt) {
 
         case 'text':
-          acc.push(AnthropicWire_Blocks.TextBlock(part.text));
+          acc.push(AnthropicWire_Blocks.TextBlock(part.text, 'system.text'));
           break;
 
         case 'doc':
-          acc.push(AnthropicWire_Blocks.TextBlock(approxDocPart_To_String(part)));
+          acc.push(AnthropicWire_Blocks.TextBlock(approxDocPart_To_String(part), 'system.doc'));
           break;
 
         case 'inline_image':
@@ -83,6 +87,18 @@ export function aixToAnthropicMessageCreate(model: AixAPI_Model, _chatGenerate: 
           chatMessages.push(currentMessage);
         currentMessage = { role, content: [] };
       }
+
+      // Hotfix Opus-4.6: a new thinking block cannot follow a thinking or redacted_thinking block directly
+      // (redacted_thinking after thinking is fine - that's the normal pattern)
+      if (hotFixAntSeparateContiguousThinkingBlocks && content.type === 'thinking' && currentMessage.content.length) {
+        const lastBlock = currentMessage.content[currentMessage.content.length - 1];
+        if (lastBlock.type === 'thinking' || lastBlock.type === 'redacted_thinking') {
+          // FIXME: this happens because some intermediate 'tool requests + responses' may have been skipped, so thinking messages became contiguous
+          console.log(`[DEV] Anthropic: 🔷 Separating contiguous ${lastBlock.type} -> thinking with text separator`);
+          currentMessage.content.push(AnthropicWire_Blocks.TextBlock('\n', 'hotfix.thinking-separator'));
+        }
+      }
+
       currentMessage.content.push(content);
     }
 
@@ -130,17 +146,28 @@ export function aixToAnthropicMessageCreate(model: AixAPI_Model, _chatGenerate: 
     delete payload.temperature;
   }
 
-  // [Anthropic] Thinking Budget
+  // [Anthropic] Thinking: adaptive (4.6+), enabled with budget (≤4.5), or disabled
   const areToolCallsRequired = payload.tool_choice && typeof payload.tool_choice === 'object' && (payload.tool_choice.type === 'any' || payload.tool_choice.type === 'tool');
   const canUseThinking = !areToolCallsRequired || !hotFixDisableThinkingWhenToolsForced;
   if (model.vndAntThinkingBudget !== undefined && canUseThinking) {
-    payload.thinking = model.vndAntThinkingBudget !== null ? {
-      type: 'enabled',
-      budget_tokens: model.vndAntThinkingBudget < payload.max_tokens ? model.vndAntThinkingBudget : payload.max_tokens - 1,
-    } : {
-      type: 'disabled',
-    };
-    delete payload.temperature;
+    if (model.vndAntThinkingBudget === 'adaptive') {
+      payload.thinking = {
+        type: 'adaptive',
+      };
+      delete payload.temperature;
+    } else if (model.vndAntThinkingBudget !== null) {
+      payload.thinking = {
+        type: 'enabled',
+        budget_tokens: model.vndAntThinkingBudget < payload.max_tokens ? model.vndAntThinkingBudget : payload.max_tokens - 1,
+      };
+      delete payload.temperature;
+    } else {
+      payload.thinking = {
+        type: 'disabled',
+      };
+      // NOTE: with thinking disabled, we can still use temperature, so we don't delete it
+      //       see the note on llms.parameters.ts: 'llmVndAntThinkingBudget'
+    }
   }
 
   // [Anthropic] Effort parameter [Anthropic, effort-2025-11-24]
@@ -149,18 +176,21 @@ export function aixToAnthropicMessageCreate(model: AixAPI_Model, _chatGenerate: 
       effort: model.vndAntEffort,
     };
 
-  // [Anthropic, 2025-11-13] Structured Outputs - JSON output format
+  // [Anthropic, 2026-01-29 GA] Structured Outputs - JSON output format (now in output_config.format)
   if (model.strictJsonOutput) {
 
     // auto-add additionalProperties: false to root object if not present - required by Anthropic
     let schema = model.strictJsonOutput.schema;
     if (schema && typeof schema === 'object' && schema.type === 'object' && schema.additionalProperties === undefined)
       schema = { ...schema, additionalProperties: false };
-    payload.output_format = { type: 'json_schema', schema };
+    payload.output_config = {
+      ...payload.output_config,
+      format: { type: 'json_schema', schema },
+    };
 
     // warn about incompatible features (citations are enabled via web_fetch tool)
     if (model.vndAntWebFetch === 'auto')
-      console.warn('[Anthropic] Structured output_format may conflict with web_fetch citations');
+      console.warn('[Anthropic] Structured output_config.format may conflict with web_fetch citations');
   }
 
   // --- Tools ---
@@ -180,6 +210,10 @@ export function aixToAnthropicMessageCreate(model: AixAPI_Model, _chatGenerate: 
         type: 'web_search_20250305',
         name: 'web_search',
         max_uses: 10, // Allow up to 10 progressive searches // FIXME: HARDCODED
+        // Pass user geolocation for location-aware search results
+        ...(model.userGeolocation ? {
+          user_location: { type: 'approximate' as const, ...model.userGeolocation },
+        } : {}),
       });
     }
 
@@ -243,8 +277,8 @@ export function aixToAnthropicMessageCreate(model: AixAPI_Model, _chatGenerate: 
   // Preemptive error detection with server-side payload validation before sending it upstream
   const validated = AnthropicWire_API_Message_Create.Request_schema.safeParse(payload);
   if (!validated.success) {
-    console.error('Anthropic: invalid messageCreate payload. Error:', validated.error.message);
-    throw new Error(`Invalid sequence for Anthropic models: ${validated.error.issues?.[0]?.message || validated.error.message || validated.error}.`);
+    console.warn('[DEV] Anthropic: invalid messageCreate payload. Error:', { valError: validated.error });
+    throw new Error(`Invalid request for Anthropic models: ${z.prettifyError(validated.error)}`);
   }
 
   return validated.data;
@@ -274,7 +308,7 @@ function* _generateAnthropicMessagesContentBlocks({ parts, role }: AixMessages_C
         switch (part.pt) {
 
           case 'text':
-            yield { role: 'user', content: AnthropicWire_Blocks.TextBlock(part.text) };
+            yield { role: 'user', content: AnthropicWire_Blocks.TextBlock(part.text, 'user.text') };
             break;
 
           case 'inline_image':
@@ -282,13 +316,13 @@ function* _generateAnthropicMessagesContentBlocks({ parts, role }: AixMessages_C
             break;
 
           case 'doc':
-            yield { role: 'user', content: AnthropicWire_Blocks.TextBlock(approxDocPart_To_String(part)) };
+            yield { role: 'user', content: AnthropicWire_Blocks.TextBlock(approxDocPart_To_String(part), 'user.doc') };
             break;
 
           case 'meta_in_reference_to':
             const irtXMLString = approxInReferenceTo_To_XMLString(part);
             if (irtXMLString)
-              yield { role: 'user', content: AnthropicWire_Blocks.TextBlock(irtXMLString) };
+              yield { role: 'user', content: AnthropicWire_Blocks.TextBlock(irtXMLString, 'user.irt') };
             break;
 
           case 'meta_cache_control':
@@ -306,7 +340,7 @@ function* _generateAnthropicMessagesContentBlocks({ parts, role }: AixMessages_C
         switch (part.pt) {
 
           case 'text':
-            yield { role: 'assistant', content: AnthropicWire_Blocks.TextBlock(part.text) };
+            yield { role: 'assistant', content: AnthropicWire_Blocks.TextBlock(part.text, 'model.text') };
             break;
 
           case 'inline_audio':
@@ -365,11 +399,11 @@ function* _generateAnthropicMessagesContentBlocks({ parts, role }: AixMessages_C
             const toolErrorPrefix = part.error ? (typeof part.error === 'string' ? `[ERROR] ${part.error} - ` : '[ERROR] ') : '';
             switch (part.response.type) {
               case 'function_call':
-                const fcTextParts = [AnthropicWire_Blocks.TextBlock(toolErrorPrefix + part.response.result)];
+                const fcTextParts = [AnthropicWire_Blocks.TextBlock(toolErrorPrefix + part.response.result, 'tool.fc_result')];
                 yield { role: 'user', content: AnthropicWire_Blocks.ToolResultBlock(part.id, fcTextParts, part.error ? true : undefined) };
                 break;
               case 'code_execution':
-                const ceTextParts = [AnthropicWire_Blocks.TextBlock(toolErrorPrefix + part.response.result)];
+                const ceTextParts = [AnthropicWire_Blocks.TextBlock(toolErrorPrefix + part.response.result, 'tool.ce_result')];
                 yield { role: 'user', content: AnthropicWire_Blocks.ToolResultBlock(part.id, ceTextParts, part.error ? true : undefined) };
                 break;
               default:

@@ -16,7 +16,7 @@ const _styles = {
     boxShadow: 'inset 2px 0 4px -2px rgba(0, 0, 0, 0.2)',
     fontFamily: 'code',
     fontSize: 'xs',
-    p: 1.5,
+    py: 1,
     gap: 1,
   } as const,
 
@@ -62,23 +62,29 @@ export function AixDebuggerFrame(props: {
 
   const { frame } = props;
 
+  const contextName = frame.context?.contextName || '';
+  const isConversation = contextName === 'conversation';
+
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 'var(--Card-padding, 1rem)' }}>
 
       {/* Frame Header */}
-      <Box sx={{ fontSize: 'sm', display: 'grid', gridTemplateColumns: { xs: 'auto 1fr', md: 'auto auto auto auto' }, gap: 1, alignItems: 'center' }}>
-        <Typography fontWeight='bold'>Request </Typography>
-        <Typography fontWeight='bold'>{frame.id}</Typography>
+      <Box sx={{ fontSize: 'sm', display: 'grid', gridTemplateColumns: { xs: 'auto 1fr', md: 'auto auto auto auto' }, gap: 0.5, alignItems: 'center' }}>
+        <div>Request</div>
+        <Box fontWeight='md'>#{frame.id}</Box>
         <div>Status:</div>
-        <Chip variant='soft' color={frame.isComplete ? 'success' : 'warning'}>{frame.isComplete ? 'Complete' : 'In Progress'}</Chip>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Chip variant={frame.transport !== 'csf' ? undefined : 'solid'} color={frame.transport === 'csf' ? 'primary' : 'success'}>{frame.transport === 'csf' ? 'Direct Connection' : 'Edge Server'}</Chip>
+          <Chip variant={frame.isComplete ? undefined : 'solid'} color={frame.isComplete ? 'success' : 'warning'}>{frame.isComplete ? 'Done' : 'In Progress'}</Chip>
+        </Box>
         <div>Date</div>
         <div>{new Date(frame.timestamp).toLocaleString()}</div>
         <div>-&gt; URL:</div>
-        <Chip className='agi-ellipsize'>{frame.url || 'No URL data available'}</Chip>
+        <div className='agi-ellipsize'>{frame.url || 'No URL data available'}</div>
         <div>Context:</div>
-        <Chip>{frame.context.contextName}</Chip>
+        <Chip variant={isConversation ? 'soft' : 'solid'} color='primary'>{contextName}</Chip>
         <div>Reference:</div>
-        <Chip>{frame.context.contextRef}</Chip>
+        <div>{frame.context.contextRef}</div>
       </Box>
 
       {/* Headers */}

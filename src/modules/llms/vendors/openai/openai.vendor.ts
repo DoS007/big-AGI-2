@@ -13,7 +13,9 @@ export interface DOpenAIServiceSettings {
   oaiHost: string;  // use OpenAI-compatible non-default hosts (full origin path)
   csf?: boolean;
   heliKey: string;  // helicone key (works in conjunction with oaiHost)
-  moderationCheck: boolean;
+
+  // Note: `moderationCheck: boolean` was removed from UI/new clients;
+  // old stored data may still contain it and is passed through to server (which ignores it)
 }
 
 export const ModelVendorOpenAI: IModelVendor<DOpenAIServiceSettings, OpenAIAccessSchema> = {
@@ -22,7 +24,7 @@ export const ModelVendorOpenAI: IModelVendor<DOpenAIServiceSettings, OpenAIAcces
   displayRank: 10,
   displayGroup: 'popular',
   location: 'cloud',
-  instanceLimit: 5,
+  instanceLimit: 10,
   hasServerConfigKey: 'hasLlmOpenAI',
 
   /// client-side-fetch ///
@@ -32,12 +34,10 @@ export const ModelVendorOpenAI: IModelVendor<DOpenAIServiceSettings, OpenAIAcces
   getTransportAccess: (partialSetup): OpenAIAccessSchema => ({
     dialect: 'openai',
     clientSideFetch: _csfOpenAIAvailable(partialSetup) && !!partialSetup?.csf,
-    oaiKey: '',
-    oaiOrg: '',
-    oaiHost: '',
-    heliKey: '',
-    moderationCheck: false,
-    ...partialSetup,
+    oaiKey: partialSetup?.oaiKey || '',
+    oaiOrg: partialSetup?.oaiOrg || '',
+    oaiHost: partialSetup?.oaiHost || '',
+    heliKey: partialSetup?.heliKey || '',
   }),
 
   // List Models

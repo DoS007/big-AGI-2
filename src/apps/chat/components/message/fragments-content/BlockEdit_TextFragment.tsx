@@ -1,5 +1,7 @@
 import * as React from 'react';
 
+import type { SxProps } from '@mui/joy/styles/types';
+
 import { BlocksTextarea } from '~/modules/blocks/BlocksContainers';
 
 import type { ContentScaling } from '~/common/app.theme';
@@ -96,6 +98,8 @@ export function BlockEdit_TextFragment(props: {
 
   const handleEditKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter') {
+      if (e.nativeEvent.isComposing)
+        return;
       const withControl = e.ctrlKey;
       if (enterIsNewline ? e.shiftKey : !e.shiftKey) {
         e.preventDefault();
@@ -120,6 +124,32 @@ export function BlockEdit_TextFragment(props: {
     { key: ShortcutKey.Esc, description: 'Cancel', level: 3, action: onEscapePressed },
   ], [isControlled, isEdited, isFocused, onEscapePressed, onSubmit, props.enableRestart]));
 
+
+  // memo style
+  const sx = React.useMemo((): SxProps | undefined => {
+    // check sources of custom, and early outs
+    const isXS = props.contentScaling === 'xs';
+    const isSquareTop = !!props.squareTopBorder;
+    if (!isXS && !isSquareTop) return undefined;
+    if (isSquareTop && !isXS) return _styles.squareTop;
+
+    return {
+      // scaling note: in Chat, this can go xs/sm/md, while in Beam, this is xs/xs/sm
+      ...(isXS && {
+        fontSize: 'xs',
+        lineHeight: 'md', // was 1.75 on all
+        // '--Textarea-paddingBlock': 'calc(0.25rem - 0.5px - var(--variant-borderWidth, 0px))', // not used, overridden in BlocksTextarea
+        '--Textarea-paddingInline': '6px',
+        '--Textarea-minHeight': '1.75rem', // was 2rem on 'sm'
+        '--Icon-fontSize': 'lg', // was 'xl' on 'sm'
+        '--Textarea-focusedThickness': '1px',
+        boxShadow: 'none', // too small to show this
+      }),
+      ...(isSquareTop && _styles.squareTop),
+    };
+  }, [props.contentScaling, props.squareTopBorder]);
+
+
   return (
     <BlocksTextarea
       variant={/*props.invertedColors ? 'plain' :*/ 'soft'}
@@ -140,7 +170,7 @@ export function BlockEdit_TextFragment(props: {
       onKeyDown={handleEditKeyDown}
       slotProps={enterIsNewline ? _textAreaSlotPropsEnter : _textAreaSlotPropsDone}
       // endDecorator={props.endDecorator}
-      sx={!props.squareTopBorder ? undefined : _styles.squareTop}
+      sx={sx}
     />
   );
 }

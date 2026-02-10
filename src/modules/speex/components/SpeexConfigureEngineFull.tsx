@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { Box, Button, Divider, FormControl, Typography } from '@mui/joy';
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
@@ -11,8 +11,9 @@ import { FormSecretField } from '~/common/components/forms/FormSecretField';
 import { FormSliderControl } from '~/common/components/forms/FormSliderControl';
 import { FormTextField } from '~/common/components/forms/FormTextField';
 import { TooltipOutlined } from '~/common/components/TooltipOutlined';
+import { useToggleableBoolean } from '~/common/util/hooks/useToggleableBoolean';
 
-import type { DCredentialsApiKey, DSpeexEngine, DSpeexEngineAny, DSpeexVendorType, DVoiceElevenLabs, DVoiceLocalAI, DVoiceOpenAI, DVoiceWebSpeech } from '../speex.types';
+import type { DCredentialsApiKey, DSpeexEngine, DSpeexEngineAny, DSpeexVendorType, DVoiceElevenLabs, DVoiceInworld, DVoiceLocalAI, DVoiceOpenAI, DVoiceWebSpeech } from '../speex.types';
 import { SPEEX_DEFAULTS, SPEEX_PREVIEW_STREAM, SPEEX_PREVIEW_TEXT } from '../speex.config';
 import { SpeexVoiceAutocomplete } from './SpeexVoiceAutocomplete';
 import { SpeexVoiceSelect } from './SpeexVoiceSelect';
@@ -20,20 +21,22 @@ import { speakText } from '../speex.client';
 import { speexVendorTypeLabel } from './SpeexEngineSelect';
 
 
-function CredentialsApiKeyInputs({ credentials, onUpdate, vendorType, showHost, hostRequired, hostPlaceholder }: {
+function CredentialsApiKeyInputs({ credentials, onUpdate, vendorType, showHost, hostRequired, hostPlaceholder, keyPlaceholder }: {
   credentials: DCredentialsApiKey;
   onUpdate: (credentials: DCredentialsApiKey) => void;
   vendorType: DSpeexVendorType;
   showHost?: boolean;
   hostRequired?: boolean;
   hostPlaceholder?: string;
+  keyPlaceholder?: string;
 }) {
   return <>
 
     <FormSecretField
-      autoCompleteId={`speex-${vendorType}-key`}
+      autoCompleteId={`tts-${vendorType}-key`}
       title='API Key'
       description={hostRequired ? 'Optional' : speexVendorTypeLabel(vendorType)}
+      placeholder={keyPlaceholder}
       value={credentials.apiKey}
       onChange={value => onUpdate({ ...credentials, apiKey: value })}
       required={!hostRequired}
@@ -63,28 +66,30 @@ function CredentialsApiKeyInputs({ credentials, onUpdate, vendorType, showHost, 
 function PreviewButton({ engineId }: { engineId: DSpeexEngineAny['engineId'] }) {
 
   // async + cache
+  const queryClient = useQueryClient();
   const { isFetching, isError, error, refetch: previewVoice } = useQuery({
     enabled: false, // manual trigger only
     queryKey: ['speex-preview', engineId],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const result = await speakText(
         SPEEX_PREVIEW_TEXT,
         { engineId: engineId },
-        { streaming: SPEEX_PREVIEW_STREAM },
+        { rpcDisableStreaming: !SPEEX_PREVIEW_STREAM },
+        signal,
       );
-      if (!result.success) throw new Error(result.error || 'Preview failed');
+      if (!result.success && !signal.aborted) throw new Error(result.errorText || 'Preview failed');
       return result;
     },
   });
 
   return (
-    <TooltipOutlined color='danger' title={error?.message ? <pre>{error.message}</pre> : false}>
+    <TooltipOutlined color='danger' title={error?.message ? <div style={{ whiteSpace: 'pre-wrap' }}>{error.message}</div> : false}>
       <Button
-        variant='outlined'
-        color={isError ? 'danger' : 'neutral'}
+        variant={isFetching ? 'soft' : 'outlined'}
+        color={isError ? 'danger' : isFetching ? 'primary' : 'neutral'}
         size='sm'
-        onClick={() => previewVoice()}
-        disabled={isFetching}
+        onClick={() => !isFetching ? previewVoice() : queryClient.cancelQueries({ queryKey: ['speex-preview', engineId] })}
+        // disabled={isFetching}
         startDecorator={isFetching ? <StopRoundedIcon /> : <PlayArrowRoundedIcon />}
         sx={{ ml: 'auto', minWidth: 130 }}
       >
@@ -112,6 +117,8 @@ export function SpeexConfigureEngineFull(props: {
     {/* Engine-Specific pane */}
     {engine.vendorType === 'elevenlabs' ? (
       <ElevenLabsConfig engine={engine} onUpdate={onUpdate} isMobile={isMobile} mode={mode} />
+    ) : engine.vendorType === 'inworld' ? (
+      <InworldConfig engine={engine} onUpdate={onUpdate} isMobile={isMobile} mode={mode} />
     ) : engine.vendorType === 'localai' ? (
       <LocalAIConfig engine={engine} onUpdate={onUpdate} isMobile={isMobile} mode={mode} />
     ) : engine.vendorType === 'openai' ? (
@@ -144,6 +151,9 @@ function ElevenLabsConfig({ engine, onUpdate, mode, isMobile }: {
   const { credentials, voice } = engine;
   const showCredentials = mode === 'full' && !engine.isAutoLinked && credentials.type === 'api-key';
 
+  // advanced toggle for custom API host (#624)
+  const advanced = useToggleableBoolean(!!credentials.apiHost);
+
   const handleCredentialsUpdate = React.useCallback((newCredentials: DCredentialsApiKey) => {
     onUpdate({ credentials: newCredentials });
   }, [onUpdate]);
@@ -166,7 +176,18 @@ function ElevenLabsConfig({ engine, onUpdate, mode, isMobile }: {
         credentials={credentials}
         onUpdate={handleCredentialsUpdate}
         vendorType='elevenlabs'
+        showHost={advanced.on}
+        hostPlaceholder='https://api.elevenlabs.io'
       />
+    )}
+
+    {/* Advanced toggle */}
+    {showCredentials && (
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: -2 }}>
+        <Typography level='body-xs' onClick={advanced.toggle} sx={{ textDecoration: 'underline', cursor: 'pointer', color: 'text.tertiary' }}>
+          {advanced.on ? 'Hide Advanced' : 'Advanced'}
+        </Typography>
+      </Box>
     )}
 
     <FormChipControl<Exclude<DVoiceElevenLabs['ttsModel'], undefined>>
@@ -197,6 +218,83 @@ function ElevenLabsConfig({ engine, onUpdate, mode, isMobile }: {
     {/*    Voice listing requires API key. Language auto-detected from preferences.*/}
     {/*  </FormHelperText>*/}
     {/*)}*/}
+
+  </>;
+}
+
+
+function InworldConfig({ engine, onUpdate, mode, isMobile }: {
+  engine: DSpeexEngine<'inworld'>,
+  onUpdate: (updates: Partial<DSpeexEngine<'inworld'>>) => void;
+  isMobile: boolean;
+  mode: 'full' | 'voice-only';
+}) {
+
+  const { credentials, voice } = engine;
+  const showCredentials = mode === 'full' && !engine.isAutoLinked && credentials.type === 'api-key';
+
+  const handleCredentialsUpdate = React.useCallback((newCredentials: DCredentialsApiKey) => {
+    onUpdate({ credentials: newCredentials });
+  }, [onUpdate]);
+
+  const handleVoiceChange = React.useCallback((ttsVoiceId: DVoiceInworld['ttsVoiceId']) => {
+    const { ttsVoiceId: _, ...restVoice } = voice;
+    onUpdate({
+      voice: {
+        ...restVoice,
+        ...(ttsVoiceId && { ttsVoiceId }),
+      },
+    });
+  }, [onUpdate, voice]);
+
+  const handleSpeedChange = React.useCallback((value: number) => {
+    onUpdate({ voice: { ...voice, ttsSpeakingRate: value } });
+  }, [onUpdate, voice]);
+
+  return <>
+
+    {/* Credentials (only for manually added engines in full mode) */}
+    {showCredentials && (
+      <CredentialsApiKeyInputs
+        credentials={credentials}
+        onUpdate={handleCredentialsUpdate}
+        vendorType='inworld'
+        keyPlaceholder='Base64-key'
+      />
+    )}
+
+    <FormChipControl<Exclude<DVoiceInworld['ttsModel'], undefined>>
+      title='Model'
+      alignEnd
+      options={[
+        { value: 'inworld-tts-1.5-max', label: 'TTS 1.5 Max', description: 'Quality' },
+        { value: 'inworld-tts-1.5-mini', label: 'TTS 1.5 Mini', description: 'Fast' },
+      ]}
+      value={voice.ttsModel ?? SPEEX_DEFAULTS.INWORLD_MODEL}
+      onChange={(value) => onUpdate({ voice: { ...voice, ttsModel: value } })}
+    />
+
+    <FormControl orientation='horizontal' sx={{ justifyContent: 'space-between', alignItems: 'center', overflow: 'hidden' }}>
+      <FormLabelStart title='Voice' description={isMobile ? undefined : 'Inworld voice'} />
+      <SpeexVoiceSelect
+        autoPreview
+        engine={engine}
+        voiceId={voice.ttsVoiceId ?? null}
+        onVoiceChange={handleVoiceChange}
+      />
+    </FormControl>
+
+    <FormSliderControl
+      title='Speed'
+      description={`${voice.ttsSpeakingRate ?? 1}x`}
+      min={0.5}
+      max={1.5}
+      step={0.1}
+      value={voice.ttsSpeakingRate ?? 1}
+      onChange={handleSpeedChange}
+      valueLabelDisplay={voice.ttsSpeakingRate && voice.ttsSpeakingRate !== 1 ? 'on' : 'auto'}
+      sliderSx={{ maxWidth: 220, my: -0.5 }}
+    />
 
   </>;
 }

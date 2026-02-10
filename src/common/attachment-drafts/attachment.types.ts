@@ -24,6 +24,16 @@ export type AttachmentDraft = {
   outputsConversionProgress: number | null;
   outputFragments: DMessageAttachmentFragment[];
 
+  // Warnings for poor conversions (e.g. scanned PDF with text extraction rather than OCR)
+  outputWarnings?: string[];
+
+  // Tracks what method was actually used (especially for Auto mode)
+  outputsHeuristic?: {
+    isAuto: boolean;
+    actualConverterId: AttachmentDraftConverterType;
+    explain?: string; // e.g., "42 chars/page detected"
+  };
+
   // metadata: {
   //   creationDate?: Date; // Creation date of the file
   //   modifiedDate?: Date; // Last modified date of the file
@@ -32,6 +42,13 @@ export type AttachmentDraft = {
 };
 
 export type AttachmentDraftId = string;
+
+export type AttachmentCreationOptions = {
+  /** Also attach an image representation of the attachment. Requires Release.Features.ENABLE_TEXT_AND_IMAGES as well. */
+  hintAddImages?: boolean;
+}
+
+export type AttachmentCloudProviderId = 'gdrive' | 'onedrive' | 'dropbox';
 
 
 // 0. draft source (filled at the onset)
@@ -52,6 +69,23 @@ export type AttachmentDraftSource = {
   textPlain?: string;
   textHtml?: string;
 } | {
+  media: 'cloud';
+  origin: AttachmentDraftSourceOriginCloud;
+
+  // auth for fetching
+  accessToken: string;
+  // tokenExpiresAt?: number; // optional for staleness detection, unix ts
+
+  // recipe for fetching
+  provider: AttachmentCloudProviderId;
+  fileId: string;
+  mimeType: string; // cloud-native MIME (e.g., 'application/vnd.google-apps.document')
+
+  // decorative
+  fileName: string;
+  fileSize?: number;
+  webViewLink?: string; // link to view in cloud provider's UI
+} | {
   // special type for attachments thar are references to self (ego, application) objects
   media: 'ego';
   method: 'ego-fragments';
@@ -65,10 +99,7 @@ export type AttachmentDraftSourceOriginDTO = 'drop' | 'paste';
 
 export type AttachmentDraftSourceOriginUrl = 'input-link' | 'clipboard-read' | AttachmentDraftSourceOriginDTO;
 
-export type AttachmentCreationOptions = {
-  /** Also attach an image representation of the attachment. Requires Release.Features.ENABLE_TEXT_AND_IMAGES as well. */
-  hintAddImages?: boolean;
-}
+export type AttachmentDraftSourceOriginCloud = `picker-${AttachmentCloudProviderId}`;
 
 
 // 1. draft input (loaded from the source)
@@ -135,9 +166,10 @@ export type AttachmentDraftConverter = {
 }
 
 export type AttachmentDraftConverterType =
-  | 'text' | 'rich-text' | 'rich-text-cleaner' | 'rich-text-table'
+  | 'text' | 'text-cleaner' | 'text-markdown'
+  | 'rich-text' | 'rich-text-cleaner' | 'rich-text-markdown' | 'rich-text-table'
   | 'image-original' | 'image-resized-high' | 'image-resized-low' | 'image-ocr' | 'image-caption' | 'image-to-default'
-  | 'pdf-text' | 'pdf-images' | 'pdf-text-and-images'
+  | 'pdf-auto' | 'pdf-text' | 'pdf-images' | 'pdf-images-ocr' | 'pdf-text-and-images'
   | 'docx-to-html'
   | 'url-page-text' | 'url-page-markdown' | 'url-page-html' | 'url-page-null' | 'url-page-image'
   | 'youtube-transcript' | 'youtube-transcript-simple'

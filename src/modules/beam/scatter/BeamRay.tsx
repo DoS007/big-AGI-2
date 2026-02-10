@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import type { SxProps } from '@mui/joy/styles/types';
-import { Box, IconButton, SvgIconProps, Typography } from '@mui/joy';
+import { Box, IconButton, Typography } from '@mui/joy';
 import CheckCircleOutlineRoundedIcon from '@mui/icons-material/CheckCircleOutlineRounded';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
@@ -11,13 +11,18 @@ import ReplayRoundedIcon from '@mui/icons-material/ReplayRounded';
 import StopRoundedIcon from '@mui/icons-material/StopRounded';
 import TelegramIcon from '@mui/icons-material/Telegram';
 
+import type { ModelVendorId } from '~/modules/llms/vendors/vendors.registry';
+import { LLMVendorIconSprite } from '~/modules/llms/components/LLMVendorIconSprite';
+
 import { ChatMessageMemo } from '../../../apps/chat/components/message/ChatMessage';
 
+import type { DMessageFragment, DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
+import type { DMessageId } from '~/common/stores/chat/chat.message';
 import { DLLMId, LLM_IF_OAI_Reasoning } from '~/common/stores/llms/llms.types';
 import { GoodTooltip } from '~/common/components/GoodTooltip';
 import { InlineError } from '~/common/components/InlineError';
 import { animationEnterBelow } from '~/common/util/animUtils';
-import { copyToClipboard } from '~/common/util/clipboardUtils';
+import { clipboardInterceptCtrlCForCleanup, copyToClipboard } from '~/common/util/clipboardUtils';
 import { messageFragmentsReduceText } from '~/common/stores/chat/chat.message';
 import { useLLMSelect } from '~/common/components/forms/useLLMSelect';
 
@@ -70,7 +75,7 @@ function RayControls(props: {
   isScattering: boolean,
   llmComponent: React.ReactNode,
   llmShowReasoning?: boolean,
-  llmVendorIcon?: React.FunctionComponent<SvgIconProps>,
+  llmVendorId: undefined | ModelVendorId,
   onIconClick: (event: React.MouseEvent) => void,
   onRemove: () => void,
   onToggleGenerate: () => void,
@@ -90,12 +95,12 @@ function RayControls(props: {
 
     {/* Letter / LLM Icon (default) */}
     <TooltipOutlined asLargePane enableInteractive title={props.rayAvatarTooltip} placement='top-start'>
-      <Box sx={{ display: 'flex' }} onClick={props.onIconClick}>
+      <Box sx={{ display: 'flex', '--Icon-fontSize': 'var(--joy-fontSize-lg)' }} onClick={props.onIconClick}>
         {props.rayLetter ? (
           <Typography level='title-sm' color={SCATTER_COLOR !== 'neutral' ? SCATTER_COLOR : undefined}>
             {props.rayLetter}
           </Typography>
-        ) : props.llmVendorIcon ? <props.llmVendorIcon sx={{ fontSize: 'lg' }} />
+        ) : props.llmVendorId ? <LLMVendorIconSprite vendorId={props.llmVendorId} />
           : null
           // : <TextureIcon sx={{ fontSize: 'lg' }} />
         }
@@ -175,7 +180,7 @@ export function BeamRay(props: {
 
   const llmId = ray?.rayLlmId ?? null;
   const setLlmId = React.useCallback((llmId: DLLMId | null) => raySetLlmId(props.rayId, llmId), [props.rayId, raySetLlmId]);
-  const [llmOrNull, llmComponent, llmVendorIcon] = useLLMSelect(llmId, setLlmId, {
+  const [llmOrNull, llmComponent] = useLLMSelect(llmId, setLlmId, {
     label: '',
     disabled: isScattering,
     showStarFilter: true,
@@ -216,6 +221,20 @@ export function BeamRay(props: {
     rayToggleScattering(props.rayId);
   }, [props.rayId, rayToggleScattering]);
 
+  const handleFragmentDelete = React.useCallback((messageId: DMessageId, fragmentId: DMessageFragmentId) => {
+    const { rays, rayDeleteFragment } = props.beamStore.getState();
+    const ray = rays.find(ray => ray.message.id === messageId);
+    if (ray)
+      rayDeleteFragment(ray.rayId, fragmentId);
+  }, [props.beamStore]);
+
+  const handleFragmentReplace = React.useCallback((messageId: DMessageId, fragmentId: DMessageFragmentId, newFragment: DMessageFragment) => {
+    const { rays, rayReplaceFragment } = props.beamStore.getState();
+    const ray = rays.find(ray => ray.message.id === messageId);
+    if (ray)
+      rayReplaceFragment(ray.rayId, fragmentId, newFragment);
+  }, [props.beamStore]);
+
   /*const handleRayToggleSelect = React.useCallback(() => {
     toggleUserSelection(props.rayId);
   }, [props.rayId, toggleUserSelection]);*/
@@ -240,7 +259,7 @@ export function BeamRay(props: {
         isScattering={isScattering}
         llmComponent={llmComponent}
         llmShowReasoning={llmShowReasoning}
-        llmVendorIcon={llmVendorIcon}
+        llmVendorId={llmOrNull?.vId}
         onIconClick={handleDebugPrint}
         onRemove={handleRayRemove}
         onToggleGenerate={handleRayToggleGenerate}
@@ -255,7 +274,7 @@ export function BeamRay(props: {
 
       {/* Ray Message */}
       {(!!ray?.message?.fragments.length || ray?.status === 'scattering') && (
-        <Box sx={beamCardMessageWrapperSx}>
+        <Box onCopy={clipboardInterceptCtrlCForCleanup} sx={beamCardMessageWrapperSx}>
           {!!ray.message && (
             <ChatMessageMemo
               message={ray.message}
@@ -264,6 +283,8 @@ export function BeamRay(props: {
               hideAvatar
               showUnsafeHtmlCode={true}
               adjustContentScaling={-1}
+              onMessageFragmentDelete={handleFragmentDelete}
+              onMessageFragmentReplace={handleFragmentReplace}
               sx={!cardScrolling ? beamCardMessageSx : beamCardMessageScrollingSx}
             />
           )}

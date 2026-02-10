@@ -1,22 +1,31 @@
 import * as React from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
-import { Box, Button, Checkbox, Divider, Typography } from '@mui/joy';
+import { Box, Button, Checkbox, CircularProgress, Divider, Dropdown, IconButton, ListDivider, ListItemDecorator, Menu, MenuButton, MenuItem, Typography } from '@mui/joy';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import RestoreIcon from '@mui/icons-material/Restore';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 
-import type { DModelsService } from '~/common/stores/llms/llms.service.types';
+import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/llms.service.types';
 import { AppBreadcrumbs } from '~/common/components/AppBreadcrumbs';
+import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
 import { GoodModal } from '~/common/components/modals/GoodModal';
-import { TooltipOutlined } from '~/common/components/TooltipOutlined';
+import { llmsStoreActions } from '~/common/stores/llms/store-llms';
 import { optimaActions } from '~/common/layout/optima/useOptima';
 import { useHasLLMs } from '~/common/stores/llms/llms.hooks';
 import { useIsMobile } from '~/common/components/useMatchMedia';
 import { useModelsZeroState } from '~/common/stores/llms/hooks/useModelsZeroState';
+import { useOverlayComponents } from '~/common/layout/overlays/useOverlayComponents';
 import { useUICounter, useUIPreferencesStore } from '~/common/stores/store-ui';
 
 import { LLMVendorSetup } from '../components/LLMVendorSetup';
 import { ModelsList } from './ModelsList';
 import { ModelsServiceSelector } from './ModelsServiceSelector';
 import { ModelsWizard } from './ModelsWizard';
+import { useLlmUpdateModels } from '../llm.client.hooks';
 
 
 // configuration
@@ -46,7 +55,9 @@ export function ModelsConfiguratorModal(props: {
   // external state
   const isMobile = useIsMobile();
   const hasLLMs = useHasLLMs();
+  const { showPromisedOverlay } = useOverlayComponents();
   const [showModelsHidden, setShowModelsHidden] = useUIPreferencesStore(useShallow((state) => [state.showModelsHidden, state.setShowModelsHidden]));
+  const [modelsStarredOnTop, setModelsStarredOnTop] = useUIPreferencesStore(useShallow((state) => [state.modelsStarredOnTop, state.setModelsStarredOnTop]));
 
 
   // active service with fallback to the last added service
@@ -55,6 +66,7 @@ export function ModelsConfiguratorModal(props: {
     ?? null;
 
   const activeService = modelsServices.find(s => s.id === activeServiceId);
+  // const hasClones = useModelsStore(({ llms }) => llms.some(llm => llm.sId === activeServiceId && llm.isUserClone));
 
   const hasAnyServices = !!modelsServices.length;
   const isTabWizard = tab === 'wizard';
@@ -96,6 +108,72 @@ export function ModelsConfiguratorModal(props: {
   }, []);
 
 
+  // Menu handlers
+
+  const { isFetching: isRefreshing, refetch: handleRefreshModels } = useLlmUpdateModels(false, activeService ?? null);
+
+  const handleResetAllParameters = React.useCallback(() => {
+    showPromisedOverlay('llms-reset-parameters', {}, ({ onResolve, onUserReject }) =>
+      <ConfirmationModal
+        open onClose={onUserReject} onPositive={() => onResolve(true)}
+        confirmationText={`Reset all user-customized model parameters for ${activeService?.label ?? 'this service'}? All settings such as temperature, reasoning effort, etc. will be reverted to defaults.`}
+        positiveActionText='Reset'
+      />,
+    ).then(() => llmsStoreActions().resetServiceUserParameters(activeServiceId)).catch(() => null /* ignore closure */);
+  }, [activeService?.label, activeServiceId, showPromisedOverlay]);
+
+  const handleResetVisibility = React.useCallback(() => {
+    showPromisedOverlay('llms-reset-visibility', {}, ({ onResolve, onUserReject }) =>
+      <ConfirmationModal
+        open onClose={onUserReject} onPositive={() => onResolve(true)}
+        confirmationText={`Reset visibility for all models in ${activeService?.label ?? 'this service'}? Models will revert to their default visibility.`}
+        positiveActionText='Reset'
+      />,
+    ).then(() => llmsStoreActions().resetServiceVisibility(activeServiceId)).catch(() => null /* ignore closure */);
+  }, [activeService?.label, activeServiceId, showPromisedOverlay]);
+
+  const handleHideAllModels = React.useCallback(() => {
+    llmsStoreActions().setServiceModelsHidden(activeServiceId, true);
+  }, [activeServiceId]);
+
+  const handleShowAllModels = React.useCallback(() => {
+    llmsStoreActions().setServiceModelsHidden(activeServiceId, false);
+  }, [activeServiceId]);
+
+  const handleRemoveClones = React.useCallback(() => {
+    showPromisedOverlay('llms-remove-clones', {}, ({ onResolve, onUserReject }) =>
+      <ConfirmationModal
+        open onClose={onUserReject} onPositive={() => onResolve(true)}
+        confirmationText={`Remove all user-cloned models from ${activeService?.label ?? 'this service'}?`}
+        positiveActionText='Remove'
+      />,
+    ).then(() => llmsStoreActions().removeCustomModels(activeServiceId)).catch(() => null /* ignore closure */);
+  }, [activeService?.label, activeServiceId, showPromisedOverlay]);
+
+  const handleDeleteService = React.useCallback((serviceId: DModelsServiceId, skipConfirmation: boolean) => {
+    const targetService = modelsServices.find(s => s.id === serviceId);
+    if (!targetService) return;
+
+    const doDelete = () => {
+      // select the next service
+      setConfServiceId(modelsServices.find(s => s.id !== serviceId)?.id ?? null);
+      // remove the service
+      llmsStoreActions().removeService(serviceId);
+    };
+
+    // [shift] to delete without confirmation
+    if (skipConfirmation) return doDelete();
+
+    showPromisedOverlay('llms-service-remove', {}, ({ onResolve, onUserReject }) =>
+      <ConfirmationModal
+        open onClose={onUserReject} onPositive={() => onResolve(true)}
+        confirmationText={`Remove ${targetService.label} and all its models?`}
+        positiveActionText='Remove'
+      />,
+    ).then(doDelete).catch(() => null /* ignore closure */);
+  }, [modelsServices, setConfServiceId, showPromisedOverlay]);
+
+
   // start button
   const startButton = React.useMemo(() => {
     if (isTabWizard)
@@ -104,24 +182,84 @@ export function ModelsConfiguratorModal(props: {
     if (!hasAnyServices)
       return <Button variant='outlined' color='neutral' onClick={handleShowWizard} sx={{ backgroundColor: 'background.popup' }}>{isMobile ? 'Quick Setup' : 'Quick Setup'}</Button>;
 
-    // Show checkbox for filtering hidden models when we have LLMs
+    // Service-level 3-dots menu when we have LLMs
     if (isTabSetup && hasLLMs)
       return (
-        <TooltipOutlined title='Show hidden models - some may be experimental, deprecated, or just not recommended.' placement='top'>
-          <Checkbox
-            // size='sm'
-            color='neutral'
-            // variant='outlined'
-            label='Include Hidden'
-            checked={showModelsHidden}
-            onChange={(e) => setShowModelsHidden(e.target.checked)}
-            sx={{ my: 'auto', fontSize: 'sm' }}
-          />
-        </TooltipOutlined>
+        <Dropdown>
+          <MenuButton slots={{ root: IconButton }} slotProps={{ root: { variant: 'soft', sx: { backgroundColor: 'background.surface' } } }}>
+            <MoreVertIcon sx={{ fontSize: 'xl' }} />
+          </MenuButton>
+          <Menu placement='bottom-start' disablePortal sx={{ minWidth: 240 }}>
+
+            {/* Service Name Header */}
+            {/*<ListItem sx={{ '--ListItem-minHeight': '2.5rem' }}>*/}
+            {/*  <ListItemDecorator><LLMVendorIconSprite vendorId={activeService?.vId} /></ListItemDecorator>*/}
+            {/*  <div>{activeService?.label ?? ''}</div>*/}
+            {/*</ListItem>*/}
+            {/*<ListDivider sx={{ mt: 0 }} />*/}
+
+            {/* Refresh Models */}
+            <MenuItem disabled={isRefreshing} onClick={handleRefreshModels}>
+              <ListItemDecorator>
+                {isRefreshing ? <CircularProgress size='sm' /> : <RefreshIcon />}
+              </ListItemDecorator>
+              {isRefreshing ? 'Refreshing...' : 'Refresh Models'}
+            </MenuItem>
+
+            {/* Reset All Parameters */}
+            <MenuItem disabled={false /* */} onClick={handleResetAllParameters}>
+              <ListItemDecorator><RestoreIcon /></ListItemDecorator>
+              Reset Customizations
+            </MenuItem>
+
+            {/* Remove Cloned Models */}
+            <MenuItem disabled={false /* unnecessary: !hasClones */} onClick={handleRemoveClones}>
+              <ListItemDecorator><DeleteOutlineIcon /></ListItemDecorator>
+              Remove Duplicate Models
+            </MenuItem>
+
+            <ListDivider />
+
+            {/* Visibility actions */}
+            <MenuItem onClick={handleShowAllModels}>
+              <ListItemDecorator><VisibilityIcon /></ListItemDecorator>
+              Show All Models
+            </MenuItem>
+            <MenuItem onClick={handleHideAllModels}>
+              <ListItemDecorator><VisibilityOffIcon /></ListItemDecorator>
+              Hide All Models
+            </MenuItem>
+            <MenuItem onClick={handleResetVisibility}>
+              <ListItemDecorator><RestoreIcon /></ListItemDecorator>
+              Reset Visibility
+            </MenuItem>
+
+            <ListDivider />
+
+            {/* View toggles */}
+            <MenuItem onClick={() => setShowModelsHidden(!showModelsHidden)}>
+              <ListItemDecorator><Checkbox color='neutral' checked={showModelsHidden} /></ListItemDecorator>
+              Show Hidden Models
+            </MenuItem>
+            {/*<MenuItem onClick={() => setModelsStarredOnTop(!modelsStarredOnTop)}>*/}
+            {/*  <ListItemDecorator><Checkbox color='neutral' checked={modelsStarredOnTop} /></ListItemDecorator>*/}
+            {/*  Starred on Top*/}
+            {/*</MenuItem>*/}
+
+            {/*<ListDivider />*/}
+
+            {/* Delete Service */}
+            {/*<MenuItem color='danger' disabled={!activeServiceId} onClick={(event) => handleDeleteService(activeServiceId, event.shiftKey)}>*/}
+            {/*  <ListItemDecorator><DeleteOutlineIcon /></ListItemDecorator>*/}
+            {/*  Delete Service*/}
+            {/*</MenuItem>*/}
+
+          </Menu>
+        </Dropdown>
       );
 
     return undefined;
-  }, [handleShowAdvanced, handleShowWizard, hasAnyServices, hasLLMs, isMobile, isTabSetup, isTabWizard, setShowModelsHidden, showModelsHidden]);
+  }, [handleHideAllModels, handleRefreshModels, handleRemoveClones, handleResetAllParameters, handleResetVisibility, handleShowAdvanced, handleShowAllModels, handleShowWizard, hasAnyServices, hasLLMs, isMobile, isRefreshing, isTabSetup, isTabWizard, setShowModelsHidden, showModelsHidden]);
 
 
   // custom done button for wizard mode (combines start and close buttons)
@@ -141,7 +279,7 @@ export function ModelsConfiguratorModal(props: {
         {/* unsaved warning */}
         {hasUnsavedChanges && (
           <Typography color='warning' level='body-sm' ml='auto'>
-            {isMobile ? 'Unsaved' : `You have ${unsavedWizardProviders.size} unsaved change${ unsavedWizardProviders.size > 1 ? 's' : '' }`}
+            {isMobile ? 'Unsaved' : `You have ${unsavedWizardProviders.size} unsaved change${unsavedWizardProviders.size > 1 ? 's' : ''}`}
           </Typography>
         )}
 
@@ -275,7 +413,7 @@ export function ModelsConfiguratorModal(props: {
         />
       )}
 
-      {isTabSetup && <ModelsServiceSelector modelsServices={modelsServices} selectedServiceId={activeServiceId} setSelectedServiceId={setConfServiceId} onSwitchToWizard={handleShowWizard} />}
+      {isTabSetup && <ModelsServiceSelector modelsServices={modelsServices} selectedServiceId={activeServiceId} setSelectedServiceId={setConfServiceId} onDeleteService={handleDeleteService} onSwitchToWizard={handleShowWizard} />}
       {isTabSetup && <Divider sx={activeService ? undefined : { visibility: 'hidden' }} />}
       {isTabSetup && (
         <Box sx={{ display: 'grid', gap: 'var(--Card-padding)' }}>

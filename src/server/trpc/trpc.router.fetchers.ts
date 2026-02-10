@@ -4,7 +4,8 @@ import { debugGenerateCurlCommand, safeErrorString, SERVER_DEBUG_WIRE } from '~/
 
 
 // configuration
-const SERVER_LOG_FETCHERS_ERRORS = true; // log all fetcher errors to the console
+const SERVER_LOG_FETCHERS_ERRORS = !process.env.SUPPRESS_FETCHER_LOGS; // default: true - log all fetcher errors to the console
+const SERVER_DEBUG_FETCH_HEADERS = false; // log response headers (rate limits, etc.)
 
 
 //
@@ -37,6 +38,7 @@ type _RequestConfig<TBody extends object | undefined | FormData> = {
   signal?: AbortSignal;
   name: string;
   throwWithoutName?: boolean; // when throwing, do not add the module name (the caller will improve the output)
+  onHeaders?: (headers: Headers, status: number) => void; // optional callback to receive response headers
 } & (
   | { method?: 'GET' /* in case of GET, the method is optional, and no body */ }
   | { method: 'POST'; body: TBody }
@@ -129,7 +131,7 @@ async function _fetchFromTRPC<TBody extends object | undefined | FormData, TOut>
   parserName: 'json' | 'text' | 'response',
 ): Promise<TOut> {
 
-  const { url, method = 'GET', headers: configHeaders, name: moduleName, signal, throwWithoutName = false } = config;
+  const { url, method = 'GET', headers: configHeaders, name: moduleName, signal, throwWithoutName = false, onHeaders } = config;
   const body = 'body' in config ? config.body : undefined;
 
   // Cleaner url without query
@@ -174,6 +176,17 @@ async function _fetchFromTRPC<TBody extends object | undefined | FormData, TOut>
     // @throws Error.name=ResponseAborted (Next.js) when the request is aborted (e.g. HMR)
     // @throws TypeError: network error occurred (URL invalid, invalid RequestInit, network error such as DNS failure or no connectivity or IP, etc.)
     response = await fetch(url, request);
+
+
+    // optional response headers logging
+    if (SERVER_DEBUG_FETCH_HEADERS) {
+      const headers: Record<string, string> = {};
+      response.headers.forEach((value, key) => headers[key] = value);
+      console.log(`[${method}] [${moduleName}] Response headers:`, headers);
+    }
+
+    // optional response headers callback (rate limits, etc.)
+    onHeaders?.(response.headers, response.status);
 
   } catch (error: any) {
 

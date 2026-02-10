@@ -14,6 +14,7 @@ import { copyToClipboard } from '~/common/util/clipboardUtils';
 import { downloadBlob } from '~/common/util/downloadUtils';
 
 import { CustomARenderer } from './CustomARenderer';
+import { remarkTableCellBreaks } from './tableBreaks.remark';
 import { wrapWithMarkdownSyntax } from './markdown.wrapper';
 
 
@@ -110,7 +111,7 @@ function TableRenderer({ children, node, ...props }: TableRendererProps) {
 
       {/* Download CSV link and Copy Markdown Button */}
       {tableData?.length >= 1 && (
-        <Box sx={_styles.buttons}>
+        <Box data-agi-no-copy /* do not copy these buttons */ sx={_styles.buttons}>
           {/* Download button*/}
           <Chip
             variant='soft'
@@ -210,6 +211,7 @@ const reactMarkdownComponents = {
 const remarkPluginsStable: UnifiedPluggable[] = [
   remarkGfm, // GitHub Flavored Markdown
   remarkMark, // Mark-Highlight, for ==yellow==
+  remarkTableCellBreaks, // Convert <br> HTML tags inside tables to break nodes (for line breaks in table cells)
   [remarkMath, {
     /**
      * NOTE: this could be configurable, some users reported liking single dollar signs math, despite even the official
@@ -243,7 +245,7 @@ function preprocessMarkdown(markdownText: string) {
     // for performance, disable the preprocessor if the text is too long
     if (markdownText.length > MAX_PREPROCESSOR_LENGTH) {
       if (!warnedAboutLength) {
-        console.warn('[DEV] Preprocessing markdown: text too long, skipping');
+        console.log('[DEV] Preprocessing markdown: text too long, skipping');
         warnedAboutLength = true;
       }
       return markdownText;

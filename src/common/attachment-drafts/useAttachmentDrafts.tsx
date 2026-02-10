@@ -12,7 +12,7 @@ import type { DMessageId } from '~/common/stores/chat/chat.message';
 import { getAllFilesFromDirectoryRecursively, getDataTransferFilesOrPromises } from '~/common/util/fileSystemUtils';
 import { useChatAttachmentsStore } from '~/common/chat-overlay/store-perchat_vanilla';
 
-import type { AttachmentDraftSourceOriginDTO, AttachmentDraftSourceOriginFile, AttachmentDraftSourceOriginUrl } from './attachment.types';
+import type { AttachmentDraftSource, AttachmentDraftSourceOriginDTO, AttachmentDraftSourceOriginFile, AttachmentDraftSourceOriginUrl } from './attachment.types';
 import type { AttachmentDraftsStoreApi } from './store-attachment-drafts_slice';
 
 
@@ -24,6 +24,9 @@ function notifyOnlyImages(item: any) {
   if (ATTACHMENTS_DEBUG_INTAKE) console.log('useAttachmentDrafts: Filtered out non-image clipboard item.', { item });
   addSnackbar({ key: 'attach-filtered', message: `Only image attachments are allowed right now.`, type: 'precondition-fail' });
 }
+
+
+export type AttachmentStoreCloudInput = Omit<Extract<AttachmentDraftSource, { media: 'cloud' }>, 'media' | 'origin'>;
 
 
 /**
@@ -254,8 +257,8 @@ export function useAttachmentDrafts(attachmentsStoreApi: AttachmentDraftsStoreAp
       // https://github.com/enricoros/big-AGI/issues/286
       const textHtml = clipboardItem.types.includes('text/html')
         ? await clipboardItem.getType('text/html')
-            .then(blob => blob?.text() ?? '')
-            .catch(() => '')
+          .then(blob => blob?.text() ?? '')
+          .catch(() => '')
         : '';
       const heuristicBypassImage = textHtml.startsWith('<table ');
 
@@ -289,8 +292,8 @@ export function useAttachmentDrafts(attachmentsStoreApi: AttachmentDraftsStoreAp
       // get the Plain text
       const textPlain = clipboardItem.types.includes('text/plain')
         ? await clipboardItem.getType('text/plain')
-            .then(blob => blob?.text() ?? '')
-            .catch(() => '')
+          .then(blob => blob?.text() ?? '')
+          .catch(() => '')
         : '';
 
       // attach as URL
@@ -322,6 +325,27 @@ export function useAttachmentDrafts(attachmentsStoreApi: AttachmentDraftsStoreAp
   }, [_createAttachmentDraft, attachAppendFile, attachAppendUrl, enableLoadURLsOnPaste, filterOnlyImages, hintAddImages]);
 
   /**
+   * Append a cloud file (Google Drive, OneDrive, etc.) to the attachments.
+   * This is the entry point for cloud file picker integrations.
+   */
+  const attachAppendCloudFile = React.useCallback((cloudFile: AttachmentStoreCloudInput) => {
+    if (ATTACHMENTS_DEBUG_INTAKE)
+      console.log('attachAppendCloudFile', cloudFile);
+
+    // only-images: ignore cloud files as they may not be images
+    if (filterOnlyImages && !cloudFile.mimeType.startsWith('image/')) {
+      notifyOnlyImages(cloudFile);
+      return Promise.resolve();
+    }
+
+    return _createAttachmentDraft({
+      media: 'cloud',
+      origin: `picker-${cloudFile.provider}`,
+      ...cloudFile,
+    }, { hintAddImages });
+  }, [_createAttachmentDraft, filterOnlyImages, hintAddImages]);
+
+  /**
    * Append ego content to the attachments.
    */
   const attachAppendEgoFragments = React.useCallback((fragments: DMessageFragment[], label: string, conversationTitle: string, conversationId: DConversationId, messageId: DMessageId) => {
@@ -348,6 +372,7 @@ export function useAttachmentDrafts(attachmentsStoreApi: AttachmentDraftsStoreAp
 
     // create drafts
     attachAppendClipboardItems,
+    attachAppendCloudFile,
     attachAppendDataTransfer,
     attachAppendEgoFragments,
     attachAppendFile,

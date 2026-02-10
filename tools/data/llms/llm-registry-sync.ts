@@ -193,7 +193,7 @@ function saveChanges(
         model.interfaces ? JSON.stringify(model.interfaces) : null,
         model.description ?? null,
         model.benchmark?.cbaElo ?? null,
-        model.benchmark?.cbaMmlu ?? null,
+        null,
         extractSimplePrice(model.chatPrice?.input),
         extractSimplePrice(model.chatPrice?.output),
         JSON.stringify(model),
@@ -234,7 +234,7 @@ function saveChanges(
         model.interfaces ? JSON.stringify(model.interfaces) : null,
         model.description ?? null,
         model.benchmark?.cbaElo ?? null,
-        model.benchmark?.cbaMmlu ?? null,
+        null,
         extractSimplePrice(model.chatPrice?.input),
         extractSimplePrice(model.chatPrice?.output),
         JSON.stringify(model),
@@ -269,7 +269,7 @@ function saveChanges(
         model.interfaces ? JSON.stringify(model.interfaces) : null,
         model.description ?? null,
         model.benchmark?.cbaElo ?? null,
-        model.benchmark?.cbaMmlu ?? null,
+        null,
         extractSimplePrice(model.chatPrice?.input),
         extractSimplePrice(model.chatPrice?.output),
         JSON.stringify(model),
@@ -691,7 +691,6 @@ function createSingleConfig(
         oaiOrg: '',
         oaiHost: host || '',
         heliKey: '',
-        moderationCheck: false,
       } as any;
       break;
 
@@ -842,7 +841,7 @@ async function runSync(
             max_tokens: model.maxCompletionTokens,
             interfaces: model.interfaces,
             benchmark_elo: model.benchmark?.cbaElo,
-            benchmark_mmlu: model.benchmark?.cbaMmlu,
+            benchmark_mmlu: undefined,
             price_input: extractSimplePrice(model.chatPrice?.input),
             price_output: extractSimplePrice(model.chatPrice?.output),
           })),

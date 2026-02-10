@@ -103,6 +103,10 @@ export namespace GeminiWire_ContentParts {
     }),
   });
 
+  // FunctionResponsePart is structurally identical to InlineDataPart (only inlineData, no text)
+  // noinspection UnnecessaryLocalVariableJS
+  const FunctionResponsePart_Blob_schema = InlineDataPart_schema;
+
   /**
    * The result output from a FunctionCall that contains a string representing the FunctionDeclaration.name
    * and a structured JSON object containing any output from the function is used as context to the model.
@@ -119,10 +123,25 @@ export namespace GeminiWire_ContentParts {
       id: z.string().optional(), // populated by the client to match the corresponding function call id.
       /** Corresponds to the related FunctionDeclaration.name */
       name: z.string(),
-      /** The function response in JSON object format */
+      /**
+       * The function response in JSON object format.
+       * Note: Docs say 'Required' but we keep optional for backward compatibility.
+       * Callers can use any keys (e.g., "output", "result", "error" for failures).
+       */
       response: z.json().optional(), // FC-R response
 
-      // -- the following fields are only applicable to NON_BLOCKING function calls
+
+      // -- multimodal function responses
+
+      /**
+       * [Gemini 3, 2025-11] Optional array of FunctionResponsePart for multimodal function responses.
+       * Note: FunctionResponsePart only supports inlineData (images, audio) - NOT text.
+       * Text should be returned via the 'response' field above.
+       */
+      parts: z.array(FunctionResponsePart_Blob_schema).optional(),
+
+
+      // -- the following fields are only applicable to NON_BLOCKING function calls (which we don't care about)
 
       /** Signals that function call continues, and more responses will be returned, turning the function call into a generator. */
       willContinue: z.boolean().optional(),
@@ -375,6 +394,7 @@ export namespace GeminiWire_ToolDeclarations {
   });
 
   export const ToolConfig_schema = z.object({
+    // configuration for function calling
     functionCallingConfig: z.object({
       mode: z.enum([
         // /**
@@ -395,8 +415,26 @@ export namespace GeminiWire_ToolDeclarations {
          * The model behavior is the same as if you don't pass any function declarations.
          */
         'NONE',
+        /**
+         * [Gemini 3, 2025-11] Function call validation mode - ensures calls match declarations.
+         * Model decides to predict either a function call or a natural language response, but will validate function calls with constrained decoding.
+         * If "allowedFunctionNames" are set, the predicted function call will be limited to any one of "allowedFunctionNames",
+         * else the predicted function call will be any one of the provided "functionDeclarations".
+         */
+        'VALIDATED',
       ]).optional(),
       allowedFunctionNames: z.array(z.string()).optional(),
+    }).optional(),
+
+    // configuration for retrieval tools (Google Search, URL Context)
+    retrievalConfig: z.object({
+      /** The location of the user (latitude/longitude per WGS84 standard). */
+      latLng: z.object({
+        latitude: z.number(),   // degrees, range [-90.0, +90.0]
+        longitude: z.number(),  // degrees, range [-180.0, +180.0]
+      }).optional(),
+      /** Language code for content (BCP 47 format, e.g., "en-US"). */
+      languageCode: z.string().optional(),
     }).optional(),
   });
 
@@ -504,15 +542,32 @@ export namespace GeminiWire_API_Generate_Content {
     'AUDIO', // model should return audio
   ]);
 
-  const SpeechConfig_schema = z.object({
-    /** The configuration for the speaker to use. */
-    voiceConfig: z.object({
-      /** The configuration for the prebuilt voice to use. */
-      prebuiltVoiceConfig: z.object({
-        /** The name of the preset voice to use. */
-        voiceName: z.string(),
-      }).optional(),
+  /** The configuration for the voice to use (prebuilt voice). */
+  const VoiceConfig_schema = z.object({
+    prebuiltVoiceConfig: z.object({
+      /** The name of the preset voice to use. */
+      voiceName: z.string(),
     }).optional(),
+  });
+
+  /** Configuration for a speaker in a multi-speaker setup. */
+  const SpeakerVoiceConfig_schema = z.object({
+    speaker: z.string(),  // name of the speaker, should match the name in the prompt
+    voiceConfig: VoiceConfig_schema,  // the configuration for the voice to use
+  });
+
+  const SpeechConfig_schema = z.object({
+    /** The configuration for single-voice output. Mutually exclusive with multiSpeakerVoiceConfig. */
+    voiceConfig: VoiceConfig_schema.optional(),
+    /** Multi-speaker voice configuration for dialogue. Mutually exclusive with voiceConfig. */
+    multiSpeakerVoiceConfig: z.object({
+      speakerVoiceConfigs: z.array(SpeakerVoiceConfig_schema),
+    }).optional(),
+    /** BCP 47 language code for speech synthesis (e.g., "en-US", "de-DE", "ja-JP"). */
+    languageCode: z.union([
+      z.string(),
+      z.enum(['de-DE', 'en-AU', 'en-GB', 'en-IN', 'en-US', 'es-US', 'fr-FR', 'hi-IN', 'pt-BR', 'ar-XA', 'es-ES', 'fr-CA', 'id-ID', 'it-IT', 'ja-JP', 'tr-TR', 'vi-VN', 'bn-IN', 'gu-IN', 'kn-IN', 'ml-IN', 'mr-IN', 'ta-IN', 'te-IN', 'nl-NL', 'ko-KR', 'cmn-CN', 'pl-PL', 'ru-RU', 'th-TH']),
+    ]).optional(),
   });
 
   const GenerationConfig_schema = z.object({
@@ -565,16 +620,17 @@ export namespace GeminiWire_API_Generate_Content {
        * - must be an integer in the range 0 to 24576; budgets from 1 to 1024 tokens will be set to 1024
        * - set to 0 to disable thinking
        */
-      thinkingBudget: z.number().optional(),
+      thinkingBudget: z.int().optional(),
       /**
        * [Gemini 3, 2025-11-18] Replaces thinkingBudget for Gemini 3 models.
+       * - 'high': Maximum reasoning depth
+       * - 'medium': Balanced reasoning (from Gemini 3 Flash)
        * - 'low': Minimizes latency and cost
-       * - 'medium': Balanced (coming soon, not yet supported)
-       * - 'high': Maximizes reasoning depth (default when set)
-       * - undefined: Dynamic (model decides - which is equivalent to 'high' for now)
+       * - 'minimal': Quickest responses with minimal reasoning (from Gemini 3 Flash)
+       * - undefined: Dynamic (model decides)
        * CRITICAL: Cannot use both thinkingLevel and thinkingBudget (400 error)
        */
-      thinkingLevel: z.enum(['low', 'medium', 'high']).optional(),
+      thinkingLevel: z.enum(['high', 'medium', 'low', 'minimal']).optional(),
     }).optional(),
 
     // Image generation configuration
@@ -590,6 +646,7 @@ export namespace GeminiWire_API_Generate_Content {
     frequencyPenalty: z.number().optional(),    // A positive penalty increases the vocabulary of the response
     responseLogprobs: z.boolean().optional(),   // if true, exports the logprobs
     logprobs: z.number().int().optional(),      // number of top logprobs to return
+    seed: z.number().int().optional(),          // [Gemini, 2025-12] Seed for deterministic output - unset means random seed
   });
 
   export type Request = z.infer<typeof Request_schema>;
@@ -630,6 +687,7 @@ export namespace GeminiWire_API_Generate_Content {
     'IMAGE_RECITATION',           // Image generation stopped due to recitation.
     'UNEXPECTED_TOOL_CALL',       // Model generated a tool call but no tools were enabled in the request.
     'TOO_MANY_TOOL_CALLS',        // Model called too many tools consecutively, thus the system exited execution.
+    'MISSING_THOUGHT_SIGNATURE',  // [Gemini 3, 2025-11] Thinking model validation failed - thoughtSignature missing or invalid.
   ]);
 
   /** A citation to a source for a portion of a specific response. **/
@@ -840,6 +898,8 @@ export namespace GeminiWire_API_Generate_Content {
     /** Real model version used to generate the response (what we got, not what we asked for). */
     modelVersion: z.string()
       .optional(), // [Gemini, 2025-11-07] relaxed to optional for proxy error cases
+    /** (we ignore this) Unique identifier for the response, for log/debug */
+    responseId: z.string().optional(),
   });
 
 }

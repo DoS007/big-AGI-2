@@ -73,6 +73,11 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
     // ```Can you extend the Zod chunk response object parsing (all optional) to include the missing data? The following is an exampel of the object I received:```
     const chunkData = JSON.parse(eventData); // this is here just for ease of breakpoint, otherwise it could be inlined
 
+    // [OpenAI, 2025-01-13] Keepalive events - skip silently
+    // These are sent periodically to keep the connection alive (e.g., {"type":"keepalive","sequence_number":59})
+    if (chunkData?.type === 'keepalive')
+      return;
+
     // [OpenRouter/others] transmits upstream errors pre-parsing (object wouldn't be valid)
     if (_forwardOpenRouterDataError(chunkData, pt))
       return;
@@ -196,7 +201,7 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
         deltaHasReasoning = true;
 
       }
-      // delta: Reasoning Details (Structured) [OpenRouter, 2025-11-11]
+      // delta: Reasoning Details (Structured) [OpenRouter, 2025-01-20]
       else if (Array.isArray(delta.reasoning_details)) {
 
         for (const reasoningDetail of delta.reasoning_details) {
@@ -350,6 +355,21 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
         }
       }
 
+      // [OpenRouter, 2025-12-31] Extension for receiving Images (streaming)
+      if (delta.images && Array.isArray(delta.images)) {
+        for (const imageObj of delta.images) {
+          if (imageObj?.image_url?.url) {
+            const imageUrl = imageObj.image_url.url;
+            // Extract mime type and base64 data from data URL: "data:image/png;base64,..."
+            const match = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+              const [, mimeType, base64Data] = match;
+              pt.appendImageInline(mimeType, base64Data, 'Generated image', `OpenRouter ${json.model || ''}`.trim(), '' /* prompt is unknown */);
+            }
+          }
+        }
+      }
+
       // Token Stop Reason - usually missing in all but the last chunk, but we don't rely on it
       if (finish_reason) {
         const tokenStopReason = _fromOpenAIFinishReason(finish_reason);
@@ -451,7 +471,7 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
       } else if (message.content !== undefined && message.content !== null)
         throw new Error(`unexpected message content type: ${typeof message.content}`);
 
-      // [OpenRouter, 2025-11-11] Handle structured reasoning_details
+      // [OpenRouter, 2025-01-20] Handle structured reasoning_details
       if (Array.isArray(message.reasoning_details)) {
         for (const reasoningDetail of message.reasoning_details) {
           if (reasoningDetail.type === 'reasoning.text' && typeof reasoningDetail.text === 'string') {
@@ -511,6 +531,21 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
         } catch (error) {
           console.warn('[OpenAI] Failed to process audio:', error);
           pt.setDialectTerminatingIssue(`Failed to process audio: ${error}`, null, 'srv-warn');
+        }
+      }
+
+      // [OpenRouter, 2025-12-31] Extension for receiving Images (non-streaming)
+      if (message.images && Array.isArray(message.images)) {
+        for (const imageObj of message.images) {
+          if (imageObj?.image_url?.url) {
+            const imageUrl = imageObj.image_url.url;
+            // Extract mime type and base64 data from data URL: "data:image/png;base64,..."
+            const match = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+              const [, mimeType, base64Data] = match;
+              pt.appendImageInline(mimeType, base64Data, 'Generated image', `OpenRouter ${json.model || ''}`.trim(), '' /* prompt is unknown */);
+            }
+          }
         }
       }
 
@@ -667,7 +702,7 @@ function _forwardOpenRouterDataError(parsedData: any, pt: IParticleTransmitter) 
   const { error } = parsedData;
 
   // require .message/.code to consider this a valid error object
-  if (!(typeof error === 'object') || !('message' in error) || !('code' in error)) {
+  if (!(typeof error === 'object') || !('message' in error) /*|| !('code' in error) */) { // .code is optional for LM Studio and others
     console.log('AIX: OpenAI-dispatch ignored error:', { error });
     return false;
   }

@@ -27,6 +27,9 @@ export type GlobalOverlayId = // string - disabled so we keep an orderliness
   | 'livefile-overwrite'
   | 'shortcuts-confirm-close'
   | 'blocks-off-enhance-code'
+  | 'llms-remove-clones'
+  | 'llms-reset-parameters'
+  | 'llms-reset-visibility'
   | 'llms-service-remove'
   | 'composer-unsupported-attachments'    // The LLM does not seem to support this mime type - continue anyway?
   | 'composer-open-or-attach'             // Open a file or attach it to the chat?

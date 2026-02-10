@@ -2,6 +2,7 @@ import type { AixWire_Particles } from '../../../api/aix.wiretypes';
 import type { ChatGenerateParseFunction } from '../chatGenerate.dispatch';
 import type { IParticleTransmitter } from './IParticleTransmitter';
 import { IssueSymbols } from '../ChatGenerateTransmitter';
+import { aixResilientUnknownValue } from '../../../api/aix.resilience';
 
 import { GeminiWire_API_Generate_Content, GeminiWire_Safety } from '../../wiretypes/gemini.wiretypes';
 
@@ -199,14 +200,17 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
                 pt.addCodeExecutionResponse(null, deadlineError, '', 'gemini_auto_inline', 'upstream');
                 break;
               default:
-                throw new Error(`unexpected code execution outcome: ${mPart.codeExecutionResult.outcome}`);
+                const _exhaustiveCheck: never = mPart.codeExecutionResult.outcome;
+                aixResilientUnknownValue('Gemini', 'codeExecutionOutcome', mPart.codeExecutionResult.outcome);
+                break;
             }
             break;
 
           default:
             // noinspection JSUnusedLocalSymbols
             const _exhaustiveCheck: never = mPart;
-            throw new Error(`unexpected content part: ${JSON.stringify(mPart)}`);
+            aixResilientUnknownValue('Gemini', 'contentPartType', mPart);
+            break;
         }
 
         // Set the thought signature if available
@@ -284,6 +288,7 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
           case 'NO_IMAGE': // The model was expected to generate an image, but none was generated
           case 'UNEXPECTED_TOOL_CALL': // Model generated a tool call but no tools were enabled in the request
           case 'TOO_MANY_TOOL_CALLS': // Model called too many tools consecutively, execution limit exceeded
+          case 'MISSING_THOUGHT_SIGNATURE': // [Gemini 3] Thinking model validation failed - thoughtSignature missing
           case 'FINISH_REASON_UNSPECIFIED':
             const reasonMap: Record<typeof candidate0.finishReason, [AixWire_Particles.GCTokenStopReason, string, string | null]> = {
               'SAFETY': ['filter-content', `Generation stopped due to SAFETY: ${_explainGeminiSafetyIssues(candidate0.safetyRatings)}`, null],
@@ -301,15 +306,19 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
               'NO_IMAGE': ['cg-issue', 'Image generation failed: no image generated', null],
               'UNEXPECTED_TOOL_CALL': ['cg-issue', 'Generation stopped: tool call made but no tools enabled', null],
               'TOO_MANY_TOOL_CALLS': ['cg-issue', 'Generation stopped: too many consecutive tool calls', null],
+              'MISSING_THOUGHT_SIGNATURE': ['cg-issue', 'Generation stopped: request has at least one Gemini thought signature missing', null],
               'FINISH_REASON_UNSPECIFIED': ['cg-issue', 'Generation stopped and no reason was given', null],
             } as const;
             const reason = reasonMap[candidate0.finishReason];
             pt.setTokenStopReason(reason[0]);
-            return pt.setDialectTerminatingIssue(reason[1], reason[2], false);
+            // append finishMessage if available for more context
+            const issueMessage = candidate0.finishMessage ? `${reason[1]}: ${candidate0.finishMessage}` : reason[1];
+            return pt.setDialectTerminatingIssue(issueMessage, reason[2], false);
 
           default:
             // Exhaustiveness check - if we get here, Gemini added a new finishReason
             const _exhaustiveCheck: never = candidate0.finishReason as Exclude<typeof candidate0.finishReason, string>;
+            aixResilientUnknownValue('Gemini', 'finishReason', candidate0.finishReason);
             pt.setTokenStopReason('cg-issue');
             return pt.setDialectTerminatingIssue(`unexpected Gemini finish reason: ${candidate0?.finishReason})`, null, 'srv-warn');
         }

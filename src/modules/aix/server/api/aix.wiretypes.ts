@@ -186,7 +186,7 @@ export namespace AixWire_Parts {
 
   const _CodeExecutionInvocation_schema = z.object({
     type: z.literal('code_execution'),
-    variant: z.literal('gemini_auto_inline').optional(),
+    variant: z.enum(['gemini_auto_inline', 'code_interpreter']).optional(),
     language: z.string().optional(),
     code: z.string(),
   });
@@ -360,7 +360,7 @@ export namespace AixWire_Tooling {
      * For now we are supporting a single provider:
      * - gemini_auto_inline: Google Gemini, auto-invoked, and inline (runs the code and goes back to the model to continue the generation)
      */
-    variant: z.enum(['gemini_auto_inline']),
+    variant: z.enum(['gemini_auto_inline', 'code_interpreter']),
   });
 
   /// Tool Definition
@@ -451,9 +451,9 @@ export namespace AixWire_API {
 
     // Anthropic
     vndAnt1MContext: z.boolean().optional(),
-    vndAntEffort: z.enum(['low', 'medium', 'high']).optional(),
+    vndAntEffort: z.enum(['low', 'medium', 'high', 'max']).optional(),
     vndAntSkills: z.string().optional(),
-    vndAntThinkingBudget: z.number().nullable().optional(),
+    vndAntThinkingBudget: z.number().or(z.literal('adaptive')).nullable().optional(),
     vndAntToolSearch: z.enum(['regex', 'bm25']).optional(), // Tool Search Tool variant
     vndAntWebFetch: z.enum(['auto']).optional(),
     vndAntWebSearch: z.enum(['auto']).optional(),
@@ -466,34 +466,39 @@ export namespace AixWire_API {
     vndGeminiMediaResolution: z.enum(['mr_high', 'mr_medium', 'mr_low']).optional(),
     vndGeminiShowThoughts: z.boolean().optional(),
     vndGeminiThinkingBudget: z.number().optional(), // old param
-    vndGeminiThinkingLevel: z.enum(['high', 'medium', 'low']).optional(), // new param
+    // Gemini 3 thinking level: Pro supports high/low, Flash supports all 4 levels
+    vndGeminiThinkingLevel: z.enum(['high', 'medium', 'low', 'minimal']).optional(), // new param
     vndGeminiUrlContext: z.enum(['auto']).optional(),
     // Moonshot
     vndMoonshotWebSearch: z.enum(['auto']).optional(),
     // OpenAI
+    vndOaiCodeInterpreter: z.enum(['off', 'auto']).optional(),
+    vndOaiImageGeneration: z.enum(['mq', 'hq', 'hq_edit', 'hq_png']).optional(),
     vndOaiResponsesAPI: z.boolean().optional(),
-    vndOaiReasoningEffort: z.enum(['minimal', 'low', 'medium', 'high']).optional(),
+    vndOaiReasoningEffort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
+    vndOaiReasoningSummary: z.enum(['none', 'detailed']).optional(),
     vndOaiRestoreMarkdown: z.boolean().optional(),
     vndOaiVerbosity: z.enum(['low', 'medium', 'high']).optional(),
     vndOaiWebSearchContext: z.enum(['low', 'medium', 'high']).optional(),
-    vndOaiImageGeneration: z.enum(['mq', 'hq', 'hq_edit', 'hq_png']).optional(),
     // OpenRouter
     vndOrtWebSearch: z.enum(['auto']).optional(),
     // Perplexity
     vndPerplexityDateFilter: z.enum(['unfiltered', '1m', '3m', '6m', '1y']).optional(),
     vndPerplexitySearchMode: z.enum(['default', 'academic']).optional(),
     // xAI
-    vndXaiSearchMode: z.enum(['auto', 'on', 'off']).optional(),
-    vndXaiSearchSources: z.string().optional(),
-    vndXaiSearchDateFilter: z.enum(['unfiltered', '1d', '1w', '1m', '6m', '1y']).optional(),
+    vndXaiCodeExecution: z.enum(['off', 'auto']).optional(),
+    vndXaiSearchInterval: z.enum(['unfiltered', '1d', '1w', '1m', '6m', '1y']).optional(),
+    vndXaiWebSearch: z.enum(['off', 'auto']).optional(),
+    vndXaiXSearch: z.enum(['off', 'auto']).optional(),
+    vndXaiXSearchHandles: z.string().optional(),
     /**
      * [OpenAI, 2025-03-11] This is the generic version of the `web_search_options.user_location` field
      * This AIX field mimics on purpose: https://platform.openai.com/docs/api-reference/chat/create
      */
     userGeolocation: z.object({
       city: z.string().optional(),      // free text input for the city of the user, e.g. San Francisco.
-      country: z.string().optional(),   // two-letter ISO country code of the user, e.g. US
       region: z.string().optional(),    // free text input for the reg. of the user the user, e.g. California
+      country: z.string().optional(),   // two-letter ISO country code of the user, e.g. US
       timezone: z.string().optional(),  // IANA timezone of the user, e.g. America/Los_Angeles
     }).optional(),
   });
@@ -560,6 +565,11 @@ export namespace AixWire_API {
      * Request profiling data for a streaming call: time spent preparing, connecting, waiting, receiving, etc. Fulfillment is decided by the server, and won't be available on 'production' builds.
      */
     debugProfilePerformance: z.boolean().optional(),
+
+    /**
+     * Applies a JSON override to the dispatch request body.
+     */
+    debugRequestBodyOverride: z.record(z.string(), z.unknown()).optional(),
 
     /**
      * Request a resumable connection, if the model/service supports it.
@@ -709,8 +719,8 @@ export namespace AixWire_Particles {
     // | { p: '_di', i_text: string }
     | { p: 'fci', id: string, name: string, i_args?: string /* never undefined */ }
     | { p: '_fci', _args: string }
-    | { p: 'cei', id: string, language: string, code: string, author: 'gemini_auto_inline' }
-    | { p: 'cer', id: string, error: DMessageToolResponsePart['error'], result: string, executor: 'gemini_auto_inline', environment: DMessageToolResponsePart['environment'] }
+    | { p: 'cei', id: string, language: string, code: string, author: 'gemini_auto_inline' | 'code_interpreter' }
+    | { p: 'cer', id: string, error: DMessageToolResponsePart['error'], result: string, executor: 'gemini_auto_inline' | 'code_interpreter', environment: DMessageToolResponsePart['environment'] }
     | { p: 'ia', mimeType: string, a_b64: string, label?: string, generator?: string, durationMs?: number } // inline audio, complete
     | { p: 'ii', mimeType: string, i_b64: string, label?: string, generator?: string, prompt?: string } // inline image, complete
     | { p: 'urlc', title: string, url: string, num?: number, from?: number, to?: number, text?: string, pubTs?: number } // url citation - pubTs: publication timestamp

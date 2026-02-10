@@ -18,6 +18,7 @@ import LinkIcon from '@mui/icons-material/Link';
 import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
 import { ElevenLabsIcon } from '~/common/components/icons/vendors/ElevenLabsIcon';
 import { FormLabelStart } from '~/common/components/forms/FormLabelStart';
+import { InworldIcon } from '~/common/components/icons/vendors/InworldIcon';
 import { LocalAIIcon } from '~/common/components/icons/vendors/LocalAIIcon';
 import { OpenAIIcon } from '~/common/components/icons/vendors/OpenAIIcon';
 import { TooltipOutlined } from '~/common/components/TooltipOutlined';
@@ -25,6 +26,7 @@ import { themeZIndexOverMobileDrawer } from '~/common/app.theme';
 
 import type { DSpeexEngineAny, DSpeexVendorType } from '../speex.types';
 import { SpeexConfigureEngineFull } from './SpeexConfigureEngineFull';
+import { SpeexSystemTest } from './SpeexSystemTest';
 import { speexAreCredentialsValid, useSpeexEngines, useSpeexGlobalEngine, useSpeexStore } from '../store-module-speex';
 
 
@@ -100,6 +102,7 @@ const _styles = {
 
 const ADDABLE_VENDORS: { vendorType: DSpeexVendorType; label: string; description: string, icon?: React.FunctionComponent<SvgIconProps> }[] = [
   { vendorType: 'elevenlabs', label: 'ElevenLabs', description: 'Premium voices', icon: ElevenLabsIcon },
+  { vendorType: 'inworld', label: 'Inworld', description: 'Expressive AI voices', icon: InworldIcon },
   { vendorType: 'localai', label: 'LocalAI', description: 'Self-hosted TTS', icon: LocalAIIcon },
   { vendorType: 'openai', label: 'OpenAI TTS', description: 'Reliable', icon: OpenAIIcon },
 ] as const;
@@ -110,6 +113,7 @@ export function SpeexConfigureEngines(_props: { isMobile: boolean }) {
   // state
   const [isEditing, setIsEditing] = React.useState(false);
   const [confirmDeleteEngine, setConfirmDeleteEngine] = React.useState<DSpeexEngineAny | null>(null);
+  const [showSystemTest, setShowSystemTest] = React.useState(false);
 
   // external state - module
   const engines = useSpeexEngines();
@@ -138,6 +142,7 @@ export function SpeexConfigureEngines(_props: { isMobile: boolean }) {
   const handleAddEngine = React.useCallback((vendorType: DSpeexVendorType) => {
     const newEngineId = useSpeexStore.getState().createEngine(vendorType);
     useSpeexStore.getState().setActiveEngineId(newEngineId);
+    setIsEditing(true);
   }, []);
 
   const handleDeleteClick = React.useCallback((event: React.MouseEvent) => {
@@ -168,11 +173,13 @@ export function SpeexConfigureEngines(_props: { isMobile: boolean }) {
     {/* "Voice Engine" + Add Service dropdown */}
     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
 
-      <FormLabelStart
-        // title='Voice Engine'
-        title='Active Engine'
-        description={activeEngine ? activeEngine.label : 'Select a voice provider'}
-      />
+      <Box onClick={event => event.shiftKey && setShowSystemTest(on => !on)}>
+        <FormLabelStart
+          // title='Voice Engine'
+          title='Active Engine'
+          description={activeEngine ? activeEngine.label : 'Select a voice provider'}
+        />
+      </Box>
 
 
       {/* -> Add Service */}
@@ -298,6 +305,9 @@ export function SpeexConfigureEngines(_props: { isMobile: boolean }) {
         positiveActionText='Remove'
       />
     )}
+
+    {/* TTS System Test (inline, dev mode only) */}
+    {showSystemTest && <SpeexSystemTest />}
 
   </>;
 }

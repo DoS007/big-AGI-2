@@ -8,7 +8,6 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 
 import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/llms.service.types';
 import { CloseablePopup } from '~/common/components/CloseablePopup';
-import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
 import { GoodTooltip } from '~/common/components/GoodTooltip';
 import { PhGift } from '~/common/components/icons/phosphor/PhGift';
 import { Release } from '~/common/app.release';
@@ -16,10 +15,9 @@ import { TooltipOutlined } from '~/common/components/TooltipOutlined';
 import { llmsStoreActions } from '~/common/stores/llms/store-llms';
 import { themeZIndexOverMobileDrawer } from '~/common/app.theme';
 import { useIsMobile } from '~/common/components/useMatchMedia';
-import { useOverlayComponents } from '~/common/layout/overlays/useOverlayComponents';
 
 import type { IModelVendor } from '../vendors/IModelVendor';
-import { LLMVendorIcon } from '../components/LLMVendorIcon';
+import { LLMVendorIconSprite } from '../components/LLMVendorIconSprite';
 import { findAllModelVendors, findModelVendor } from '../vendors/vendors.registry';
 import { vendorHasBackendCap } from '../vendors/vendor.helpers';
 // import { MODELS_WIZARD_OPTION_ID } from '~/modules/llms/models-modal/ModelsModal';
@@ -102,7 +100,7 @@ const _styles = {
 }*/
 
 function vendorIconWithMark(vendor: IModelVendor | null, greenMark: boolean) {
-  const icon = !vendor?.id ? null : <LLMVendorIcon vendorId={vendor.id} />;
+  const icon = !vendor?.id ? null : <LLMVendorIconSprite vendorId={vendor.id} />;
   return (greenMark && icon)
     ? <Badge size='sm' badgeContent='' slotProps={{ badge: { sx: { backgroundColor: 'lime', boxShadow: 'none', border: '1px solid gray', p: 0 } } }}>{icon}</Badge>
     : icon;
@@ -230,11 +228,11 @@ export function ModelsServiceSelector(props: {
   modelsServices: DModelsService[],
   selectedServiceId: DModelsServiceId | null,
   setSelectedServiceId: (serviceId: DModelsServiceId | null) => void,
+  onDeleteService: (serviceId: DModelsServiceId, skipConfirmation: boolean) => void,
   onSwitchToWizard: () => void,
 }) {
 
   // state
-  const { showPromisedOverlay } = useOverlayComponents();
   const [vendorsMenuAnchor, setVendorsMenuAnchor] = React.useState<HTMLElement | null>(null);
 
   // external state
@@ -276,29 +274,6 @@ export function ModelsServiceSelector(props: {
   }, [setSelectedServiceId, modelsServices]);
 
   const enableDeleteButton = !!props.selectedServiceId && (ENABLE_DELETE_LAST || modelsServices.length > 1);
-
-  const handleDeleteService = React.useCallback(async (serviceId: DModelsServiceId, skipConfirmation: boolean) => {
-    // [shift] to delete without confirmation
-    if (skipConfirmation) {
-      // select the next service
-      setSelectedServiceId(modelsServices.find(s => s.id !== serviceId)?.id ?? null);
-      // remove the service
-      llmsStoreActions().removeService(serviceId);
-      return;
-    }
-    showPromisedOverlay('llms-service-remove', {}, ({ onResolve, onUserReject }) =>
-      <ConfirmationModal
-        open onClose={onUserReject} onPositive={() => onResolve(true)}
-        confirmationText='Are you sure you want to remove these models? The configuration data will be lost and you may have to enter it again.'
-        positiveActionText='Remove'
-      />,
-    ).then(() => {
-      // select the next service
-      setSelectedServiceId(modelsServices.find(s => s.id !== serviceId)?.id ?? null);
-      // remove the service
-      llmsStoreActions().removeService(serviceId);
-    }).catch(() => null /* ignore closure */);
-  }, [modelsServices, setSelectedServiceId, showPromisedOverlay]);
 
 
   // memo popup 'vendor' items
@@ -419,7 +394,7 @@ export function ModelsServiceSelector(props: {
         <TooltipOutlined title={`Remove ${selectedServiceItem?.service.label || 'Service'}`}>
           <IconButton
             variant='plain' color='neutral' disabled={!enableDeleteButton} sx={{ ml: 'auto' }}
-            onClick={(event) => props.selectedServiceId && handleDeleteService(props.selectedServiceId, event.shiftKey)}
+            onClick={(event) => props.selectedServiceId && props.onDeleteService(props.selectedServiceId, event.shiftKey)}
           >
             <DeleteOutlineIcon />
           </IconButton>

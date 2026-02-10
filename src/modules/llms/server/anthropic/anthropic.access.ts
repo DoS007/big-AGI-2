@@ -10,12 +10,34 @@ import { TRPCError } from '@trpc/server';
 
 import { env } from '~/server/env.server';
 
-import { llmsFixupHost } from '../openai/openai.access';
+import { llmsFixupHost, llmsHostnameMatches } from '../openai/openai.access';
 
 
 // configuration
 const DEFAULT_ANTHROPIC_HOST = 'api.anthropic.com';
 const DEFAULT_HELICONE_ANTHROPIC_HOST = 'anthropic.hconeai.com';
+
+/**
+ * Centralized Anthropic API paths.
+ */
+export const ANTHROPIC_API_PATHS = {
+  // Messages
+  messages: '/v1/messages', // POST: create a message (chat completion)
+  // /v1/messages/count_tokens, // POST: count tokens in a message
+
+  // Models
+  models: '/v1/models', // GET: List Models
+
+  // Skills
+  skills: '/v1/skills', // POST: create, GET: list
+  // /v1/skills/{skill_id} // GET: get skill, DELETE: delete skill
+
+  // Files
+  files: '/v1/files', // POST: upload file, GET: list files,
+  // /v1/files/{file_id} // GET: get file metadata, DELETE: delete file
+  // /v1/files/{file_id}/content // GET: download file
+} as const;
+
 
 const DEFAULT_ANTHROPIC_HEADERS = {
   // Latest version hasn't changed (as of Feb 2025)
@@ -30,29 +52,15 @@ const DEFAULT_ANTHROPIC_HEADERS = {
 
 const DEFAULT_ANTHROPIC_BETA_FEATURES: string[] = [
 
-  // NOTE: undocumented: I wonder what this is for
-  // 'claude-code-20250219',
+  // Known SDK beta headers (for reference, not all used):
+  //   prompt-caching-2024-07-31        -- GA: no longer needed
+  //   pdfs-2024-09-25                  -- GA: no longer needed
+  //   token-efficient-tools-2025-02-19 -- not used; disabled for now as side-effects are untested
+  //   extended-cache-ttl-2025-04-11    -- for 1h cache TTL; we support ttl:'1h' in wiretypes already
+  //   interleaved-thinking-2025-05-14  -- for Claude 4/4.5 interleaved thinking (auto on Opus 4.6 adaptive)
+  //   context-management-2025-06-27    -- for context_management edits (e.g. clear_tool_uses)
+  //   model-context-window-exceeded-2025-08-26 -- Sonnet 4.5+ have this by default
 
-  // NOTE: disabled for now, as we don't have tested side-effects for this feature yet
-  // 'token-efficient-tools-2025-02-19', // https://docs.anthropic.com/en/docs/build-with-claude/tool-use/token-efficient-tool-use
-
-  /**
-   * to use the prompt caching feature; adds to any API invocation:
-   *  - message_start.message.usage.cache_creation_input_tokens: number
-   *  - message_start.message.usage.cache_read_input_tokens: number
-   */
-  'prompt-caching-2024-07-31',
-
-  /**
-   * Enables model_context_window_exceeded stop reason for models earlier than Sonnet 4.5
-   * (Sonnet 4.5+ have this by default). This allows requesting max tokens without calculating
-   * input size, and the API will return as much as possible within the context window.
-   * https://docs.claude.com/en/api/handling-stop-reasons#model-context-window-exceeded
-   */
-  // 'model-context-window-exceeded-2025-08-26',
-
-  // now default
-  // 'messages-2023-12-15'
 ] as const;
 
 const PER_MODEL_BETA_FEATURES: { [modelId: string]: string[] } = {
@@ -90,6 +98,7 @@ export const anthropicAccessSchema = z.object({
   anthropicKey: z.string().trim(),
   anthropicHost: z.string().trim().nullable(),
   heliconeKey: z.string().trim().nullable(),
+  anthropicInferenceGeo: z.string().trim().nullable().optional(), // [Anthropic, 2026-02-01] e.g. "us" for US-only inference, optional: for server backward-comp, and can be removed
 });
 
 export function anthropicAccess(access: AnthropicAccessSchema, apiPath: string, options?: AnthropicHeaderOptions): { headers: HeadersInit, url: string } {
@@ -107,7 +116,7 @@ export function anthropicAccess(access: AnthropicAccessSchema, apiPath: string, 
   // https://docs.helicone.ai/getting-started/integration-method/anthropic
   const heliKey = access.heliconeKey || env.HELICONE_API_KEY || false;
   if (heliKey) {
-    if (!anthropicHost.includes(DEFAULT_ANTHROPIC_HOST) && !anthropicHost.includes(DEFAULT_HELICONE_ANTHROPIC_HOST))
+    if (!llmsHostnameMatches(anthropicHost, DEFAULT_ANTHROPIC_HOST) && !llmsHostnameMatches(anthropicHost, DEFAULT_HELICONE_ANTHROPIC_HOST))
       throw new TRPCError({ code: 'BAD_REQUEST', message: 'The Helicone Anthropic Key has been provided, but the host is set to custom. Please fix it in the Models Setup page.' });
     anthropicHost = `https://${DEFAULT_HELICONE_ANTHROPIC_HOST}`;
   }

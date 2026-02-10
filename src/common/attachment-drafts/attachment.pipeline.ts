@@ -11,12 +11,14 @@ import { convert_Base64DataURL_To_Base64WithMimeType, convert_Base64WithMimeType
 import { getDomainModelConfiguration } from '~/common/stores/llms/hooks/useModelDomain';
 import { htmlTableToMarkdown } from '~/common/util/htmlTableToMarkdown';
 import { humanReadableHyphenated } from '~/common/util/textUtils';
+import { ocrImageWithProgress, ocrPdfPagesWithProgress } from '~/common/util/ocrUtils';
 import { pdfToImageDataURLs, pdfToText } from '~/common/util/pdfUtils';
 
 import { createDMessageDataInlineText, createDocAttachmentFragment, DMessageAttachmentFragment, DMessageDataInline, DMessageDocPart, DVMimeType, isContentOrAttachmentFragment, isDocPart, specialContentPartToDocAttachmentFragment } from '~/common/stores/chat/chat.fragments';
 
 import type { AttachmentCreationOptions, AttachmentDraft, AttachmentDraftConverter, AttachmentDraftId, AttachmentDraftInput, AttachmentDraftSource, AttachmentDraftSourceOriginFile, DraftEgoFragmentsInputData, DraftWebInputData, DraftYouTubeInputData } from './attachment.types';
 import type { AttachmentsDraftsStore } from './store-attachment-drafts_slice';
+import { attachmentCloudConverterPrefix, attachmentCloudFetchFile, attachmentCloudGoogleWorkspaceExportMIME, CloudFetchError } from './attachment.cloud';
 import { attachmentGetLiveFileId, attachmentSourceSupportsLiveFile } from './attachment.livefile';
 import { guessInputContentTypeFromMime, heuristicMimeTypeFixup, mimeTypeIsDocX, mimeTypeIsPDF, mimeTypeIsPlainText, mimeTypeIsSupportedImage, reverseLookupMimeType } from './attachment.mimetypes';
 import { imageDataToImageAttachmentFragmentViaDBlob } from './attachment.dblobs';
@@ -26,6 +28,11 @@ const PDF_IMAGE_PAGE_SCALE = 1.5;
 const PDF_IMAGE_QUALITY = 0.5;
 const ENABLE_TEXT_AND_IMAGES = false; // [PROD] ?
 const DOCPART_DEFAULT_VERSION = 1;
+
+// PDF text extraction quality thresholds
+const IMAGE_LOW_TEXT_THRESHOLD = 80; // chars per image - below this, consider the image as low-text (photo-like) rather than document-like
+const PDF_LOW_TEXT_THRESHOLD = 160; // chars per page - below this, consider the PDF as scanned/image-based
+const PDF_FALLBACK_MAX_IMAGES = 32; // max pages to convert to images when auto-falling back (to respect LLM limits)
 
 
 // internal mimes, only used to route data within us (source -> input -> converters)
@@ -63,7 +70,8 @@ export function attachmentCreate(source: AttachmentDraftSource): AttachmentDraft
 export async function attachmentLoadInputAsync(source: Readonly<AttachmentDraftSource>, edit: (changes: Partial<Omit<AttachmentDraft, 'outputFragments'>>) => void) {
   edit({ inputLoading: true });
 
-  switch (source.media) {
+  const sourceMedia = source.media;
+  switch (sourceMedia) {
 
     // Download URL (page, file, ..) and attach as input
     case 'url':
@@ -222,6 +230,34 @@ export async function attachmentLoadInputAsync(source: Readonly<AttachmentDraftS
       }
       break;
 
+    case 'cloud':
+      const cloudLabel = source.fileName || 'Cloud File';
+      const cloudRef = source.webViewLink || `${source.provider}:${source.fileId}`;
+      edit({ label: cloudLabel, ref: cloudRef });
+
+      try {
+        // fetch / export to the destination mime
+        const exportMime = attachmentCloudGoogleWorkspaceExportMIME(source.mimeType);
+        const cloudBlob = await attachmentCloudFetchFile(source.provider, source.fileId, source.accessToken, exportMime);
+
+        // use export mime if we exported, otherwise use source or detected mime
+        const resultMime = exportMime || source.mimeType /* provided outside  */ || cloudBlob.type /* connection */ || 'application/octet-stream';
+
+        edit({
+          input: {
+            mimeType: resultMime,
+            data: cloudBlob,
+            dataSize: cloudBlob.size,
+          },
+        });
+      } catch (error: unknown) {
+        const errorMessage = error instanceof CloudFetchError
+          ? `${error.code}: ${error.details || error.message}`
+          : `Failed to download: ${error instanceof Error ? error.message : String(error)}`;
+        edit({ inputError: errorMessage });
+      }
+      break;
+
     case 'ego':
       edit({
         label: source.label,
@@ -231,6 +267,10 @@ export async function attachmentLoadInputAsync(source: Readonly<AttachmentDraftS
           data: source.egoFragmentsInputData,
         },
       });
+      break;
+
+    default:
+      const _exhaustiveCheck: never = sourceMedia;
       break;
   }
 
@@ -252,6 +292,7 @@ export function attachmentDefineConverters(source: AttachmentDraftSource, input:
   const converters: AttachmentDraftConverter[] = [];
 
   const autoAddImages = ENABLE_TEXT_AND_IMAGES && !!options?.hintAddImages;
+  const fromCloud = source.media === 'cloud';
 
   switch (true) {
 
@@ -259,6 +300,7 @@ export function attachmentDefineConverters(source: AttachmentDraftSource, input:
     case mimeTypeIsPlainText(input.mimeType):
       // handle a secondary layer of HTML 'text' origins: drop, paste, and clipboard-read
       const textOriginHtml = source.media === 'text' && input.altMimeType === 'text/html' && !!input.altData;
+      const textOriginClipboard = source.media === 'text' && ['clipboard-read', 'paste'].includes(source.method);
       const isHtmlTable = !!input.altData?.startsWith('<table');
 
       // p1: Tables
@@ -266,12 +308,21 @@ export function attachmentDefineConverters(source: AttachmentDraftSource, input:
         converters.push({ id: 'rich-text-table', name: 'Markdown Table' });
 
       // p2: Text
-      converters.push({ id: 'text', name: attachmentSourceSupportsLiveFile(source) ? 'Text (Live)' : 'Text' });
+      if (fromCloud && input.mimeType === 'text/markdown') {
+        converters.push({ id: 'text', name: 'Markdown' });
+      } else {
+        converters.push({ id: 'text', name: attachmentSourceSupportsLiveFile(source) ? 'Text (Live)' : 'Text' });
+        if (!textOriginHtml && textOriginClipboard) {
+          converters.push({ id: 'text-markdown', name: 'Text -> Markdown' });
+          converters.push({ id: 'text-cleaner', name: 'Text -> Clean HTML' });
+        }
+      }
 
-      // p3: Html
+      // p3: Html -> Markdown, and Html
       if (textOriginHtml) {
-        converters.push({ id: 'rich-text-cleaner', name: 'Cleaner HTML' });
         converters.push({ id: 'rich-text', name: 'HTML · Heavy' });
+        converters.push({ id: 'rich-text-markdown', name: 'HTML -> Markdown' });
+        converters.push({ id: 'rich-text-cleaner', name: 'HTML -> Clean HTML' });
       }
       break;
 
@@ -284,16 +335,18 @@ export function attachmentDefineConverters(source: AttachmentDraftSource, input:
       converters.push({ id: 'image-original', name: 'Image (original quality)', disabled: !inputImageMimeSupported });
       if (!inputImageMimeSupported)
         converters.push({ id: 'image-to-default', name: `As Image (${PLATFORM_IMAGE_MIMETYPE})` });
-      converters.push({ id: 'image-caption', name: 'Caption (Text)', disabled: visionModelMissing });
+      converters.push({ id: 'image-caption', name: 'AI Caption (Text)', disabled: visionModelMissing });
       converters.push({ id: 'unhandled', name: 'No Image' });
       converters.push({ id: 'image-ocr', name: 'Add Text (OCR)', isCheckbox: true });
       break;
 
     // PDF
     case mimeTypeIsPDF(input.mimeType):
-      converters.push({ id: 'pdf-text', name: 'PDF To Text', isActive: !autoAddImages || undefined });
-      converters.push({ id: 'pdf-images', name: 'PDF To Images' });
-      converters.push({ id: 'pdf-text-and-images', name: 'PDF Text & Images (best)', isActive: autoAddImages });
+      converters.push({ id: 'pdf-auto', name: 'Auto', isActive: !autoAddImages });
+      converters.push({ id: 'pdf-text', name: 'PDF Text' });
+      converters.push({ id: 'pdf-images-ocr', name: 'PDF -> OCR (for scans)' });
+      converters.push({ id: 'pdf-images', name: 'PDF -> Images' });
+      converters.push({ id: 'pdf-text-and-images', name: 'PDF -> Text + Images', isActive: autoAddImages });
       break;
 
     // DOCX
@@ -338,6 +391,12 @@ export function attachmentDefineConverters(source: AttachmentDraftSource, input:
       break;
   }
 
+  // cosmetic for cloud: prepend cloud label prefixes
+  const cloudLabelPrefix = source.media === 'cloud' ? attachmentCloudConverterPrefix(source.mimeType) : '';
+  if (cloudLabelPrefix)
+    for (const converter of converters)
+      converter.name = cloudLabelPrefix + converter.name;
+
   edit({ converters });
 }
 
@@ -381,7 +440,8 @@ function _prepareDocData(source: AttachmentDraftSource, input: Readonly<Attachme
         srcFileSize: source.fileWithHandle.size || input.dataSize,
       };
 
-      switch (source.origin) {
+      const sourceOrigin = source.origin;
+      switch (sourceOrigin) {
         case 'camera':
           fileTitle = source.refPath || _lowCollisionRefString('Camera Photo', 6);
           break;
@@ -399,6 +459,10 @@ function _prepareDocData(source: AttachmentDraftSource, input: Readonly<Attachme
         case 'drop':
           fileTitle = source.refPath || _lowCollisionRefString('Dropped File', 6);
           break;
+        default:
+          const _exhaustiveCheck: never = sourceOrigin;
+          fileTitle = 'File';
+          break;
       }
       return {
         title: fileTitle,
@@ -414,6 +478,25 @@ function _prepareDocData(source: AttachmentDraftSource, input: Readonly<Attachme
         title: converterName || 'Text',
         caption: source.method === 'drop' ? 'Dropped' : 'Pasted',
         refString: humanReadableHyphenated(textRef),
+      };
+
+    // Cloud files
+    case 'cloud':
+      const cloudFileName = source.fileName || 'Cloud File';
+      const cloudProviderLabel = source.provider === 'gdrive' ? 'Google Drive'
+        : source.provider === 'onedrive' ? 'OneDrive'
+          : source.provider === 'dropbox' ? 'Dropbox'
+            : 'Cloud';
+      const cloudRef = `${source.provider}-${source.fileName || _lowCollisionRefString('file', 6)}`;
+      return {
+        title: cloudFileName,
+        caption: `From ${cloudProviderLabel}`,
+        refString: humanReadableHyphenated(cloudRef),
+        // TODO: expand this to allow future redownload - or other location but for the same purpose
+        docMeta: {
+          srcFileName: source.fileName,
+          srcFileSize: source.fileSize || input.dataSize,
+        },
       };
 
     // The application attaching pieces of itself
@@ -479,6 +562,8 @@ export async function attachmentPerformConversion(
   edit(attachment.id, {
     outputsConverting: true,
     outputsConversionProgress: null,
+    outputWarnings: undefined,
+    outputsHeuristic: undefined,
   });
 
   // apply converter to the input
@@ -491,33 +576,67 @@ export async function attachmentPerformConversion(
 
     switch (converter.id) {
 
-      // text as-is
+      // text
       case 'text':
+      case 'text-cleaner':
+      case 'text-markdown':
         const possibleLiveFileId = await attachmentGetLiveFileId(source);
-        const textContent = await _inputDataToString(input.data, 'text');
-        const textualInlineData = createDMessageDataInlineText(textContent, input.mimeType);
+        let textContent = await _inputDataToString(input.data, 'text');
+        let textContentMime = input.mimeType || 'text/plain';
+
+        switch (converter.id) {
+          case 'text-cleaner':
+            textContent = _cleanPossibleHtmlText(textContent);
+            break;
+          case 'text-markdown':
+            try {
+              const { convertHtmlToMarkdown } = await import('./file-converters/HtmlToMarkdown');
+              textContent = convertHtmlToMarkdown(textContent);
+              textContentMime = 'text/markdown';
+            } catch (error) {
+              console.log('[DEV] Error converting Text (HTML) to Markdown:', error);
+            }
+            break;
+        }
+
+        const textualInlineData = createDMessageDataInlineText(textContent, textContentMime);
         newFragments.push(createDocAttachmentFragment(title, caption, _guessDocVDT(input.mimeType), textualInlineData, refString, DOCPART_DEFAULT_VERSION, docMeta, possibleLiveFileId));
         break;
 
-      // html as-is
+      // html
       case 'rich-text':
+      case 'rich-text-cleaner':
+      case 'rich-text-markdown':
+        let richText: string;
+        if (input.altData)
+          richText = input.altData;
+        else if (input.mimeType === 'text/html')
+          richText = await _inputDataToString(input.data, 'rich-text');
+        else
+          richText = '';
+        let richTextMimeType = 'text/html';
+
+        // html -> cleaner/html or markdown
+        switch (converter.id) {
+          case 'rich-text-cleaner':
+            richText = _cleanPossibleHtmlText(richText);
+            richTextMimeType = 'text/html';
+            break;
+          case 'rich-text-markdown':
+            try {
+              const { convertHtmlToMarkdown } = await import('./file-converters/HtmlToMarkdown');
+              richText = convertHtmlToMarkdown(richText);
+              richTextMimeType = 'text/markdown';
+            } catch (error) {
+              console.log('[DEV] Error converting HTML to Markdown:', error);
+            }
+            break;
+        }
+
         // NOTE: before we had the following: createTextAttachmentFragment(ref || '\n<!DOCTYPE html>', input.altData!), which
         //       was used to wrap the HTML in a code block to facilitate AutoRenderBlocks's parser. Historic note, for future debugging.
-        const richTextData = createDMessageDataInlineText(input.altData || '', input.altMimeType);
+        const richTextData = createDMessageDataInlineText(richText, richTextMimeType);
         newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.VndAgiCode, richTextData, refString, DOCPART_DEFAULT_VERSION, docMeta));
-        break;
-
-      // html cleaned
-      case 'rich-text-cleaner':
-        const cleanerHtml = (input.altData || '')
-          // remove class and style attributes
-          .replace(/<[^>]+>/g, (tag) =>
-            tag.replace(/ class="[^"]*"/g, '').replace(/ style="[^"]*"/g, ''),
-          )
-          // remove svg elements
-          .replace(/<svg[^>]*>.*?<\/svg>/g, '');
-        const cleanedHtmlData = createDMessageDataInlineText(cleanerHtml, 'text/html');
-        newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.VndAgiCode, cleanedHtmlData, refString, DOCPART_DEFAULT_VERSION, docMeta));
         break;
 
       // html to markdown table
@@ -525,7 +644,13 @@ export async function attachmentPerformConversion(
         let tableData: DMessageDataInline;
         try {
           const mdTable = htmlTableToMarkdown(input.altData!, false);
-          tableData = createDMessageDataInlineText(mdTable, 'text/markdown');
+          // fall back to source text if the table conversion produced empty/tiny content
+          if (mdTable.replace(/[\s|:\-]/g, '').length < 2) {
+            const fallbackText = await _inputDataToString(input.data, 'rich-text-table');
+            tableData = createDMessageDataInlineText(fallbackText || mdTable, input.mimeType);
+          } else {
+            tableData = createDMessageDataInlineText(mdTable, 'text/markdown');
+          }
         } catch (error) {
           // fallback to text/plain
           const fallbackText = await _inputDataToString(input.data, 'rich-text-table');
@@ -571,23 +696,14 @@ export async function attachmentPerformConversion(
       case 'image-ocr':
         if (!_expectBlob(input.data, 'Image OCR converter')) break;
         try {
-          let lastProgress = -1;
-          const { recognize } = await import('tesseract.js');
-          const result = await recognize(input.data, undefined, {
-            errorHandler: e => console.error(e),
-            logger: (message) => {
-              if (message.status === 'recognizing text') {
-                if (message.progress > lastProgress + 0.01) {
-                  lastProgress = message.progress;
-                  edit(attachment.id, { outputsConversionProgress: lastProgress });
-                }
-              }
-            },
-          });
-          const imageText = result.data.text;
+          // Image -> OCR -> Inline text doc
+          const imageText = await ocrImageWithProgress(input.data, (progress) => edit(attachment.id, { outputsConversionProgress: progress }));
           newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, createDMessageDataInlineText(imageText, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'image' }));
+          // warn if very little text was extracted (likely a photo/diagram rather than text)
+          if (imageText.trim().length < IMAGE_LOW_TEXT_THRESHOLD)
+            edit(attachment.id, { outputWarnings: ['Very little text extracted - this image may not contain readable text.'] });
         } catch (error) {
-          console.error(error);
+          console.error('[Image OCR Error]', error);
         }
         break;
 
@@ -616,26 +732,111 @@ export async function attachmentPerformConversion(
         } catch (error: any) {
           console.log('[DEV] Failed to caption image:', error);
           const errorText = `[Captioning failed: ${error?.message || String(error)}]`;
+          edit(attachment.id, { outputWarnings: [errorText] });
           newFragments.push(createDocAttachmentFragment(title, caption + ' (Error)', DVMimeType.TextPlain, createDMessageDataInlineText(errorText, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'image-caption' }));
         }
         break;
 
 
-      // pdf to text
-      case 'pdf-text':
-        if (!_expectBlob(input.data, 'PDF text converter')) break;
-        // Convert Blob to ArrayBuffer for PDF.js
-        const pdfText = await pdfToText(await input.data.arrayBuffer(), (progress: number) => {
-          edit(attachment.id, { outputsConversionProgress: progress });
-        });
-        if (pdfText.trim().length < 2) {
-          // Warn the user if no text is extracted
-          // edit(attachment.id, { inputError: 'No text found in the PDF file.' });
-        } else
-          newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, createDMessageDataInlineText(pdfText, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'pdf' }));
+      // pdf-auto: intelligent conversion with fallback chain (text → OCR → images)
+      case 'pdf-auto':
+        if (!_expectBlob(input.data, 'PDF auto converter')) break;
+        try {
+          // Phase 1: Try text extraction (0-20% progress)
+          const pdfArrayBuffer = await input.data.arrayBuffer();
+
+          // [pdf-text] Extract text with quality metadata
+          const pdfTextResult = await pdfToText(pdfArrayBuffer, (progress: number) => {
+            // Reserve 0-20% for text extraction attempt, 20-100% for potential image fallback
+            edit(attachment.id, { outputsConversionProgress: progress * 0.2 });
+          });
+
+          // Check text density to detect scanned/image-based PDFs
+          if (pdfTextResult.avgCharsPerPage >= PDF_LOW_TEXT_THRESHOLD) {
+            // Good text extraction - use it
+            newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, createDMessageDataInlineText(pdfTextResult.text, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'pdf' }));
+            edit(attachment.id, {
+              outputsHeuristic: { isAuto: true, actualConverterId: 'pdf-text', explain: `${pdfTextResult.avgCharsPerPage.toFixed(0)} chars/page` },
+            });
+          } else {
+            // Low text density - try OCR
+            // console.log(`[PDF Auto] Low text density (${pdfTextResult.avgCharsPerPage.toFixed(0)} chars/page), trying OCR...`);
+
+            // [pdf-images] Phase 2: Render pages to images (20-40% progress)
+            const pdfArrayBufferForImages = await input.data.arrayBuffer();
+            const imageDataURLs = await pdfToImageDataURLs(pdfArrayBufferForImages, PLATFORM_IMAGE_MIMETYPE, PDF_IMAGE_QUALITY, PDF_IMAGE_PAGE_SCALE, (progress) => {
+              edit(attachment.id, { outputsConversionProgress: 0.2 + progress * 0.2 });
+            });
+
+            // Limit pages for OCR (performance)
+            const pagesToProcess = Math.min(imageDataURLs.length, PDF_FALLBACK_MAX_IMAGES);
+            const imagesToOcr = imageDataURLs.slice(0, pagesToProcess);
+
+            // Phase 3: Try OCR on rendered pages (40-90% progress)
+            try {
+              // [pdf-images-ocr] OCR the images
+              const ocrResult = await ocrPdfPagesWithProgress(imagesToOcr, (progress) => {
+                edit(attachment.id, { outputsConversionProgress: 0.4 + progress * 0.5 });
+              });
+
+              if (ocrResult.avgCharsPerPage >= PDF_LOW_TEXT_THRESHOLD) {
+                // OCR yielded good text - use it
+                newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, createDMessageDataInlineText(ocrResult.text, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'pdf' }));
+                const truncNote = pdfTextResult.pageCount > pagesToProcess ? ` (${pagesToProcess}/${pdfTextResult.pageCount} pages)` : '';
+                edit(attachment.id, {
+                  outputsHeuristic: { isAuto: true, actualConverterId: 'pdf-images-ocr', explain: /*OCR extracted */`${ocrResult.avgCharsPerPage.toFixed(0)} chars/page${truncNote}` },
+                });
+              } else {
+                // OCR also yielded poor results - fall back to images
+                // console.log(`[PDF Auto] OCR also sparse (${ocrResult.avgCharsPerPage.toFixed(0)} chars/page), falling back to images`);
+                for (let i = 0; i < pagesToProcess; i++) {
+                  const pdfPageImage = imageDataURLs[i];
+                  const pdfPageImageF = await imageDataToImageAttachmentFragmentViaDBlob(pdfPageImage.mimeType, pdfPageImage.base64Data, source, `${title} (pg. ${i + 1})`, caption, false, false);
+                  if (pdfPageImageF)
+                    newFragments.push(pdfPageImageF);
+                }
+                const truncNote = pdfTextResult.pageCount > pagesToProcess ? ` (${pagesToProcess}/${pdfTextResult.pageCount} pages)` : '';
+                edit(attachment.id, {
+                  outputsHeuristic: { isAuto: true, actualConverterId: 'pdf-images', explain: `not a text page${truncNote}` },
+                });
+              }
+            } catch (ocrError) {
+              // OCR failed - fall back to images
+              console.warn('[PDF Auto] OCR failed, falling back to images:', ocrError);
+              for (let i = 0; i < pagesToProcess; i++) {
+                const pdfPageImage = imageDataURLs[i];
+                const pdfPageImageF = await imageDataToImageAttachmentFragmentViaDBlob(pdfPageImage.mimeType, pdfPageImage.base64Data, source, `${title} (pg. ${i + 1})`, caption, false, false);
+                if (pdfPageImageF)
+                  newFragments.push(pdfPageImageF);
+              }
+              edit(attachment.id, {
+                outputsHeuristic: { isAuto: true, actualConverterId: 'pdf-images', explain: 'OCR failed, attached as images' },
+              });
+            }
+          }
+        } catch (error) {
+          console.error('Error in PDF auto conversion:', error);
+        }
         break;
 
-      // pdf to images
+      // pdf-text: strict text extraction, no fallback (honors user choice)
+      case 'pdf-text':
+        if (!_expectBlob(input.data, 'PDF text converter')) break;
+        try {
+          const pdfTextResult = await pdfToText(await input.data.arrayBuffer(), progress => edit(attachment.id, { outputsConversionProgress: progress }));
+          // Always output text, even if sparse (user explicitly chose this)
+          newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, createDMessageDataInlineText(pdfTextResult.text, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'pdf' }));
+          edit(attachment.id, {
+            // warn if very little text was extracted (likely a scanned PDF)
+            outputWarnings: pdfTextResult.avgCharsPerPage >= 20 ? undefined : ['Very little text extracted - this PDF may be scanned. Try "Auto" or "OCR (for scans)" mode.'],
+            outputsHeuristic: { isAuto: false, actualConverterId: 'pdf-text', explain: `${pdfTextResult.avgCharsPerPage.toFixed(0)} chars/page` },
+          });
+        } catch (error) {
+          console.error('Error in PDF text extraction:', error);
+        }
+        break;
+
+      // pdf-images: render all pages as images (honors user choice)
       case 'pdf-images':
         if (!_expectBlob(input.data, 'PDF images converter')) break;
         // Convert Blob to ArrayBuffer for PDF.js
@@ -648,8 +849,36 @@ export async function attachmentPerformConversion(
             if (pdfPageImageF)
               newFragments.push(pdfPageImageF);
           }
+          edit(attachment.id, {
+            outputsHeuristic: { isAuto: false, actualConverterId: 'pdf-images', explain: `${imageDataURLs.length} pages` },
+          });
         } catch (error) {
           console.error('Error converting PDF to images:', error);
+        }
+        break;
+
+      // pdf-images-ocr: force OCR on all pages (for scanned documents)
+      case 'pdf-images-ocr':
+        if (!_expectBlob(input.data, 'PDF OCR converter')) break;
+        try {
+          // Render pages to images (0-40% progress)
+          const imageDataURLs = await pdfToImageDataURLs(await input.data.arrayBuffer(), PLATFORM_IMAGE_MIMETYPE, PDF_IMAGE_QUALITY, PDF_IMAGE_PAGE_SCALE, (progress) => {
+            edit(attachment.id, { outputsConversionProgress: progress * 0.4 });
+          });
+
+          // OCR all pages (40-100% progress)
+          const ocrResult = await ocrPdfPagesWithProgress(imageDataURLs, (progress) => {
+            edit(attachment.id, { outputsConversionProgress: 0.4 + progress * 0.6 });
+          });
+
+          newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, createDMessageDataInlineText(ocrResult.text, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'pdf' }));
+          edit(attachment.id, {
+            // warn if very little text was extracted (likely a scanned PDF)
+            outputWarnings: ocrResult.avgCharsPerPage >= 20 ? undefined : ['Very little text extracted via OCR - this PDF may contain mostly images/diagrams.'],
+            outputsHeuristic: { isAuto: false, actualConverterId: 'pdf-images-ocr', explain: `${ocrResult.avgCharsPerPage.toFixed(0)} chars/page from ${ocrResult.pageCount} pages` },
+          });
+        } catch (error) {
+          console.error('Error in PDF OCR:', error);
         }
         break;
 
@@ -674,18 +903,21 @@ export async function attachmentPerformConversion(
           }
 
           // duplicated from 'pdf-text'
-          const pdfText = await pdfToText(pdfArrayBufferForText, (progress: number) => {
+          const pdfTextResult = await pdfToText(pdfArrayBufferForText, (progress: number) => {
             edit(attachment.id, { outputsConversionProgress: 0.5 + progress / 2 }); // Update progress (50% to 100%)
           });
-          if (pdfText.trim().length < 2) {
-            // Do not warn the user, as hopefully the images are useful
-          } else {
-            const textFragment = createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, createDMessageDataInlineText(pdfText, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'pdf' });
+          if (pdfTextResult.text.trim().length >= 2) {
+            // Add text fragment if there's meaningful text
+            const textFragment = createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, createDMessageDataInlineText(pdfTextResult.text, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'pdf' });
             newFragments.push(textFragment);
           }
+          // Note: if text is sparse, images are still attached (user explicitly chose text+images)
 
           // Add the text fragment first, then the image fragments
           newFragments.push(...imageFragments);
+          edit(attachment.id, {
+            outputsHeuristic: { isAuto: false, actualConverterId: 'pdf-text-and-images', explain: `${pdfTextResult.avgCharsPerPage.toFixed(0)} chars/page + ${imageFragments.length} images` },
+          });
         } catch (error) {
           console.error('Error converting PDF to text and images:', error);
         }
@@ -802,14 +1034,28 @@ export async function attachmentPerformConversion(
       case 'unhandled':
         // force the user to explicitly select 'as text' if they want to proceed
         break;
+
+
+      default:
+        const _exhaustiveCheck: never = converter.id;
+        console.warn('[DEV] Unhandled converter type:', _exhaustiveCheck);
+        break;
     }
   }
+
+  // warn if any doc output fragment has empty text content (something went wrong in conversion)
+  // TODO: future: check if the text is a conversion error... can happen with drag & drop
+  const emptyOutputWarnings: string[] = [];
+  for (const fragment of newFragments)
+    if (isDocPart(fragment.part) && fragment.part.data.idt === 'text' && !fragment.part.data.text.trim())
+      emptyOutputWarnings.push('Converted output is empty - the source content may be missing or invalid.');
 
   // update
   replaceOutputFragments(attachment.id, newFragments);
   edit(attachment.id, {
     outputsConverting: false,
     outputsConversionProgress: null,
+    ...(emptyOutputWarnings.length && { outputWarnings: emptyOutputWarnings }),
   });
 }
 
@@ -842,6 +1088,19 @@ async function _inputDataToString(data: AttachmentDraftInput['data'], debugLocat
   }
   console.warn(`[DEV] Expected string or Blob for input data at ${debugLocation}, got:`, typeof data);
   return '';
+}
+
+/**
+ * Simple Client-side cleaning of possible HTML
+ */
+function _cleanPossibleHtmlText(inputStr: string): string {
+  return inputStr
+    // remove class and style attributes
+    .replace(/<[^>]+>/g, (tag) =>
+      tag.replace(/ class="[^"]*"/g, '').replace(/ style="[^"]*"/g, ''),
+    )
+    // remove svg elements
+    .replace(/<svg[^>]*>.*?<\/svg>/g, '');
 }
 
 
