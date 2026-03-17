@@ -93,7 +93,12 @@ export type AttachmentDraftSource = {
   egoFragmentsInputData: DraftEgoFragmentsInputData;
 };
 
-export type AttachmentDraftSourceOriginFile = 'camera' | 'screencapture' | 'file-open' | 'clipboard-read' | AttachmentDraftSourceOriginDTO;
+export type AttachmentDraftSourceOriginFile =
+  | 'camera' | 'screencapture'
+  | 'live-feed-camera' | 'live-feed-screen'
+  | 'file-open'
+  | 'clipboard-read'
+  | AttachmentDraftSourceOriginDTO;
 
 export type AttachmentDraftSourceOriginDTO = 'drop' | 'paste';
 
@@ -178,6 +183,11 @@ export type AttachmentDraftConverterType =
 
 
 // 3. Output - this is done via DMessageAttachmentFragment[], to be directly compatible with our data
+
+
+// Actions on attachment drafts
+
+export type AttachmentDraftsAction = 'inline-text' | 'copy-text';
 
 
 /*export type AttachmentDraftPreview = {

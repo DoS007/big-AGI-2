@@ -93,6 +93,43 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
       sentRequestedModelName = true;
     }
 
+    // -> Stats - before candidates to endings won't interfere/block
+    if (generationChunk.usageMetadata) {
+      const metricsUpdate: AixWire_Particles.CGSelectMetrics = {
+        TIn: generationChunk.usageMetadata.promptTokenCount,
+        TOut: generationChunk.usageMetadata.candidatesTokenCount,
+      };
+
+      // Add reasoning tokens if available
+      if (generationChunk.usageMetadata.thoughtsTokenCount) {
+        metricsUpdate.TOutR = generationChunk.usageMetadata.thoughtsTokenCount;
+        metricsUpdate.TOut = (metricsUpdate.TOut ?? 0) + metricsUpdate.TOutR; // in gemini candidatesTokenCount does not include reasoning tokens
+      }
+
+      // Subtract auto-cached (read) input tokens
+      if (generationChunk.usageMetadata.cachedContentTokenCount) {
+        metricsUpdate.TCacheRead = generationChunk.usageMetadata.cachedContentTokenCount;
+        if ((metricsUpdate.TIn ?? 0) > metricsUpdate.TCacheRead)
+          metricsUpdate.TIn = (metricsUpdate.TIn ?? 0) - metricsUpdate.TCacheRead;
+      }
+
+      if (isStreaming && timeToFirstEvent !== undefined)
+        metricsUpdate.dtStart = timeToFirstEvent;
+
+      // the first end-1 packet will be skipped (when streaming)
+      if (!skipComputingTotalsOnce) {
+        metricsUpdate.dtAll = Date.now() - parserCreationTimestamp;
+        if (!isStreaming && metricsUpdate.dtAll > timeToFirstEvent)
+          metricsUpdate.dtInner = metricsUpdate.dtAll - timeToFirstEvent;
+        if (isStreaming && metricsUpdate.TOut)
+          metricsUpdate.vTOutInner = Math.round(100 * 1000 /*ms/s*/ * metricsUpdate.TOut / (metricsUpdate.dtInner || metricsUpdate.dtAll)) / 100;
+      }
+      // the second (end) packet will be sent
+      skipComputingTotalsOnce = false;
+
+      pt.updateMetrics(metricsUpdate);
+    }
+
     // -> Prompt Safety Blocking
     if (generationChunk.promptFeedback?.blockReason) {
       const { blockReason, safetyRatings } = generationChunk.promptFeedback;
@@ -145,7 +182,7 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
                 mPart.inlineData.data,
                 'Gemini Generated Image',
                 'Gemini',
-                '',
+                '', // IMPORTANT: we don't have the prompt with Gemini - set it to empty
               );
             } else if (mPart.inlineData.mimeType.startsWith('audio/')) {
               try {
@@ -262,15 +299,22 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
 
         switch (candidate0.finishReason) {
           case 'STOP':
+            // FORMER NOTE:
             // this is expected for every fragment up to the end, when it may switch to one of the reasons below in the last packet
             // we cannot assume this signals a good ending, however it will be `pt` to set it to 'ok' if not set to an issue by the end
+
+            // NEW NOTE:
+            // 'STOP' seems to only be sent at the end now
+            pt.setTokenStopReason('ok');
+            pt.setDialectEnded('done-dialect'); // Gemini: generation finished successfully
             break;
 
           case 'MAX_TOKENS':
             pt.setTokenStopReason('out-of-tokens');
-            // NOTE: we call setEnded instead of setDialectTerminatingIssue, because we don't want an extra message appended,
+            // NOTE: we call setDialectEnded instead of setDialectTerminatingIssue, because we don't want an extra message appended,
             // as we know that 'out-of-tokens' will likely append a brick wall (simple/universal enough).
-            return pt.setEnded('issue-dialect');
+            pt.setDialectEnded('issue-dialect'); // Gemini: max tokens reached
+            break;
 
           // will set both TokenStop and TerminatingIssue
           case 'SAFETY':
@@ -309,10 +353,10 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
               'MISSING_THOUGHT_SIGNATURE': ['cg-issue', 'Generation stopped: request has at least one Gemini thought signature missing', null],
               'FINISH_REASON_UNSPECIFIED': ['cg-issue', 'Generation stopped and no reason was given', null],
             } as const;
-            const reason = reasonMap[candidate0.finishReason];
+            const reason = reasonMap[candidate0.finishReason] || ['cg-issue', `Generation stopped due to unknown reason: ${candidate0.finishReason || 'reason unknown'}`, null];
             pt.setTokenStopReason(reason[0]);
             // append finishMessage if available for more context
-            const issueMessage = candidate0.finishMessage ? `${reason[1]}: ${candidate0.finishMessage}` : reason[1];
+            const issueMessage = candidate0.finishMessage ? `${reason[1]}. ${candidate0.finishReason}: ${candidate0.finishMessage}.` : reason[1];
             return pt.setDialectTerminatingIssue(issueMessage, reason[2], false);
 
           default:
@@ -323,44 +367,7 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
             return pt.setDialectTerminatingIssue(`unexpected Gemini finish reason: ${candidate0?.finishReason})`, null, 'srv-warn');
         }
       }
-    } /* end of .candidates */
-
-    // -> Stats
-    if (generationChunk.usageMetadata) {
-      const metricsUpdate: AixWire_Particles.CGSelectMetrics = {
-        TIn: generationChunk.usageMetadata.promptTokenCount,
-        TOut: generationChunk.usageMetadata.candidatesTokenCount,
-      };
-
-      // Add reasoning tokens if available
-      if (generationChunk.usageMetadata.thoughtsTokenCount) {
-        metricsUpdate.TOutR = generationChunk.usageMetadata.thoughtsTokenCount;
-        metricsUpdate.TOut = (metricsUpdate.TOut ?? 0) + metricsUpdate.TOutR; // in gemini candidatesTokenCount does not include reasoning tokens
-      }
-
-      // Subtract auto-cached (read) input tokens
-      if (generationChunk.usageMetadata.cachedContentTokenCount) {
-        metricsUpdate.TCacheRead = generationChunk.usageMetadata.cachedContentTokenCount;
-        if ((metricsUpdate.TIn ?? 0) > metricsUpdate.TCacheRead)
-          metricsUpdate.TIn = (metricsUpdate.TIn ?? 0) - metricsUpdate.TCacheRead;
-      }
-
-      if (isStreaming && timeToFirstEvent !== undefined)
-        metricsUpdate.dtStart = timeToFirstEvent;
-
-      // the first end-1 packet will be skipped (when streaming)
-      if (!skipComputingTotalsOnce) {
-        metricsUpdate.dtAll = Date.now() - parserCreationTimestamp;
-        if (!isStreaming && metricsUpdate.dtAll > timeToFirstEvent)
-          metricsUpdate.dtInner = metricsUpdate.dtAll - timeToFirstEvent;
-        if (isStreaming && metricsUpdate.TOut)
-          metricsUpdate.vTOutInner = Math.round(100 * 1000 /*ms/s*/ * metricsUpdate.TOut / (metricsUpdate.dtInner || metricsUpdate.dtAll)) / 100;
-      }
-      // the second (end) packet will be sent
-      skipComputingTotalsOnce = false;
-
-      pt.updateMetrics(metricsUpdate);
-    }
+    } /* end of .candidates (single candidate is ensured) */
 
   };
 }

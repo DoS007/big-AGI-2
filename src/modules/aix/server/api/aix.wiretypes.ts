@@ -4,6 +4,7 @@ import * as z from 'zod/v4';
 import type { DMessageToolResponsePart } from '~/common/stores/chat/chat.fragments';
 
 import { anthropicAccessSchema } from '~/modules/llms/server/anthropic/anthropic.access';
+import { bedrockAccessSchema } from '~/modules/llms/server/bedrock/bedrock.access';
 import { geminiAccessSchema } from '~/modules/llms/server/gemini/gemini.access';
 import { ollamaAccessSchema } from '~/modules/llms/server/ollama/ollama.access';
 import { openAIAccessSchema } from '~/modules/llms/server/openai/openai.access';
@@ -415,6 +416,7 @@ export namespace AixWire_API {
 
   export const Access_schema = z.discriminatedUnion('dialect', [
     anthropicAccessSchema,
+    bedrockAccessSchema,
     geminiAccessSchema,
     ollamaAccessSchema,
     openAIAccessSchema,
@@ -430,8 +432,6 @@ export namespace AixWire_API {
     maxTokens: z.number().min(1).optional(),
     topP: z.number().min(0).max(1).optional(),
     forceNoStream: z.boolean().optional(),
-
-    // Cross-vendor Structured Outputs
 
     /**
      * Constrain model response to a JSON schema for data extraction. Response will be valid JSON. Schema limitations vary by vendor.
@@ -449,48 +449,6 @@ export namespace AixWire_API {
      */
     strictToolInvocations: z.boolean().optional(),
 
-    // Anthropic
-    vndAnt1MContext: z.boolean().optional(),
-    vndAntEffort: z.enum(['low', 'medium', 'high', 'max']).optional(),
-    vndAntSkills: z.string().optional(),
-    vndAntThinkingBudget: z.number().or(z.literal('adaptive')).nullable().optional(),
-    vndAntToolSearch: z.enum(['regex', 'bm25']).optional(), // Tool Search Tool variant
-    vndAntWebFetch: z.enum(['auto']).optional(),
-    vndAntWebSearch: z.enum(['auto']).optional(),
-    // Gemini
-    vndGeminiAspectRatio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9']).optional(),
-    vndGeminiCodeExecution: z.enum(['auto']).optional(),
-    vndGeminiComputerUse: z.enum(['browser']).optional(),
-    vndGeminiGoogleSearch: z.enum(['unfiltered', '1d', '1w', '1m', '6m', '1y']).optional(),
-    vndGeminiImageSize: z.enum(['1K', '2K', '4K']).optional(),
-    vndGeminiMediaResolution: z.enum(['mr_high', 'mr_medium', 'mr_low']).optional(),
-    vndGeminiShowThoughts: z.boolean().optional(),
-    vndGeminiThinkingBudget: z.number().optional(), // old param
-    // Gemini 3 thinking level: Pro supports high/low, Flash supports all 4 levels
-    vndGeminiThinkingLevel: z.enum(['high', 'medium', 'low', 'minimal']).optional(), // new param
-    vndGeminiUrlContext: z.enum(['auto']).optional(),
-    // Moonshot
-    vndMoonshotWebSearch: z.enum(['auto']).optional(),
-    // OpenAI
-    vndOaiCodeInterpreter: z.enum(['off', 'auto']).optional(),
-    vndOaiImageGeneration: z.enum(['mq', 'hq', 'hq_edit', 'hq_png']).optional(),
-    vndOaiResponsesAPI: z.boolean().optional(),
-    vndOaiReasoningEffort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
-    vndOaiReasoningSummary: z.enum(['none', 'detailed']).optional(),
-    vndOaiRestoreMarkdown: z.boolean().optional(),
-    vndOaiVerbosity: z.enum(['low', 'medium', 'high']).optional(),
-    vndOaiWebSearchContext: z.enum(['low', 'medium', 'high']).optional(),
-    // OpenRouter
-    vndOrtWebSearch: z.enum(['auto']).optional(),
-    // Perplexity
-    vndPerplexityDateFilter: z.enum(['unfiltered', '1m', '3m', '6m', '1y']).optional(),
-    vndPerplexitySearchMode: z.enum(['default', 'academic']).optional(),
-    // xAI
-    vndXaiCodeExecution: z.enum(['off', 'auto']).optional(),
-    vndXaiSearchInterval: z.enum(['unfiltered', '1d', '1w', '1m', '6m', '1y']).optional(),
-    vndXaiWebSearch: z.enum(['off', 'auto']).optional(),
-    vndXaiXSearch: z.enum(['off', 'auto']).optional(),
-    vndXaiXSearchHandles: z.string().optional(),
     /**
      * [OpenAI, 2025-03-11] This is the generic version of the `web_search_options.user_location` field
      * This AIX field mimics on purpose: https://platform.openai.com/docs/api-reference/chat/create
@@ -501,6 +459,71 @@ export namespace AixWire_API {
       country: z.string().optional(),   // two-letter ISO country code of the user, e.g. US
       timezone: z.string().optional(),  // IANA timezone of the user, e.g. America/Los_Angeles
     }).optional(),
+
+
+    // Cross-provider unified (but with semantic specialization) options
+
+    /**
+     * Union of all the possible reasoning effort values. Different dispatches will validate the
+     * domain (subset) of values they support, but the client can send any of them and let the server handle it.
+     */
+    reasoningEffort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).optional(),
+    // REMOVE for 2.0.5: we used to have the parameters below - here for doc purposes only - parsing doesn't break if they are set (backward comp)
+    // vndAntEffort: z.enum(['low', 'medium', 'high', 'max']).optional(),
+    // vndGeminiThinkingLevel: z.enum(['high', 'medium', 'low', 'minimal']).optional(), // new param
+    // vndOaiReasoningEffort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
+    // vndOaiReasoningSummary: z.enum(['none', 'detailed']).optional(),
+    // vndGeminiShowThoughts: z.boolean().optional(),
+
+    // Anthropic
+    vndAnt1MContext: z.boolean().optional(),
+    vndAntInfSpeed: z.enum(['fast']).optional(),
+    vndAntSkills: z.string().optional(),
+    vndAntThinkingBudget: z.number().or(z.literal('adaptive')).nullable().optional(),
+    vndAntToolSearch: z.enum(['regex', 'bm25']).optional(), // Tool Search Tool variant
+    vndAntWebFetch: z.enum(['auto']).optional(),
+    vndAntWebFetchMaxUses: z.number().int().min(1).max(50).optional(),
+    vndAntWebSearch: z.enum(['auto']).optional(),
+    vndAntWebSearchMaxUses: z.number().int().min(1).max(50).optional(),
+
+    // Bedrock
+    vndBedrockAPI: z.enum(['converse', 'invoke-anthropic', 'mantle']).optional(),
+
+    // Gemini
+    vndGeminiAspectRatio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9']).optional(),
+    vndGeminiCodeExecution: z.enum(['auto']).optional(),
+    vndGeminiComputerUse: z.enum(['browser']).optional(),
+    vndGeminiGoogleSearch: z.enum(['unfiltered', '1d', '1w', '1m', '6m', '1y']).optional(),
+    vndGeminiImageSize: z.enum(['1K', '2K', '4K']).optional(),
+    vndGeminiMediaResolution: z.enum(['mr_high', 'mr_medium', 'mr_low']).optional(),
+    vndGeminiThinkingBudget: z.number().optional(), // -1 for 'adaptive'
+    vndGeminiUrlContext: z.enum(['auto']).optional(),
+
+    // Moonshot
+    vndMoonshotWebSearch: z.enum(['auto']).optional(),
+
+    // OpenAI
+    vndOaiCodeInterpreter: z.enum(['off', 'auto']).optional(),
+    vndOaiImageGeneration: z.enum(['mq', 'hq', 'hq_edit', 'hq_png']).optional(),
+    vndOaiResponsesAPI: z.boolean().optional(),
+    vndOaiRestoreMarkdown: z.boolean().optional(),
+    vndOaiVerbosity: z.enum(['low', 'medium', 'high']).optional(),
+    vndOaiWebSearchContext: z.enum(['low', 'medium', 'high']).optional(),
+
+    // OpenRouter
+    vndOrtWebSearch: z.enum(['auto']).optional(),
+
+    // Perplexity
+    vndPerplexityDateFilter: z.enum(['unfiltered', '1m', '3m', '6m', '1y']).optional(),
+    vndPerplexitySearchMode: z.enum(['default', 'academic']).optional(),
+
+    // xAI
+    vndXaiCodeExecution: z.enum(['off', 'auto']).optional(),
+    vndXaiSearchInterval: z.enum(['unfiltered', '1d', '1w', '1m', '6m', '1y']).optional(),
+    vndXaiWebSearch: z.enum(['off', 'auto']).optional(),
+    vndXaiXSearch: z.enum(['off', 'auto']).optional(),
+    vndXaiXSearchHandles: z.string().optional(),
+
   });
 
   /// Resume Handle
@@ -638,30 +661,29 @@ export namespace AixWire_Particles {
 
   export type ChatControlOp =
   // | { cg: 'start' } // not really used for now
-    | { cg: 'end', reason: CGEndReason, tokenStopReason: GCTokenStopReason }
+    | { cg: 'end', terminationReason: CGEndReason /* we know why we're sending 'end' */, tokenStopReason?: GCTokenStopReason /* we may or not have gotten a logical token stop reason from the dispatch */ }
     | { cg: 'issue', issueId: CGIssueId, issueText: string }
     | { cg: 'retry-reset', rScope: 'srv-dispatch' | 'srv-op' | 'cli-ll', rShallClear: boolean, reason: string, attempt: number, maxAttempts: number, delayMs: number, causeHttp?: number, causeConn?: string }
     | { cg: 'set-metrics', metrics: CGSelectMetrics }
     | { cg: 'set-model', name: string }
+    | { cg: 'set-provider-infra', label: string }
     | { cg: 'set-upstream-handle', handle: { uht: 'vnd.oai.responses', responseId: string, expiresAt: number | null } }
     | { cg: '_debugDispatchRequest', security: 'dev-env', dispatchRequest: { url: string, headers: string, body: string, bodySize: number } } // may generalize this in the future
     | { cg: '_debugProfiler', measurements: Record<string, number | string>[] };
 
   export type CGEndReason =     // the reason for the end of the chat generation
-    | 'abort-client'            // user aborted before the end of stream
     | 'done-dialect'            // OpenAI signals the '[DONE]' event, or Anthropic sends the 'message_stop' event
     | 'done-dispatch-aborted'   // this shall never see the light of day, as it was a reaction to the intake being aborted first
-    | 'done-dispatch-closed'    // dispatch connection closed
+    | 'done-dispatch-closed'    // dispatch connection closed, which is not a 'good' ending reason, as logic should have ended it with done-dialect/issue-dialect
     | 'issue-dialect'           // [1] ended because a dispatch encountered an issue, such as out-of-tokens, recitation, etc.
-    | 'issue-rpc';              // [2] ended because of an issue
+    | 'issue-dispatch-rpc';     // [2] ended because of an issue
 
   export type CGIssueId =
     | 'dialect-issue'           // [1] when end reason = 'issue-dialect'
-    | 'dispatch-prepare'        // [2] when end reason = 'issue-rpc', 4 phases of GC dispatch
+    | 'dispatch-prepare'        // [2] when end reason = 'issue-dispatch-rpc', 4 phases of GC dispatch
     | 'dispatch-fetch'          // [2] "
     | 'dispatch-read'           // [2] "
-    | 'dispatch-parse'          // [2] "
-    | 'client-read';            // the aix client encountered an unexpected error (e.g. tRPC)
+    | 'dispatch-parse';         // [2] "
 
   export type GCTokenStopReason =
     | 'ok'                      // clean, including reaching 'stop sequences'
@@ -669,7 +691,6 @@ export namespace AixWire_Particles {
     | 'ok-pause_continue'       // clean, but paused (e.g. Anthropic server tools like web search) - requires continuation
     // premature:
     | 'cg-issue'                // [1][2] chat-generation issue (see CGIssueId, mostly a dispatch or dialect issue)
-    | 'client-abort-signal'     // the client aborted - likely a user/auto initiation
     | 'filter-content'          // content filter (e.g. profanity)
     | 'filter-recitation'       // recitation filter (e.g. recitation)
     | 'filter-refusal'          // safety refusal filter (e.g. Anthropic safety concerns)

@@ -1,5 +1,6 @@
 import { addDBImageAsset } from '~/common/stores/blob/dblobs-portability';
 
+import type { DMessageGenerator } from '~/common/stores/chat/chat.message';
 import type { MaybePromise } from '~/common/types/useful.types';
 import { convert_Base64WithMimeType_To_Blob } from '~/common/util/blobUtils';
 import { create_CodeExecutionInvocation_ContentFragment, create_CodeExecutionResponse_ContentFragment, create_FunctionCallInvocation_ContentFragment, createAnnotationsVoidFragment, createDMessageDataRefDBlob, createDVoidWebCitation, createErrorContentFragment, createModelAuxVoidFragment, createPlaceholderVoidFragment, createTextContentFragment, createZyncAssetReferenceContentFragment, DMessageErrorPart, DVoidModelAuxPart, DVoidPlaceholderModelOp, isContentFragment, isModelAuxPart, isTextContentFragment, isVoidAnnotationsFragment, isVoidFragment } from '~/common/stores/chat/chat.fragments';
@@ -41,13 +42,19 @@ export class ContentReassembler {
   // reassembly state (plus the ext. accumulator)
   private currentTextFragmentIndex: number | null = null;
 
+  // raw termination data (set during stream or by client, classified at finalization)
+  private _terminationReason?: 'done-client-aborted' | 'issue-client-rpc' | AixWire_Particles.CGEndReason;
+  private _tokenStopReasonWire?: AixWire_Particles.GCTokenStopReason;
+
 
   constructor(
     private readonly accumulator: AixChatGenerateContent_LL,
     private readonly onAccumulatorUpdated?: () => MaybePromise<void>,
     inspectorTransport?: AixClientDebugger.Transport,
     inspectorContext?: AixClientDebugger.Context,
+    private readonly skipImageCompression?: boolean,
     private readonly wireAbortSignal?: AbortSignal,
+    private readonly onInlineAudio?: (audio: { blob: Blob; mimeType: string; label: string; durationMs?: number }) => void,
   ) {
 
     // [SUDO] Debugging the request, last-write-wins for the global (displayed in the UI)
@@ -60,7 +67,11 @@ export class ContentReassembler {
 
   enqueueWireParticle(op: AixWire_Particles.ChatGenerateOp): void {
     if (this.#wireIsAborted) {
-      // console.log('Dropped particle due to abort:', op);
+      // WARN about dropping particles; note that this should not happen besides CSF 'end' particles,
+      //      which are ignored anyways becuse we hande end with the '.throwIfAborted()' outside here
+      const isEndParticle = 'cg' in op && op.cg === 'end';
+      if (!isEndParticle)
+        console.log('⚠️ [ContentReassembler] enqueueWireParticle: received particle after wire abortion, ignoring', op);
       return;
     }
 
@@ -80,9 +91,12 @@ export class ContentReassembler {
 
   finalizeAccumulator(): void {
 
-    // Perform all the latest operations
-    const hasAborted = !!this.accumulator.genTokenStopReason;
-    metricsFinishChatGenerateLg(this.accumulator.genMetricsLg, hasAborted);
+    // Classify termination
+    this.accumulator.legacyGenTokenStopReason = this._deriveTokenStopReason();
+
+    // Metrics
+    const hadIssues = !!this.accumulator.legacyGenTokenStopReason;
+    metricsFinishChatGenerateLg(this.accumulator.genMetricsLg, hadIssues);
 
     // [SUDO] Debugging, finalize the frame
     if (this.debuggerFrameId)
@@ -91,22 +105,31 @@ export class ContentReassembler {
   }
 
 
-  async setClientAborted(): Promise<void> {
+  setClientAborted(): void {
     if (DEBUG_PARTICLES)
       console.log('-> aix.p: abort-client');
 
-    // NOTE: this doesn't go to the debugger anymore - as we only publish external particles to the debugger
-    await this.#reassembleParticle({ cg: 'end', reason: 'abort-client', tokenStopReason: 'client-abort-signal' });
+    // normal user cancellation does not require error fragments
+
+    if (this._terminationReason)
+      console.warn(`⚠️ [ContentReassembler] setClientAborted: overriding server termination '${this._terminationReason}' (wire stop: ${this._tokenStopReasonWire ?? 'none'})`);
+
+    this._terminationReason = 'done-client-aborted';
+    this._tokenStopReasonWire = undefined; // reset, as we assume we can't know (alt: jsut leave it)
   }
 
-  async setClientExcepted(errorAsText: string, errorHint?: DMessageErrorPart['hint']): Promise<void> {
+  setClientExcepted(errorAsText: string, errorHint?: DMessageErrorPart['hint']): void {
     if (DEBUG_PARTICLES)
       console.log('-> aix.p: issue:', errorAsText);
 
-    this.onCGIssue({ cg: 'issue', issueId: 'client-read', issueText: errorAsText, issueHint: errorHint });
+    // add the error fragment with the given message
+    this._appendErrorFragment(errorAsText, errorHint);
 
-    // NOTE: this doesn't go to the debugger anymore - as we only publish external particles to the debugger
-    await this.#reassembleParticle({ cg: 'end', reason: 'issue-rpc', tokenStopReason: 'cg-issue' });
+    if (this._terminationReason)
+      console.warn(`⚠️ [ContentReassembler] setClientExcepted: overriding server termination '${this._terminationReason}' (wire stop: ${this._tokenStopReasonWire ?? 'none'})`);
+
+    this._terminationReason = 'issue-client-rpc';
+    this._tokenStopReasonWire = undefined; // reset, as we can't assume we know (alt: jsut leave it)
   }
 
   async setClientRetrying(strategy: 'reconnect' | 'resume', errorMessage: string, attempt: number, maxAttempts: number, delayMs: number, causeHttp?: number, causeConn?: string) {
@@ -281,6 +304,9 @@ export class ContentReassembler {
           case 'set-model':
             this.onModelName(op);
             break;
+          case 'set-provider-infra':
+            this.onProviderInfra(op);
+            break;
           case 'set-upstream-handle':
             this.onResponseHandle(op);
             break;
@@ -410,35 +436,15 @@ export class ContentReassembler {
     // Break text accumulation, as we have a full audio part in the middle
     this.currentTextFragmentIndex = null;
 
-    const { mimeType, a_b64: base64Data, label, generator, durationMs } = particle;
+    const { mimeType, a_b64: base64Data, label, /*generator,*/ durationMs } = particle;
     const safeLabel = label || 'Generated Audio';
 
     try {
 
-      // create blob and play audio - this will throw on malformed data
+      // create blob from base64 - this will throw on malformed data
       const audioBlob = await convert_Base64WithMimeType_To_Blob(base64Data, mimeType, 'ContentReassembler.onAppendInlineAudio');
-      const audioUrl = URL.createObjectURL(audioBlob);
 
-      // Play the audio
-      const audio = new Audio(audioUrl);
-
-      // Clean up when audio ends or errors
-      const cleanup = () => {
-        URL.revokeObjectURL(audioUrl);
-        audio.removeEventListener('ended', cleanup);
-        audio.removeEventListener('error', cleanup);
-        audio.src = ''; // Release audio element reference
-      };
-      audio.addEventListener('ended', cleanup);
-      audio.addEventListener('error', cleanup);
-
-      // Play and handle immediate errors
-      audio.play().catch(error => {
-        console.warn('[Audio] Failed to play generated audio:', error);
-        cleanup();
-      });
-
-      // TEMP: show a label instead of adding the model part
+      // show a label in the message (audio fragment persistence deferred to future work)
       this.accumulator.fragments.push(createTextContentFragment(`Generated audio ▶ \`${safeLabel}\`${durationMs ? ` (${Math.round(durationMs / 10) / 100}s)` : ''}`));
 
       // Add the audio to the DBlobs DB
@@ -479,10 +485,13 @@ export class ContentReassembler {
 
       // this.accumulator.fragments.push(audioContentFragment);
 
+      // notify caller for NorthBridge-coordinated playback
+      this.onInlineAudio?.({ blob: audioBlob, mimeType, label: safeLabel, durationMs });
+
     } catch (error: any) {
       console.warn('[DEV] Failed to add inline audio to DBlobs:', { label: safeLabel, error, mimeType, size: base64Data.length });
       // Add an error fragment instead
-      this.accumulator.fragments.push(createErrorContentFragment(`Failed to process audio: ${error?.message || 'Unknown error'}`, 'aix-audio-processing'));
+      this._appendErrorFragment(`Failed to process audio: ${error?.message || 'Unknown error'}`, 'aix-audio-processing');
     }
   }
 
@@ -500,7 +509,7 @@ export class ContentReassembler {
       let inputImage = await convert_Base64WithMimeType_To_Blob(inputBase64, inputType, 'ContentReassembler.onAppendInlineImage');
 
       // perform resize/type conversion if desired, and find the image dimensions
-      const shallConvert = GENERATED_IMAGES_CONVERT_TO_COMPRESSED && inputType === 'image/png';
+      const shallConvert = GENERATED_IMAGES_CONVERT_TO_COMPRESSED && !this.skipImageCompression && inputType === 'image/png';
       const { blob: imageBlob, height: imageHeight, width: imageWidth } = await imageBlobTransform(inputImage, {
         convertToMimeType: shallConvert ? PLATFORM_IMAGE_MIMETYPE : undefined,
         convertToLossyQuality: GENERATED_IMAGES_COMPRESSION_QUALITY,
@@ -638,45 +647,85 @@ export class ContentReassembler {
 
   /// Rest of the data ///
 
-  private onCGEnd({ reason: _reason /* Redundant: no information */, tokenStopReason }: Extract<AixWire_Particles.ChatGenerateOp, { cg: 'end' }>): void {
+  /**
+   * Stores raw termination data from the wire - classification deferred to finalizeAccumulator()
+   */
+  private onCGEnd({ terminationReason, tokenStopReason }: Extract<AixWire_Particles.ChatGenerateOp, { cg: 'end' }>): void {
+    this._terminationReason = terminationReason;
+    this._tokenStopReasonWire = tokenStopReason;
+  }
 
-    // NOTE: no new info in particle.reason
-    // - abort-client: user abort (already captured in the stop reason)
-    // - done-*: normal termination (no info)
-    // - issue-*: issue (already captured in the 'issue' particle, and stop reason is 'cg-issue')
+  /**
+   * Cross-references both raw termination inputs to derive the DMessage-level tokenStopReason.
+   * Called once at finalization - the single place where wire-level → UI-level classification happens.
+   */
+  private _deriveTokenStopReason(): DMessageGenerator['tokenStopReason'] | undefined {
+    const wire = this._tokenStopReasonWire;
 
-    // handle the token stop reason
-    switch (tokenStopReason) {
-      // normal stop
-      case 'ok':                    // content
-      case 'ok-tool_invocations':   // content + tool invocation
-      case 'ok-pause_continue':     // [Anthropic] server tools (e.g. web search) - successful pause, requires continuation
-        break;
+    // First handle client terminations
+    if (this._terminationReason === 'done-client-aborted')
+      return 'client-abort'; // client-side abort is a 'successful' termination with an incomplete message
+    if (this._terminationReason === 'issue-client-rpc') {
+      // error fragment already appended
+      // issue on the client-side, such as interrupted server connection
+      return 'issue';
+    }
 
-      case 'client-abort-signal':
-        this.accumulator.genTokenStopReason = 'client-abort';
-        break;
+    // if the dialect parser explicitly set a stop reason, map it to the DMessageGenerator tokenStopReason enum
+    if (wire) {
+      const mapAixStopToDmessageGeneratorStop: Record<AixWire_Particles.GCTokenStopReason, DMessageGenerator['tokenStopReason'] | undefined> = {
+        // normal completions
+        'ok': undefined,
+        'ok-tool_invocations': undefined,
+        'ok-pause_continue': undefined,
+        // issues: dialect, dispatch, or client
+        'cg-issue': 'issue',
+        // interruptions
+        'out-of-tokens': 'out-of-tokens',
+        'filter-content': 'filter',
+        'filter-recitation': 'filter',
+        'filter-refusal': 'filter',
+      } as const;
+      if (wire in mapAixStopToDmessageGeneratorStop)
+        return mapAixStopToDmessageGeneratorStop[wire];
+      console.warn(`[ContentReassembler] Unmapped tokenStopReason from wire: ${wire}. Fallling back to terminationReason.`);
+    }
 
-      case 'out-of-tokens':
-        this.accumulator.genTokenStopReason = 'out-of-tokens';
-        break;
+    // fall back to terminationReason
+    switch (this._terminationReason) {
+      case undefined:
+        // SEVERE - AIX BUG: don't even know why we terminated
+        console.warn(`⚠️ [ContentReassembler] finished without 'terminationReason' - possible missing 'end' particle. No tokenStopReason can be derived.`);
+        this._appendErrorFragment('Message may be incomplete: missing completion signal.');
+        return undefined;
 
-      case 'cg-issue':              // error fragment already added before
-        this.accumulator.genTokenStopReason = 'issue';
-        break;
+      case 'done-dialect':
+        // Normal completions: we DO expect a tokenStopReason
+        console.warn(`⚠️ [ContentReassembler] termination by dialect without 'tokenStopReason' - possible dialect parser issue. assuming ok`);
+        this._appendErrorFragment('Message may be incomplete: missing finish reason.');
+        return undefined;
 
-      case 'filter-content':        // inline text message shall have been added
-      case 'filter-recitation':     // inline text message shall have been added
-      case 'filter-refusal':        // [Anthropic] model refused due to safety (same semantic as filtering)
-        this.accumulator.genTokenStopReason = 'filter';
-        break;
+      case 'done-dispatch-closed':
+        // Stream EOF before completion - provider closed the connection without sending a termination signal
+        console.warn(`⚠️ [ContentReassembler] done-dispatch-closed without tokenStopReason - possible truncation`);
+        this._appendErrorFragment('Message may be truncated: stream ended before completion.');
+        return 'issue';
 
-      // unexpected
+      case 'done-dispatch-aborted':
+        // Dispatch connection may have been severed
+        console.warn(`⚠️ [ContentReassembler] done-dispatch-aborted - stream was aborted, likely due to connection issues. assuming client abort.`);
+        this._appendErrorFragment('Message may be incomplete: AI provider stream was aborted, likely due to connection issues.');
+        return 'client-abort';
+
+      case 'issue-dialect':
+      case 'issue-dispatch-rpc':
+        // error messages already added
+        return 'issue';
+
       default:
-        // noinspection JSUnusedLocalSymbols
-        const _exhaustiveCheck: never = tokenStopReason;
-        this._appendReassemblyDevError(`Unexpected token stop reason: ${tokenStopReason}`);
-        break;
+        const _exhaustiveCheck: never = this._terminationReason;
+        console.warn(`⚠️ [ContentReassembler] unmapped termination reason: ${this._terminationReason} - no tokenStopReason can be derived.`);
+        return undefined;
     }
   }
 
@@ -691,8 +740,7 @@ export class ContentReassembler {
         return;
       }
     }
-    this.accumulator.fragments.push(createErrorContentFragment(issueText, issueHint));
-    this.currentTextFragmentIndex = null;
+    this._appendErrorFragment(issueText, issueHint);
   }
 
   private onRetryReset({ rScope, rShallClear, attempt, maxAttempts, delayMs, reason, causeHttp, causeConn }: Extract<AixWire_Particles.ChatGenerateOp, { cg: 'retry-reset' }>): void {
@@ -700,7 +748,10 @@ export class ContentReassembler {
     if (rShallClear) {
       this.currentTextFragmentIndex = null;
       this.accumulator.fragments = [];
-      delete this.accumulator.genTokenStopReason;
+      delete this.accumulator.legacyGenTokenStopReason;
+      // reset private termination state
+      this._terminationReason = undefined;
+      this._tokenStopReasonWire = undefined;
       // keep metrics/model/handle intact - may be useful for debugging retries
 
       // discard any pending particles from the failed attempt
@@ -728,6 +779,10 @@ export class ContentReassembler {
     this.accumulator.genModelName = name;
   }
 
+  private onProviderInfra({ label }: Extract<AixWire_Particles.ChatGenerateOp, { cg: 'set-provider-infra' }>): void {
+    this.accumulator.genProviderInfraLabel = label;
+  }
+
   private onResponseHandle({ handle }: Extract<AixWire_Particles.ChatGenerateOp, { cg: 'set-upstream-handle' }>): void {
     // validate the handle
     if (handle?.uht !== 'vnd.oai.responses' || !handle?.responseId || handle?.expiresAt === undefined) {
@@ -748,7 +803,11 @@ export class ContentReassembler {
       if (excess > 0)
         errorText = ellipsizeMiddle(errorText, ELLIPSIZE_DEV_ISSUE_MESSAGES - truncationMessage.length, truncationMessage);
     }
-    this.accumulator.fragments.push(createErrorContentFragment((omitPrefix ? '' : 'AIX Content Reassembler: ') + errorText));
+    this._appendErrorFragment((omitPrefix ? '' : 'AIX Content Reassembler: ') + errorText);
+  }
+
+  private _appendErrorFragment(errorText: string, errorHint?: DMessageErrorPart['hint']): void {
+    this.accumulator.fragments.push(createErrorContentFragment(errorText, errorHint));
     this.currentTextFragmentIndex = null;
   }
 

@@ -1,5 +1,5 @@
 /**
- * AUTO-GENERATED — do not edit the symbol definitions or VI entries manually.
+ * AUTO-GENERATED - do not edit the symbol definitions or VI entries manually.
  * Source of truth: individual vendor icon files in src/modules/llms/components/
  *
  * Regenerate: npm run gen:icon-sprites
@@ -10,11 +10,12 @@ import type { ModelVendorId } from '../vendors/vendors.registry';
 
 import { PhRobot } from '~/common/components/icons/phosphor/PhRobot';
 
-// Symbol IDs for each vendor — generated from the vendor registry
+// Symbol IDs for each vendor - generated from the vendor registry
 const VI: Record<ModelVendorId, string> = {
   alibaba: 'vi-alibaba',
   anthropic: 'vi-anthropic',
   azure: 'vi-azure',
+  bedrock: 'vi-bedrock',
   deepseek: 'vi-deepseek',
   googleai: 'vi-googleai',
   groq: 'vi-groq',
@@ -29,12 +30,13 @@ const VI: Record<ModelVendorId, string> = {
   perplexity: 'vi-perplexity',
   togetherai: 'vi-togetherai',
   xai: 'vi-xai',
+  zai: 'vi-zai',
 } as const;
 
 
 /**
  * Memoized SVG sprite with all vendor icon `<symbol>` definitions.
- * Mount once in the app root (ProviderTheming) — all `<use href="#vi-...">` references resolve from here.
+ * Mount once in the app root (ProviderTheming) - all `<use href="#vi-...">` references resolve from here.
  *
  * Joy's SvgIcon sets CSS `fill: currentColor` which overrides `fill='none'` props. To match,
  * all `<g>` wrappers use `fill='currentColor'`. Paths with explicit `fill='none'` still override.
@@ -62,6 +64,14 @@ export const VendorIconSpriteMemo = React.memo(function VendorIconSprite() {
           <path stroke='none' d='M0 0h24v24H0z' fill='none' />
           <path d='M6 7.5l-4 9.5h4l6 -15z' />
           <path d='M22 20l-7 -15l-3 7l4 5l-8 3z' />
+          </g>
+        </symbol>
+
+        <symbol id={VI.bedrock} viewBox='0 0 109 64'>
+          <g stroke='none' fill='currentColor'>
+          <path d='M30.63 23.243c0 1.317.144 2.385.398 3.168.289.783.65 1.637 1.156 2.563.18.284.253.569.253.818 0 .356-.217.712-.687 1.068l-2.277 1.495c-.325.214-.65.32-.94.32-.361 0-.723-.178-1.084-.498a11.036 11.036 0 0 1-1.301-1.673 27.44 27.44 0 0 1-1.12-2.1c-2.82 3.275-6.362 4.912-10.627 4.912-3.037 0-5.458-.854-7.23-2.563-1.77-1.708-2.674-3.986-2.674-6.834 0-3.025 1.084-5.481 3.29-7.332 2.204-1.851 5.132-2.777 8.855-2.777 1.229 0 2.494.107 3.831.285 1.337.178 2.71.463 4.157.783V12.28c0-2.705-.579-4.592-1.7-5.695-1.156-1.104-3.108-1.638-5.89-1.638-1.266 0-2.567.143-3.904.463-1.338.32-2.64.712-3.904 1.21-.578.25-1.012.392-1.265.463-.253.071-.434.107-.579.107-.506 0-.759-.356-.759-1.104V4.342c0-.57.073-.996.253-1.246.181-.249.506-.498 1.012-.747 1.266-.64 2.784-1.175 4.555-1.602 1.77-.462 3.65-.676 5.638-.676 4.302 0 7.446.961 9.47 2.883 1.989 1.922 3 4.84 3 8.756v11.533h.073Zm-14.675 5.41c1.193 0 2.422-.213 3.723-.64 1.301-.428 2.458-1.21 3.434-2.279.578-.676 1.012-1.423 1.229-2.278.216-.854.361-1.886.361-3.096v-1.495a30.626 30.626 0 0 0-3.325-.605 27.649 27.649 0 0 0-3.398-.214c-2.422 0-4.193.463-5.386 1.424-1.192.96-1.77 2.313-1.77 4.093 0 1.673.433 2.919 1.337 3.773.867.89 2.132 1.317 3.795 1.317Zm29.024 3.844c-.65 0-1.084-.106-1.373-.356-.29-.213-.542-.711-.759-1.388L34.353 3.24c-.217-.712-.325-1.175-.325-1.424 0-.57.289-.89.867-.89h3.542c.687 0 1.157.107 1.41.356.29.214.506.712.723 1.388l6.072 23.564 5.639-23.564c.18-.712.398-1.174.687-1.388.289-.213.795-.356 1.445-.356h2.892c.687 0 1.157.107 1.446.356.289.214.542.712.687 1.388l5.71 23.849L71.403 2.67c.217-.712.47-1.174.723-1.388.289-.213.759-.356 1.41-.356h3.36c.58 0 .904.285.904.89 0 .178-.036.356-.072.57a4.998 4.998 0 0 1-.253.89l-8.71 27.514c-.218.712-.47 1.174-.76 1.388-.29.214-.759.356-1.374.356h-3.108c-.687 0-1.157-.107-1.446-.356-.289-.25-.542-.712-.687-1.424L55.787 7.795l-5.566 22.923c-.181.712-.398 1.174-.687 1.423-.29.25-.795.356-1.446.356H44.98Zm46.447.961c-1.88 0-3.759-.213-5.566-.64-1.807-.427-3.217-.89-4.157-1.424-.578-.32-.976-.676-1.12-.997a2.48 2.48 0 0 1-.217-.996v-1.816c0-.747.289-1.103.831-1.103.217 0 .434.035.65.107.218.07.543.213.904.356 1.23.534 2.567.96 3.976 1.245 1.446.285 2.856.427 4.302.427 2.277 0 4.048-.391 5.277-1.174 1.229-.783 1.88-1.922 1.88-3.382 0-.996-.326-1.815-.977-2.491-.65-.676-1.88-1.282-3.65-1.851l-5.241-1.602c-2.639-.818-4.59-2.029-5.784-3.63-1.192-1.566-1.807-3.31-1.807-5.162 0-1.495.325-2.811.976-3.95a9.196 9.196 0 0 1 2.603-2.92c1.084-.818 2.313-1.423 3.759-1.85C89.51.178 91.029 0 92.619 0c.795 0 1.627.035 2.422.142.831.107 1.59.25 2.35.392.722.178 1.409.356 2.06.57.65.213 1.156.426 1.518.64.506.285.867.57 1.084.89.217.284.325.676.325 1.174v1.673c0 .748-.289 1.14-.831 1.14-.289 0-.759-.143-1.374-.428-2.06-.925-4.373-1.388-6.94-1.388-2.06 0-3.686.32-4.807.997-1.12.676-1.699 1.708-1.699 3.168 0 .996.362 1.85 1.085 2.527.723.676 2.06 1.352 3.976 1.957l5.132 1.602c2.603.819 4.482 1.958 5.603 3.417 1.12 1.46 1.662 3.133 1.662 4.983 0 1.53-.325 2.92-.939 4.13-.651 1.21-1.518 2.277-2.639 3.132-1.12.89-2.458 1.53-4.012 1.993-1.627.498-3.325.747-5.169.747Z' fill='currentColor' />
+          <path d='M98.254 50.76C86.363 59.408 69.085 64 54.23 64 33.41 64 14.65 56.42.481 43.82c-1.12-.997-.108-2.35 1.23-1.567 15.325 8.756 34.229 14.06 53.784 14.06 13.193 0 27.687-2.705 41.024-8.258 1.988-.89 3.687 1.282 1.735 2.705Z' fill='currentColor' />
+          <path d='M103.199 45.204c-1.519-1.922-10.049-.925-13.916-.463-1.157.143-1.338-.854-.29-1.601 6.796-4.699 17.965-3.346 19.266-1.78 1.301 1.602-.362 12.6-6.723 17.868-.976.819-1.916.392-1.482-.676 1.446-3.524 4.663-11.461 3.145-13.348Z' fill='currentColor' />
           </g>
         </symbol>
 
@@ -217,6 +227,14 @@ export const VendorIconSpriteMemo = React.memo(function VendorIconSprite() {
           <path d='m3.005 8.858 8.783 12.544h3.904L6.908 8.858zm3.9 6.967L3 21.402h3.907l1.951-2.788zM16.585 2l-6.75 9.64 1.953 2.79L20.492 2zm.707 5.965v13.437h3.2V3.395z' />
           </g>
         </symbol>
+
+        <symbol id={VI.zai} viewBox='0 0 30 30'>
+          <g fill='currentColor' strokeWidth={0}>
+          <path d='M15.47,7.1l-1.3,1.85c-0.2,0.29-0.54,0.47-0.9,0.47h-7.1V7.09C6.16,7.1,15.47,7.1,15.47,7.1z' />
+          <polygon points='24.3,7.1 13.14,22.91 5.7,22.91 16.86,7.1' />
+          <path d='M14.53,22.91l1.31-1.86c0.2-0.29,0.54-0.47,0.9-0.47h7.09v2.33H14.53z' />
+          </g>
+        </symbol>
       </defs>
     </svg>
   );
@@ -227,7 +245,7 @@ const _spriteContainerSx: React.CSSProperties = { position: 'absolute', width: 0
 
 /**
  * Lightweight vendor icon using SVG sprite `<use href>`.
- * Near-zero per-instance cost — no Emotion/styled-components.
+ * Near-zero per-instance cost - no Emotion/styled-components.
  *
  * Uses Joy's CSS custom properties (--Icon-fontSize, --Icon-margin, --Icon-color)
  * so parent components (ListItemDecorator, etc.) control sizing automatically.
@@ -262,7 +280,7 @@ export function LLMVendorIconSprite({ vendorId /*, sx, className*/ }: {
   );
 }
 
-// Matches Joy's SvgIcon base styles — uses the same CSS custom properties
+// Matches Joy's SvgIcon base styles - uses the same CSS custom properties
 // const _lwBaseSx: React.CSSProperties = {
 //   width: '1em',
 //   height: '1em',

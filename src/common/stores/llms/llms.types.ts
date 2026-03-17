@@ -74,6 +74,14 @@ export type DLLMMaxOutputTokens = number | null;
 
 
 /**
+ * Returns the effective display label for a model, respecting user overrides.
+ * If the user has set a custom name via userLabel, that takes precedence over the vendor label.
+ */
+export function getLLMLabel(llm: DLLM): string {
+  return llm.userLabel ?? llm.label;
+}
+
+/**
  * Computes the effective visibility of a model, respecting user overrides.
  * Returns true if the model should be hidden from UI selectors.
  *
@@ -125,19 +133,6 @@ export function getLLMMaxOutputTokens(llm: DLLM | null): DLLMMaxOutputTokens | u
   return llm.userMaxOutputTokens ?? llm.maxOutputTokens;
 }
 
-/**
- * Returns the effective pricing for a model.
- * Checks user override first, then falls back to model default.
- */
-export function getLLMPricing(llm: DLLM | null): DModelPricing | undefined {
-  if (!llm)
-    return undefined; // undefined if no model
-
-  // Check user override first, then fall back to model default
-  return llm.userPricing ?? llm.pricing;
-}
-
-
 /// Interfaces ///
 
 // do not change anything below! those will be persisted in data
@@ -148,12 +143,11 @@ export type DModelInterfaceV1 =
   | 'ant-tools-search'
   | 'oai-chat-vision'
   | 'oai-chat-reasoning'
-  | 'oai-complete'
   | 'ant-prompt-caching'
+  | 'gem-code-execution'
   | 'oai-prompt-caching'
   | 'oai-realtime'
   | 'oai-responses'
-  | 'gem-code-execution'
   | 'outputs-audio'            // TEMP: ui flag - supports audio output (e.g., text-to-speech)
   | 'outputs-image'            // TEMP: ui flag - supports image output (image generation)
   | 'outputs-no-text'          // disable text outputs (used in conjunction with alt-outputs) - assumed off
@@ -179,11 +173,10 @@ export const LLM_IF_Outputs_Audio: DModelInterfaceV1 = 'outputs-audio';
 export const LLM_IF_Outputs_Image: DModelInterfaceV1 = 'outputs-image';
 export const LLM_IF_Outputs_NoText: DModelInterfaceV1 = 'outputs-no-text';
 export const LLM_IF_Tools_WebSearch: DModelInterfaceV1 = 'tools-web-search';
-export const LLM_IF_OAI_Complete: DModelInterfaceV1 = 'oai-complete';
 export const LLM_IF_ANT_PromptCaching: DModelInterfaceV1 = 'ant-prompt-caching';
+export const LLM_IF_GEM_CodeExecution: DModelInterfaceV1 = 'gem-code-execution';
 export const LLM_IF_OAI_PromptCaching: DModelInterfaceV1 = 'oai-prompt-caching';
 export const LLM_IF_OAI_Responses: DModelInterfaceV1 = 'oai-responses';
-export const LLM_IF_GEM_CodeExecution: DModelInterfaceV1 = 'gem-code-execution';
 export const LLM_IF_HOTFIX_NoStream: DModelInterfaceV1 = 'hotfix-no-stream';
 export const LLM_IF_HOTFIX_NoTemperature: DModelInterfaceV1 = 'hotfix-no-temperature';
 export const LLM_IF_HOTFIX_NoWebP: DModelInterfaceV1 = 'hotfix-no-webp';
@@ -218,8 +211,6 @@ export const LLMS_ALL_INTERFACES = [
   LLM_IF_HOTFIX_StripImages,  // remove images from input (e.g. o3-mini-2025-01-31)
   LLM_IF_HOTFIX_StripSys0,    // strip system instruction (e.g. Gemini Image Generation 2025-03-13), excludes Sys0ToUsr0
   LLM_IF_HOTFIX_Sys0ToUsr0,   // downgrade system to user messages for this model (e.g. o1-mini-2024-09-12)
-  // old/unused
-  LLM_IF_OAI_Complete,        // UNUSED - older text completion, pre-chats
 ] as const;
 
 // Future changes?

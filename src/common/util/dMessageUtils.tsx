@@ -258,6 +258,7 @@ export function useMessageAvatarLabel(
       tooltip: complexity === 'minimal' ? null : (
         <Box sx={tooltipSx}>
           {VendorIcon ? <Box sx={tooltipIconContainerSx}><VendorIcon />{generator.name}</Box> : <div>{generator.name}</div>}
+          {generator.providerInfraLabel && <div>{vendorId} -&gt; via &lsquo;{generator.providerInfraLabel}&rsquo;</div>}
           {(modelId && complexity === 'extra') && <div>{modelId}</div>}
           {metrics && <div>{metrics}</div>}
           {stopReason && <div>{stopReason}</div>}
@@ -494,6 +495,20 @@ export function prettyShortChatModelName(model: string | undefined): string {
     if (model.includes('grok-beta')) return 'Grok Beta';
     if (model.includes('grok-vision-beta')) return 'Grok Vision Beta';
   }
+  // [Z.ai]
+  if (model.startsWith('glm-')) {
+    return model
+      .replace('glm-', 'GLM-')
+      .replace('ocr', 'OCR')
+      .replace(/(\d)v/, '$1 V')   // vision suffix: 4.6v → 4.6 V
+      .replace('-flashx', ' FlashX')
+      .replace('-flash', ' Flash')
+      .replace('-airx', ' AirX')
+      .replace('-air', ' Air')
+      .replace('-code', ' Code')
+      .replace(/-x$/, ' X')
+      .replace(/-32b.*$/, ' 32B');
+  }
   // [FireworksAI]
   if (model.includes('accounts/')) {
     const index = model.indexOf('accounts/');
@@ -529,9 +544,9 @@ function _prettyAnthropicModelName(modelId: string): string | null {
                   : subStr.includes('-3') ? '3'
                     : '?';
 
-  if (subStr.includes(`-opus`)) return `Claude ${version} Opus`;
-  if (subStr.includes(`-sonnet`)) return `Claude ${version} Sonnet`;
-  if (subStr.includes(`-haiku`)) return `Claude ${version} Haiku`;
+  if (subStr.includes(`-opus`)) return `Claude Opus ${version}`;
+  if (subStr.includes(`-sonnet`)) return `Claude Sonnet ${version}`;
+  if (subStr.includes(`-haiku`)) return `Claude Haiku ${version}`;
 
   return `Claude ${version}`;
 }

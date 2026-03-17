@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import type { SxProps } from '@mui/joy/styles/types';
-import { Textarea } from '@mui/joy';
+import { Textarea, TextareaProps } from '@mui/joy';
 
 import { useUIPreferencesStore } from '~/common/stores/store-ui';
 
@@ -12,6 +12,7 @@ export function InlineTextarea(props: {
   initialText: string,
   disableAutoSaveOnBlur?: boolean // NOTE: this will disable the enter=newline as well
   placeholder?: string,
+  size?: TextareaProps['size'],
   decolor?: boolean,
   invertedColors?: boolean,
   centerText?: boolean,
@@ -42,8 +43,7 @@ export function InlineTextarea(props: {
     if (e.key === 'Enter') {
       if (e.nativeEvent.isComposing)
         return;
-      const shiftOrAlt = e.shiftKey || e.altKey;
-      if (enterIsNewline ? shiftOrAlt : !shiftOrAlt) {
+      if (enterIsNewline ? e.shiftKey : !e.shiftKey) {
         e.preventDefault();
         props.onEdit(text);
       }
@@ -61,6 +61,7 @@ export function InlineTextarea(props: {
 
   return (
     <Textarea
+      size={props.size}
       variant={props.invertedColors ? 'plain' : 'soft'}
       color={props.decolor ? undefined : props.invertedColors ? 'primary' : 'warning'}
       autoFocus={!props.decolor}

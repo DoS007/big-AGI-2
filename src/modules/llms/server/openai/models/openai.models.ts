@@ -12,6 +12,23 @@ import { fromManualMapping, KnownModel, llmDevCheckModels_DEV, ManualMappings } 
 // OpenAI Model Variants
 export const hardcodedOpenAIVariants: ModelVariantMap = {
 
+  // GPT-5.4 with reasoning disabled (non-thinking) - supports temperature control
+  'gpt-5.4-2026-03-05': {
+    idVariant: '::thinking-none',
+    label: 'GPT-5.4 (No-thinking)',
+    hidden: true, // hidden by default as redundant, user can unhide in settings
+    description: 'Supports temperature control for creative applications. GPT-5.4 with reasoning disabled (reasoning_effort=none).',
+    interfaces: [LLM_IF_OAI_Responses, LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_PromptCaching], // NO LLM_IF_OAI_Reasoning, NO LLM_IF_HOTFIX_NoTemperature
+    parameterSpecs: [
+      { paramId: 'llmVndOaiEffort', enumValues: ['none', 'low', 'medium', 'high', 'xhigh'], initialValue: 'none', hidden: true }, // factory 'none', not changeable
+      { paramId: 'llmVndOaiWebSearchContext' },
+      { paramId: 'llmVndOaiVerbosity' },
+      { paramId: 'llmVndOaiImageGeneration' },
+      { paramId: 'llmVndOaiCodeInterpreter' },
+      { paramId: 'llmForceNoStream' },
+    ],
+  },
+
   // GPT-5.2 with reasoning disabled (non-thinking) - supports temperature control
   // Per https://platform.openai.com/docs/guides/latest-model#gpt-5-2-parameter-compatibility
   // temperature, top_p, logprobs are only supported when reasoning_effort=none
@@ -22,7 +39,7 @@ export const hardcodedOpenAIVariants: ModelVariantMap = {
     description: 'Supports temperature control for creative applications. GPT-5.2 with reasoning disabled (reasoning_effort=none).',
     interfaces: [LLM_IF_OAI_Responses, LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_PromptCaching], // NO LLM_IF_OAI_Reasoning, NO LLM_IF_HOTFIX_NoTemperature
     parameterSpecs: [
-      { paramId: 'llmVndOaiReasoningEffort52', initialValue: 'none', hidden: true }, // factory 'none', not changeable
+      { paramId: 'llmVndOaiEffort', enumValues: ['none', 'low', 'medium', 'high', 'xhigh'], initialValue: 'none', hidden: true }, // factory 'none', not changeable
       { paramId: 'llmVndOaiWebSearchContext' },
       { paramId: 'llmVndOaiVerbosity' },
       { paramId: 'llmVndOaiImageGeneration' },
@@ -40,7 +57,7 @@ export const hardcodedOpenAIVariants: ModelVariantMap = {
   //     // customize this param
   //     { paramId: 'llmVndOaiWebSearchContext', initialValue: 'medium', hidden: true }, // Search enabled by default
   //     // copy other params
-  //     { paramId: 'llmVndOaiReasoningEffort4' },
+  //     { paramId: 'llmVndOaiEffort', enumValues: ['minimal', 'low', 'medium', 'high'] },
   //     { paramId: 'llmVndOaiRestoreMarkdown' },
   //     { paramId: 'llmVndOaiVerbosity' },
   //     { paramId: 'llmVndOaiImageGeneration' },
@@ -73,6 +90,114 @@ const PS_DEEP_RESEARCH = [{ paramId: 'llmVndOaiWebSearchContext' as const, initi
 // - "Structured Outputs" is LLM_IF_OAI_Json
 export const _knownOpenAIChatModels: ManualMappings = [
 
+  /// GPT-5.4 series - Released March 5, 2026
+
+  // GPT-5.4
+  {
+    idPrefix: 'gpt-5.4-2026-03-05',
+    label: 'GPT-5.4 (2026-03-05)',
+    description: 'Most capable and efficient frontier model for professional work. Native computer use, improved reasoning, coding, and agentic workflows with 1M token context.',
+    contextWindow: 1050000,
+    maxCompletionTokens: 128000,
+    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
+    parameterSpecs: [
+      { paramId: 'llmVndOaiEffort', enumValues: ['none', 'low', 'medium', 'high', 'xhigh'], initialValue: 'medium' },
+      { paramId: 'llmVndOaiWebSearchContext' },
+      { paramId: 'llmVndOaiVerbosity' },
+      { paramId: 'llmVndOaiImageGeneration' },
+      { paramId: 'llmVndOaiCodeInterpreter' },
+      { paramId: 'llmForceNoStream' },
+    ],
+    chatPrice: { input: 2.5, cache: { cType: 'oai-ac', read: 0.25 }, output: 15 },
+    // benchmark: TBD
+  },
+  {
+    idPrefix: 'gpt-5.4',
+    label: 'GPT-5.4',
+    symLink: 'gpt-5.4-2026-03-05',
+  },
+
+  // GPT-5.4 Pro
+  {
+    idPrefix: 'gpt-5.4-pro-2026-03-05',
+    label: 'GPT-5.4 Pro (2026-03-05)',
+    description: 'Most capable model for complex tasks. Uses more compute for smarter, more precise responses on difficult problems.',
+    contextWindow: 1050000,
+    maxCompletionTokens: 272000,
+    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_MIN, LLM_IF_OAI_Reasoning, LLM_IF_HOTFIX_NoTemperature],
+    parameterSpecs: [
+      { paramId: 'llmVndOaiEffort', enumValues: ['medium', 'high', 'xhigh'] },
+      { paramId: 'llmVndOaiWebSearchContext' },
+      { paramId: 'llmVndOaiVerbosity' },
+      { paramId: 'llmVndOaiImageGeneration' },
+      { paramId: 'llmForceNoStream' },
+    ],
+    chatPrice: { input: 30, output: 180 },
+    // benchmark: TBD
+  },
+  {
+    idPrefix: 'gpt-5.4-pro',
+    label: 'GPT-5.4 Pro',
+    symLink: 'gpt-5.4-pro-2026-03-05',
+  },
+
+
+  /// GPT-5.3 series
+
+  // GPT-5.3 Codex - Released February 5, 2026
+  {
+    idPrefix: 'gpt-5.3-codex',
+    label: 'GPT-5.3 Codex',
+    description: 'Most capable agentic coding model. Combines frontier coding performance of GPT-5.2-Codex with reasoning and professional knowledge of GPT-5.2. ~25% faster.',
+    contextWindow: 400000,
+    maxCompletionTokens: 128000,
+    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
+    parameterSpecs: [
+      { paramId: 'llmVndOaiEffort', enumValues: ['none', 'low', 'medium', 'high', 'xhigh'] },
+      { paramId: 'llmVndOaiWebSearchContext' },
+      { paramId: 'llmVndOaiVerbosity' },
+      { paramId: 'llmVndOaiImageGeneration' },
+      { paramId: 'llmForceNoStream' },
+    ],
+    chatPrice: { input: 1.75, cache: { cType: 'oai-ac', read: 0.175 }, output: 14 },
+    // benchmark: TBD
+  },
+
+  // GPT-5.3 Codex Spark - Research preview, text-only, optimized for real-time coding iteration
+  {
+    hidden: true, // Research preview, ChatGPT Pro only - API access limited to design partners
+    idPrefix: 'gpt-5.3-codex-spark',
+    label: 'GPT-5.3 Codex Spark',
+    description: 'Text-only research preview optimized for real-time coding iteration. Delivers 1000+ tokens/sec on low-latency hardware.',
+    contextWindow: 128000,
+    maxCompletionTokens: 16384,
+    interfaces: [LLM_IF_OAI_Responses, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_PromptCaching, LLM_IF_OAI_Reasoning, LLM_IF_HOTFIX_NoTemperature, LLM_IF_HOTFIX_StripImages],
+    parameterSpecs: [
+      { paramId: 'llmVndOaiEffort', enumValues: ['low', 'medium', 'high'] },
+      { paramId: 'llmForceNoStream' },
+    ],
+    // chatPrice: TBD - separate usage limits, not standard token pricing
+    // benchmark: TBD
+  },
+
+  // GPT-5.3 Chat Latest - Released March 4, 2026
+  {
+    idPrefix: 'gpt-5.3-chat-latest',
+    label: 'GPT-5.3 Instant',
+    description: 'GPT-5.3 model powering ChatGPT. Points to the GPT-5.3 Instant snapshot currently used in ChatGPT.',
+    contextWindow: 128000,
+    maxCompletionTokens: 16384,
+    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE, LLM_IF_HOTFIX_NoTemperature],
+    parameterSpecs: [
+      { paramId: 'llmVndOaiWebSearchContext' },
+      { paramId: 'llmVndOaiImageGeneration' },
+      { paramId: 'llmVndOaiCodeInterpreter' },
+    ],
+    chatPrice: { input: 1.75, cache: { cType: 'oai-ac', read: 0.175 }, output: 14 },
+    // benchmark: TBD
+  },
+
+
   /// GPT-5.2 series - Released December 11, 2025
 
   // GPT-5.2
@@ -84,7 +209,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 128000,
     interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
     parameterSpecs: [
-      { paramId: 'llmVndOaiReasoningEffort52', initialValue: 'medium' /* our decision: set to medium to have thinking - clones can set to 'none' to have temperature */ },
+      { paramId: 'llmVndOaiEffort', enumValues: ['none', 'low', 'medium', 'high', 'xhigh'], initialValue: 'medium' /* our decision: set to medium to have thinking - clones can set to 'none' to have temperature */ },
       { paramId: 'llmVndOaiWebSearchContext' },
       { paramId: 'llmVndOaiVerbosity' },
       { paramId: 'llmVndOaiImageGeneration' },
@@ -110,7 +235,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
     parameterSpecs: [
       { paramId: 'llmForceNoStream' },
-      { paramId: 'llmVndOaiReasoningEffort52' },
+      { paramId: 'llmVndOaiEffort', enumValues: ['low', 'medium', 'high', 'xhigh'] },
       { paramId: 'llmVndOaiWebSearchContext' },
     ],
     chatPrice: { input: 1.75, cache: { cType: 'oai-ac', read: 0.175 }, output: 14 },
@@ -144,7 +269,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 272000,
     interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_MIN, LLM_IF_OAI_Reasoning, LLM_IF_HOTFIX_NoTemperature],
     parameterSpecs: [
-      { paramId: 'llmVndOaiReasoningEffort52Pro' },
+      { paramId: 'llmVndOaiEffort', enumValues: ['medium', 'high', 'xhigh'] },
       { paramId: 'llmVndOaiWebSearchContext' },
       { paramId: 'llmVndOaiVerbosity' },
       { paramId: 'llmVndOaiImageGeneration' },
@@ -171,7 +296,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 128000,
     interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
     parameterSpecs: [
-      { paramId: 'llmVndOaiReasoningEffort4' }, { paramId: 'llmVndOaiWebSearchContext' },
+      { paramId: 'llmVndOaiEffort', enumValues: ['none', 'low', 'medium', 'high'] }, { paramId: 'llmVndOaiWebSearchContext' },
       { paramId: 'llmVndOaiVerbosity' },
       { paramId: 'llmVndOaiImageGeneration' },
       { paramId: 'llmVndOaiCodeInterpreter' },
@@ -214,7 +339,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 128000,
     interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
     parameterSpecs: [
-      { paramId: 'llmVndOaiReasoningEffort4' },
+      { paramId: 'llmVndOaiEffort', enumValues: ['low', 'medium', 'high', 'xhigh'] },
       { paramId: 'llmVndOaiWebSearchContext' },
       { paramId: 'llmForceNoStream' },
     ],
@@ -230,7 +355,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 128000,
     interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
     parameterSpecs: [
-      { paramId: 'llmVndOaiReasoningEffort' }, // low, medium, high (no minimal)
+      { paramId: 'llmVndOaiEffort', enumValues: ['low', 'medium', 'high'] }, // low, medium, high (no minimal)
       { paramId: 'llmVndOaiWebSearchContext' },
       { paramId: 'llmForceNoStream' },
     ],
@@ -246,7 +371,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 128000,
     interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
     parameterSpecs: [
-      { paramId: 'llmVndOaiReasoningEffort' }, // low, medium, high (no minimal)
+      { paramId: 'llmVndOaiEffort', enumValues: ['low', 'medium', 'high'] }, // low, medium, high (no minimal)
       { paramId: 'llmVndOaiWebSearchContext' },
       { paramId: 'llmForceNoStream' },
     ],
@@ -266,7 +391,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 128000,
     interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
     parameterSpecs: [
-      { paramId: 'llmVndOaiReasoningEffort4' }, { paramId: 'llmVndOaiWebSearchContext' },
+      { paramId: 'llmVndOaiEffort', enumValues: ['minimal', 'low', 'medium', 'high'] }, { paramId: 'llmVndOaiWebSearchContext' },
       { paramId: 'llmVndOaiVerbosity' }, // gpt-5-class nets have verbosity control
       { paramId: 'llmVndOaiImageGeneration' }, // image generation capability
       { paramId: 'llmVndOaiCodeInterpreter' }, // code execution in sandboxed container
@@ -321,7 +446,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 128000,
     interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
     parameterSpecs: [
-      { paramId: 'llmVndOaiReasoningEffort' }, // works
+      { paramId: 'llmVndOaiEffort', enumValues: ['low', 'medium', 'high'] }, // works
       { paramId: 'llmVndOaiWebSearchContext' }, // works, although is not triggered often
       // { paramId: 'llmVndOaiRestoreMarkdown', initialValue: false }, // since this is for code, let the prompt dictate markdown usage rather than us injecting
       { paramId: 'llmForceNoStream' },
@@ -356,7 +481,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     contextWindow: 400000,
     maxCompletionTokens: 128000,
     interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
-    parameterSpecs: [{ paramId: 'llmVndOaiReasoningEffort4' }, { paramId: 'llmVndOaiWebSearchContext' }, { paramId: 'llmVndOaiVerbosity' }, { paramId: 'llmVndOaiImageGeneration' }, { paramId: 'llmForceNoStream' }],
+    parameterSpecs: [{ paramId: 'llmVndOaiEffort', enumValues: ['minimal', 'low', 'medium', 'high'] }, { paramId: 'llmVndOaiWebSearchContext' }, { paramId: 'llmVndOaiVerbosity' }, { paramId: 'llmVndOaiImageGeneration' }, { paramId: 'llmForceNoStream' }],
     chatPrice: { input: 0.25, cache: { cType: 'oai-ac', read: 0.025 }, output: 2 },
     benchmark: { cbaElo: 1390 }, // gpt-5-mini-high
   },
@@ -374,7 +499,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     contextWindow: 400000,
     maxCompletionTokens: 128000,
     interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
-    parameterSpecs: [{ paramId: 'llmVndOaiReasoningEffort4' }, { paramId: 'llmVndOaiWebSearchContext' }, { paramId: 'llmVndOaiVerbosity' }, { paramId: 'llmVndOaiImageGeneration' }],
+    parameterSpecs: [{ paramId: 'llmVndOaiEffort', enumValues: ['minimal', 'low', 'medium', 'high'] }, { paramId: 'llmVndOaiWebSearchContext' }, { paramId: 'llmVndOaiVerbosity' }, { paramId: 'llmVndOaiImageGeneration' }],
     chatPrice: { input: 0.05, cache: { cType: 'oai-ac', read: 0.005 }, output: 0.4 },
     benchmark: { cbaElo: 1338 }, // gpt-5-nano-high
   },
@@ -382,24 +507,6 @@ export const _knownOpenAIChatModels: ManualMappings = [
     idPrefix: 'gpt-5-nano',
     label: 'GPT-5 Nano',
     symLink: 'gpt-5-nano-2025-08-07',
-  },
-
-  /// GPT-5.3 Codex - Released February 5, 2026 (API access coming soon)
-  {
-    hidden: true, // API access not yet available - rolling out soon
-    idPrefix: 'gpt-5.3-codex',
-    label: 'GPT-5.3 Codex',
-    description: 'Most capable agentic coding model. Combines frontier coding performance of GPT-5.2-Codex with reasoning and professional knowledge of GPT-5.2. ~25% faster.',
-    contextWindow: 400000,
-    maxCompletionTokens: 128000,
-    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
-    parameterSpecs: [
-      { paramId: 'llmVndOaiReasoningEffort52' },
-      { paramId: 'llmVndOaiWebSearchContext' },
-      { paramId: 'llmForceNoStream' },
-    ],
-    // chatPrice: { input: 1.75, cache: { cType: 'oai-ac', read: 0.175 }, output: 14 }, // estimated from gpt-5.2-codex pricing
-    // benchmark: TBD
   },
 
 
@@ -412,7 +519,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     maxCompletionTokens: 32768,
     interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
     parameterSpecs: [
-      { paramId: 'llmVndOaiReasoningEffort' },
+      { paramId: 'llmVndOaiEffort', enumValues: ['low', 'medium', 'high'] },
       { paramId: 'llmForceNoStream' },
     ],
     // chatPrice: TBD - unknown pricing
@@ -439,18 +546,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     label: 'Computer Use Preview',
     symLink: 'computer-use-preview-2025-03-11',
   },
-  {
-    hidden: true, // yield to more capable
-    idPrefix: 'codex-mini-latest',
-    label: 'Codex Mini Latest',
-    description: 'Fast reasoning model optimized for the Codex CLI. A fine-tuned version of o4-mini for low-latency code Q&A and editing.',
-    contextWindow: 200000,
-    maxCompletionTokens: 100000,
-    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
-    parameterSpecs: [{ paramId: 'llmVndOaiReasoningEffort' }],
-    chatPrice: { input: 1.5, cache: { cType: 'oai-ac', read: 0.375 }, output: 6 },
-    isLegacy: true, // Deprecated January 16, 2026.
-  },
+  // codex-mini-latest: removed, shut down February 12, 2026
 
 
   /// Reasoning models - o-series
@@ -462,7 +558,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     description: 'Faster, more affordable deep research model for complex, multi-step research tasks.',
     contextWindow: 200000,
     maxCompletionTokens: 100000,
-    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON],
+    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
     parameterSpecs: PS_DEEP_RESEARCH,
     chatPrice: { input: 2, cache: { cType: 'oai-ac', read: 0.5 }, output: 8 },
   },
@@ -480,7 +576,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     contextWindow: 200000,
     maxCompletionTokens: 100000,
     interfaces: IFS_CHAT_CACHE_REASON,
-    parameterSpecs: [{ paramId: 'llmVndOaiReasoningEffort' }],
+    parameterSpecs: [{ paramId: 'llmVndOaiEffort', enumValues: ['low', 'medium', 'high', 'xhigh'] }],
     chatPrice: { input: 1.1, cache: { cType: 'oai-ac', read: 0.275 }, output: 4.4 },
     benchmark: { cbaElo: 1391 }, // o4-mini-2025-04-16
   },
@@ -497,7 +593,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     description: 'Our most powerful deep research model for complex, multi-step research tasks.',
     contextWindow: 200000,
     maxCompletionTokens: 100000,
-    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON],
+    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
     parameterSpecs: PS_DEEP_RESEARCH,
     chatPrice: { input: 10, cache: { cType: 'oai-ac', read: 2.5 }, output: 40 },
   },
@@ -515,7 +611,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     contextWindow: 200000,
     maxCompletionTokens: 100000,
     interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_MIN, LLM_IF_OAI_Reasoning, LLM_IF_HOTFIX_NoTemperature],
-    parameterSpecs: [{ paramId: 'llmVndOaiReasoningEffort' }, { paramId: 'llmVndOaiWebSearchContext' }, { paramId: 'llmVndOaiImageGeneration' }, { paramId: 'llmForceNoStream' }],
+    parameterSpecs: [{ paramId: 'llmVndOaiEffort', enumValues: ['low', 'medium', 'high'] }, { paramId: 'llmVndOaiWebSearchContext' }, { paramId: 'llmVndOaiImageGeneration' }, { paramId: 'llmForceNoStream' }],
     chatPrice: { input: 20, output: 80 },
     // benchmark: has not been measured yet
   },
@@ -533,7 +629,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     contextWindow: 200000,
     maxCompletionTokens: 100000,
     interfaces: IFS_CHAT_CACHE_REASON,
-    parameterSpecs: [{ paramId: 'llmVndOaiReasoningEffort' }, { paramId: 'llmForceNoStream' }],
+    parameterSpecs: [{ paramId: 'llmVndOaiEffort', enumValues: ['low', 'medium', 'high', 'xhigh'] }, { paramId: 'llmForceNoStream' }],
     chatPrice: { input: 2, cache: { cType: 'oai-ac', read: 0.5 }, output: 8 },
     benchmark: { cbaElo: 1433 }, // o3-2025-04-16
   },
@@ -551,7 +647,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     contextWindow: 200000,
     maxCompletionTokens: 100000,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_PromptCaching, LLM_IF_OAI_Reasoning, LLM_IF_HOTFIX_StripImages],
-    parameterSpecs: [{ paramId: 'llmVndOaiReasoningEffort' }],
+    parameterSpecs: [{ paramId: 'llmVndOaiEffort', enumValues: ['low', 'medium', 'high', 'xhigh'] }],
     chatPrice: { input: 1.1, cache: { cType: 'oai-ac', read: 0.55 }, output: 4.4 },
     benchmark: { cbaElo: 1348 }, // o3-mini
   },
@@ -570,7 +666,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     contextWindow: 200000,
     maxCompletionTokens: 100000,
     interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_MIN, LLM_IF_OAI_Reasoning, LLM_IF_HOTFIX_NoTemperature],
-    parameterSpecs: [{ paramId: 'llmVndOaiReasoningEffort' }, { paramId: 'llmForceNoStream' }],
+    parameterSpecs: [{ paramId: 'llmVndOaiEffort', enumValues: ['low', 'medium', 'high'] }, { paramId: 'llmForceNoStream' }],
     chatPrice: { input: 150, output: 600 },
     // benchmark: has not been measured yet by third parties
   },
@@ -588,7 +684,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     contextWindow: 200000,
     maxCompletionTokens: 100000,
     interfaces: IFS_CHAT_CACHE_REASON,
-    parameterSpecs: [{ paramId: 'llmVndOaiReasoningEffort' }, { paramId: 'llmVndOaiRestoreMarkdown' }],
+    parameterSpecs: [{ paramId: 'llmVndOaiEffort', enumValues: ['low', 'medium', 'high', 'xhigh'] }, { paramId: 'llmVndOaiRestoreMarkdown' }],
     chatPrice: { input: 15, cache: { cType: 'oai-ac', read: 7.5 }, output: 60 },
     benchmark: { cbaElo: 1402 }, // o1-2024-12-17
   },
@@ -654,6 +750,18 @@ export const _knownOpenAIChatModels: ManualMappings = [
 
 
   /// GPT-Audio series - General availability audio models
+
+  // gpt-audio-1.5
+  {
+    idPrefix: 'gpt-audio-1.5',
+    label: 'GPT Audio 1.5',
+    description: 'Best voice model for audio in, audio out with Chat Completions. Accepts audio inputs and outputs.',
+    contextWindow: 128000,
+    maxCompletionTokens: 16384,
+    interfaces: IFS_GPT_AUDIO,
+    chatPrice: { input: 2.5, output: 10 },
+    // benchmark: TBD
+  },
 
   // gpt-audio
   {
@@ -739,17 +847,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
     label: 'GPT-4o',
     symLink: 'gpt-4o-2024-08-06',
   },
-  {
-    idPrefix: 'chatgpt-4o-latest',
-    label: 'ChatGPT-4o Latest',
-    description: 'The chatgpt-4o-latest model version continuously points to the version of GPT-4o used in ChatGPT, and is updated frequently.',
-    contextWindow: 128000,
-    maxCompletionTokens: 16384,
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Json], // does not support Tools
-    chatPrice: { input: 5, output: 15 },
-    benchmark: { cbaElo: 1443 }, // chatgpt-4o-latest-20250326
-    isLegacy: true, // Deprecated February 17, 2026.
-  },
+  // chatgpt-4o-latest: removed, shut down February 17, 2026
 
   // GPT-4o Search Preview: When using Chat Completions, the model always retrieves information from the web before responding to your query.
   {
@@ -1005,11 +1103,14 @@ const openAIModelsDenyList: string[] = [
   '4o-mini-realtime',
   'gpt-realtime',
   'gpt-realtime-mini',
+  'gpt-realtime-1.5',
 
   // [OpenAI, 2025-03-11] FIXME: NOT YET SUPPORTED - "RESPONSES API"
   'computer-use-preview', 'computer-use-preview-2025-03-11', // FIXME: support these
 
   // [OpenAI Deprecations] Explicitly deny shut-down model IDs that we removed
+  'codex-mini-latest', // shut down February 12, 2026
+  'chatgpt-4o-latest', // shut down February 17, 2026
   // 'gpt-4.5-preview',
   // 'o1-preview',
   // 'gpt-4-32k',
@@ -1035,11 +1136,17 @@ const openAIModelsDenyList: string[] = [
   // STT models: /v1/audio/transcriptions, /v1/audio/translations
   'whisper-1', 'gpt-4o-transcribe', 'gpt-4o-mini-transcribe', // FIXME: support these
 
+  // Image-focused chat models (non-standard image output pricing)
+  'gpt-5-image', 'gpt-5-image-mini',
+
   // Image models: /v1/images/generations
   'gpt-image-1.5', 'chatgpt-image-latest', 'gpt-image-1', 'gpt-image-1-mini', 'dall-e-3', 'dall-e-2',
 
   // Video models: /v1/videos
   'sora-2-pro', 'sora-2',
+
+  // Safety/moderation models
+  'gpt-oss-safeguard',
 
   // Moderation models
   'omni-moderation-latest', 'omni-moderation-2024-09-26', 'text-moderation-latest',
@@ -1059,8 +1166,19 @@ export function openAIInjectVariants(acc: ModelDescriptionSchema[], model: Model
 
 
 const _manualOrderingIdPrefixes = [
+  // GPT-5.4
+  'gpt-5.4-20',
+  'gpt-5.4-pro-20',
+  'gpt-5.4-pro',
+  'gpt-5.4-chat-latest',
+  'gpt-5.4',
   // GPT-5.3
+  'gpt-5.3-20',
+  'gpt-5.3-pro-20',
+  'gpt-5.3-pro',
+  'gpt-5.3-codex-spark',
   'gpt-5.3-codex',
+  'gpt-5.3-chat-latest',
   // GPT-5.2
   'gpt-5.2-20',
   'gpt-5.2-pro-20',
@@ -1121,6 +1239,7 @@ const _manualOrderingIdPrefixes = [
   'gpt-4.1-nano',
   'gpt-4.1',
   // 4o-derived?
+  'gpt-audio-1.5',
   'gpt-audio-2',
   'gpt-4o-audio-preview',
   'gpt-audio-mini-',
@@ -1232,7 +1351,7 @@ const _ORT_OAI_IF_ALLOWLIST: ReadonlySet<string> = new Set([
   LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Reasoning,
 ] as const);
 const _ORT_OAI_PARAM_ALLOWLIST: ReadonlySet<string> = new Set([
-  'llmVndOaiReasoningEffort', 'llmVndOaiReasoningEffort4', 'llmVndOaiReasoningEffort52', 'llmVndOaiReasoningEffort52Pro', // reasoning
+  'llmVndOaiEffort', // OpenAI reasoning effort
   'llmVndOaiVerbosity', // verbosity
   // 'llmVndOaiImageGeneration', // OR does NOT support image gen with OAI yet (2026-02-06)
 ] as const satisfies DModelParameterId[]);
@@ -1246,6 +1365,8 @@ export function llmOrtOaiLookup(orModelName: string): OrtVendorLookupResult | un
   // typemap to known models
   const ortOaiRefMap: Record<string, string | null> = {
     // renames
+    'gpt-5.4-chat': 'gpt-5.4-2026-03-05', // no chat-latest yet, map to snapshot
+    'gpt-5.3-chat': 'gpt-5.3-chat-latest',
     'gpt-5.2-chat': 'gpt-5.2-chat-latest',
     'gpt-5.1-chat': 'gpt-5.1-chat-latest',
     'gpt-5-chat': 'gpt-5-chat-latest',
@@ -1276,7 +1397,7 @@ export function llmOrtOaiLookup(orModelName: string): OrtVendorLookupResult | un
     ?.filter(spec => _ORT_OAI_PARAM_ALLOWLIST.has(spec.paramId))
     .map(spec => ({ ...spec }));
 
-  // initialTemperature: not set — OpenAI models use the global fallback (0.5);
+  // initialTemperature: not set - OpenAI models use the global fallback (0.5);
   // NoTemperature models are handled client-side via LLM_IF_HOTFIX_NoTemperature (not propagated to OR)
   return { interfaces, parameterSpecs };
 }

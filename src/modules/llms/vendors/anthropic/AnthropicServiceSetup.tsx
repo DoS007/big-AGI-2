@@ -90,7 +90,7 @@ export function AnthropicServiceSetup(props: { serviceId: DModelsServiceId }) {
     {showAdvanced && <FormTextField
       autoCompleteId='anthropic-host'
       title='API Host'
-      description={<>e.g., <Link level='body-sm' href='https://github.com/enricoros/big-agi/blob/main/docs/config-aws-bedrock.md' target='_blank'>bedrock-claude</Link></>}
+      description='For proxies or custom endpoints'
       placeholder='deployment.service.region.amazonaws.com'
       isError={false}
       value={anthropicHost || ''}
@@ -108,7 +108,7 @@ export function AnthropicServiceSetup(props: { serviceId: DModelsServiceId }) {
 
     {(showAdvanced || !!anthropicInferenceGeo) && <FormSwitchControl
       title='US-only Inference' on='US' off='Off'
-      tooltip='Restrict model inference to US data centers at 1.1x pricing. Supported on Claude Opus 4.6 and newer models only — older models will return an error.'
+      tooltip='Restrict model inference to US data centers at 1.1x pricing. Supported on Claude Opus 4.6 and newer models only - older models will return an error.'
       description={anthropicInferenceGeo ? 'US region (1.1x)' : 'Global (default)'}
       checked={!!anthropicInferenceGeo}
       onChange={on => updateSettings({ inferenceGeoUS: on })}

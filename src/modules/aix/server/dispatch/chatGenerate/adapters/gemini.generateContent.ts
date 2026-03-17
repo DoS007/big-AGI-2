@@ -15,7 +15,10 @@ const hotFixReplaceEmptyMessagesWithEmptyTextPart = true;
 const GEMINI_BYPASS_THOUGHT_SIGNATURE = 'context_engineering_is_the_way_to_go';
 const MODELS_REQUIRING_THOUGHT_SIGNATURE = [
   'nano-banana-pro',
-  'gemini-3-pro-image-preview',
+  // preview, e.g.:
+  // 'gemini-3.1-flash-image-preview',
+  // 'gemini-3-pro-image-preview',
+  '-image-preview', // catch-all for image (nano banana) preview models
 ] as const;
 
 
@@ -96,21 +99,25 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
   }
 
   // Thinking models: thinking budget and show thoughts
-  if (model.vndGeminiShowThoughts === true || model.vndGeminiThinkingBudget !== undefined || model.vndGeminiThinkingLevel) {
+  const thinkingLevel = model.reasoningEffort; // ?? model.vndGeminiThinkingLevel;
+  if (thinkingLevel === 'none' || thinkingLevel === 'xhigh' || thinkingLevel === 'max') // domain validation
+    throw new Error(`Gemini API does not support '${thinkingLevel}' thinking level`);
+
+  if (thinkingLevel || model.vndGeminiThinkingBudget !== undefined /*|| model.vndGeminiShowThoughts === true*/) {
     const thinkingConfig: Exclude<TRequest['generationConfig'], undefined>['thinkingConfig'] = {};
 
     // This shows mainly 'summaries' of thoughts, and we enable it for most cases where thinking is requested
-    if (model.vndGeminiShowThoughts || (model.vndGeminiThinkingBudget ?? 0) > 1 || model.vndGeminiThinkingLevel === 'high' || model.vndGeminiThinkingLevel === 'medium')
+    if (thinkingLevel || (model.vndGeminiThinkingBudget ?? 0) > 1 /*|| model.vndGeminiShowThoughts === true*/)
       thinkingConfig.includeThoughts = true;
 
     // [Gemini 3, 2025-11-18] Thinking Level (replaces thinkingBudget for Gemini 3)
     // CRITICAL: Cannot use both thinkingLevel and thinkingBudget (400 error)
-    if (model.vndGeminiThinkingLevel) {
-      // - Gemini 3 Pro: supports 'high', 'low'
+    if (thinkingLevel) {
       // - Gemini 3 Flash: supports 'high', 'medium', 'low', 'minimal'
-      thinkingConfig.thinkingLevel = model.vndGeminiThinkingLevel;
+      // - Gemini 3 Pro: supports 'high', 'low'
+      thinkingConfig.thinkingLevel = thinkingLevel;
     }
-    // [Gemini 2.x] Thinking Budget (0 disables thinking explicitly)
+    // [Gemini 2.x] Thinking Budget (0 disables thinking explicitly) - mutually exclusive with thinkingLevel
     else if (model.vndGeminiThinkingBudget !== undefined) {
       if (model.vndGeminiThinkingBudget > 0)
         thinkingConfig.includeThoughts = true;
@@ -225,7 +232,8 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
   }
 
   // [Gemini, 2025-08-18] URL Context: add tool when enabled
-  if (model.vndGeminiUrlContext === 'auto' && !isFamilyNanoBanana && !skipHostedToolsDueToCustomTools) {
+  const disableUrlContext = isFamilyNanoBanana /* Nano Bananas don't fetch */ || skipHostedToolsDueToCustomTools;
+  if (model.vndGeminiUrlContext === 'auto' && !disableUrlContext) {
     if (!payload.tools) payload.tools = [];
 
     // Build the URL Context tool configuration (empty object)

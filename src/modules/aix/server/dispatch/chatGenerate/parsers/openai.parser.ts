@@ -41,6 +41,9 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
   let processedSearchResultUrls = new Set<string>();
   // NOTE: could compute rate (tok/s) from the first textful event to the last (to ignore the prefill time)
 
+  // [OpenRouter] Provider routing info - extracted from raw JSON before Zod strips it
+  let openRouterProviderInfraSent = false;
+
   // Supporting structure to accumulate the assistant message
   const accumulator: {
     content: string | null;
@@ -87,6 +90,12 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
       // NOTE: these sort of messages have no useful data and would break the parser here
       // console.log('AIX: OpenAI-dispatch: missing-choices chunk skipped', chunkData);
       return;
+    }
+
+    // [OpenRouter] Extract provider routing info (before Zod parsing strips unknown fields)
+    if (!openRouterProviderInfraSent && typeof chunkData?.provider === 'string' && chunkData.provider) {
+      openRouterProviderInfraSent = true;
+      pt.setProviderInfraLabel(chunkData.provider);
     }
 
     const json = OpenAIWire_API_Chat_Completions.ChunkResponse_schema.parse(chunkData);
@@ -195,7 +204,7 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
 
       // delta: Reasoning Content [Deepseek, 2025-01-20]
       let deltaHasReasoning = false;
-      if (typeof delta.reasoning_content === 'string') {
+      if (typeof delta.reasoning_content === 'string' && (delta.reasoning_content || !delta.content)) {
 
         pt.appendReasoningText(delta.reasoning_content);
         deltaHasReasoning = true;
@@ -206,9 +215,12 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
 
         for (const reasoningDetail of delta.reasoning_details) {
           // Extract text from reasoning blocks based on type
-          if (reasoningDetail.type === 'reasoning.text' && typeof reasoningDetail.text === 'string') {
-            pt.appendReasoningText(reasoningDetail.text);
-            deltaHasReasoning = true;
+          if (reasoningDetail.type === 'reasoning.text') {
+            if (typeof reasoningDetail.text === 'string') {
+              pt.appendReasoningText(reasoningDetail.text);
+              deltaHasReasoning = true;
+            }
+            // else: empty reasoning chunk, e.g. "{ type: 'reasoning.text' }", skip
           }
           // Summaries can also be shown as reasoning
           else if (reasoningDetail.type === 'reasoning.summary' && typeof reasoningDetail.summary === 'string') {
@@ -344,6 +356,8 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
                 // OpenAI sends PCM16 audio data that needs to be converted to WAV
                 const a = openaiConvertPCM16ToWAV(acc.data);
                 pt.appendAudioInline(a.mimeType, a.base64Data, acc.transcript || 'OpenAI Generated Audio', `OpenAI ${json.model || ''}`.trim(), a.durationMs);
+                // Audio models don't send finish_reason; treat successful audio completion as 'ok'
+                pt.setTokenStopReason('ok');
               } catch (error) {
                 console.warn('[OpenAI] Failed to process streaming audio:', error);
                 pt.setDialectTerminatingIssue(`Failed to process audio: ${error}`, null, 'srv-warn');
@@ -372,9 +386,14 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
 
       // Token Stop Reason - usually missing in all but the last chunk, but we don't rely on it
       if (finish_reason) {
-        const tokenStopReason = _fromOpenAIFinishReason(finish_reason);
-        if (tokenStopReason !== null)
-          pt.setTokenStopReason(tokenStopReason);
+        // [Z.ai, 2026-02-26] 'network_error' is an upstream error, not a normal stop reason
+        if (finish_reason === 'network_error')
+          pt.setDialectTerminatingIssue('Upstream network error.', IssueSymbols.Generic, 'srv-warn');
+        else {
+          const tokenStopReason = _fromOpenAIFinishReason(finish_reason);
+          if (tokenStopReason !== null)
+            pt.setTokenStopReason(tokenStopReason);
+        }
       }
 
       // Note: not needed anymore - Workaround for implementations that don't send the [DONE] event
@@ -405,6 +424,10 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
     // [OpenAI] we don't know yet if warning messages are sent in non-streaming - for now we log
     if (completeData.warning)
       console.log('AIX: OpenAI-dispatch-NS warning:', completeData.warning);
+
+    // [OpenRouter] Extract provider routing info (before Zod parsing strips unknown fields)
+    if (typeof completeData?.provider === 'string' && completeData.provider)
+      pt.setProviderInfraLabel(completeData.provider);
 
     // Parse the complete response
 
@@ -474,8 +497,10 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
       // [OpenRouter, 2025-01-20] Handle structured reasoning_details
       if (Array.isArray(message.reasoning_details)) {
         for (const reasoningDetail of message.reasoning_details) {
-          if (reasoningDetail.type === 'reasoning.text' && typeof reasoningDetail.text === 'string') {
-            pt.appendReasoningText(reasoningDetail.text);
+          if (reasoningDetail.type === 'reasoning.text') {
+            if (typeof reasoningDetail.text === 'string')
+              pt.appendReasoningText(reasoningDetail.text);
+            // else: empty reasoning chunk, e.g. "{ type: 'reasoning.text' }", skip
           } else if (reasoningDetail.type === 'reasoning.summary' && typeof reasoningDetail.summary === 'string') {
             // pt.appendReasoningText(`[Summary] ${reasoningDetail.summary}`);
             pt.appendReasoningText(reasoningDetail.summary);
@@ -502,9 +527,14 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
       } // .choices.tool_calls[]
 
       // Token Stop Reason - expected to be set
-      const tokenStopReason = _fromOpenAIFinishReason(finish_reason);
-      if (tokenStopReason !== null)
-        pt.setTokenStopReason(tokenStopReason);
+      // [Z.ai, 2026-02-26] 'network_error' is an upstream error, not a normal stop reason
+      if (finish_reason === 'network_error')
+        pt.setDialectTerminatingIssue('Upstream network error.', IssueSymbols.Generic, 'srv-log');
+      else {
+        const tokenStopReason = _fromOpenAIFinishReason(finish_reason);
+        if (tokenStopReason !== null)
+          pt.setTokenStopReason(tokenStopReason);
+      }
 
       // [OpenAI, 2025-03-11] message: Annotations[].url_citation
       if (message.annotations !== undefined) {
@@ -594,6 +624,7 @@ function _fromOpenAIFinishReason(finish_reason: string | null | undefined) {
     case 'end_turn': // [OpenRouter] Anthropic Claude 3.5 backend
     case 'COMPLETE': // [OpenRouter] Command R+
     case 'eos': // [OpenRouter] Phind: CodeLlama
+    case 'STOP': // [TLUS?]
       return 'ok';
 
     // [OpenAI] finished due to requesting tool+ to be called
@@ -610,7 +641,7 @@ function _fromOpenAIFinishReason(finish_reason: string | null | undefined) {
   }
 
   // Developers: show more finish reasons (not under flag for now, so we can add to the supported set)
-  console.log('AIX: OpenAI-dispatch unexpected finish_reason:', finish_reason);
+  console.warn('AIX: OpenAI-dispatch unexpected finish_reason:', finish_reason);
   return null;
 }
 

@@ -42,7 +42,7 @@ export class RequestRetryError extends Error {
  * Retries entire operation when RequestRetryError is thrown (e.g., Anthropic overloaded_error).
  */
 export async function* executeChatGenerateWithRetry(
-  dispatchCreatorFn: () => ChatGenerateDispatch,
+  dispatchCreatorFn: () => Promise<ChatGenerateDispatch>,
   streaming: boolean,
   abortSignal: AbortSignal,
   _d: AixDebugObject,
@@ -64,6 +64,10 @@ export async function* executeChatGenerateWithRetry(
 
       return;
     } catch (error: any) {
+
+      // CSF - pass through CSF AbortErrors (not needed, we do it client-side, aka outer-loop)
+      // if (error instanceof DOMException && error.name === 'AbortError')
+      //   throw error; // expected abort - pass through to be handled by parent loop and converted to terminating particle
 
       // NOTE: executeChatGenerate only throws RequestRetryError. All other errors (abort, network, parsing)
       // are handled internally with terminating particles. However we do a defensive check here just in case.

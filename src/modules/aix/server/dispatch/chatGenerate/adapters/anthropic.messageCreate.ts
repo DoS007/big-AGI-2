@@ -7,6 +7,8 @@ import { aixSpillShallFlush, aixSpillSystemToUser, approxDocPart_To_String, appr
 
 
 // configuration
+// const DEFAULT_WEB_FETCH_MAX_USES = 5; // we don't set a default anymore, we let it be
+// const DEFAULT_WEB_SEARCH_MAX_USES = 10; // we don't set a default anymore, we let it be
 const hotFixImagePartsFirst = true;
 const hotFixMapModelImagesToUser = true;
 const hotFixDisableThinkingWhenToolsForced = true; // "Thinking may not be enabled when tool_choice forces tool use."
@@ -171,10 +173,13 @@ export function aixToAnthropicMessageCreate(model: AixAPI_Model, _chatGenerate: 
   }
 
   // [Anthropic] Effort parameter [Anthropic, effort-2025-11-24]
-  if (model.vndAntEffort /*&& model.vndAntEffort !== 'high'*/)
+  const reasoningEffort = model.reasoningEffort; // ?? model.vndAntEffort;
+  if (reasoningEffort) {
+    if (reasoningEffort === 'none' || reasoningEffort === 'minimal' || reasoningEffort === 'xhigh') throw new Error(`Anthropic API does not support '${reasoningEffort}' effort level`);
     payload.output_config = {
-      effort: model.vndAntEffort,
+      effort: reasoningEffort,
     };
+  }
 
   // [Anthropic, 2026-01-29 GA] Structured Outputs - JSON output format (now in output_config.format)
   if (model.strictJsonOutput) {
@@ -193,6 +198,10 @@ export function aixToAnthropicMessageCreate(model: AixAPI_Model, _chatGenerate: 
       console.warn('[Anthropic] Structured output_config.format may conflict with web_fetch citations');
   }
 
+  // [Anthropic, fast-mode-2026-02-01] Fast inference mode (preview/waitlist)
+  if (model.vndAntInfSpeed === 'fast')
+    payload.speed = 'fast';
+
   // --- Tools ---
 
   // Allow/deny auto-adding hosted tools when custom tools are present
@@ -209,7 +218,8 @@ export function aixToAnthropicMessageCreate(model: AixAPI_Model, _chatGenerate: 
       hostedTools.push({
         type: 'web_search_20250305',
         name: 'web_search',
-        max_uses: 10, // Allow up to 10 progressive searches // FIXME: HARDCODED
+        ...(model.vndAntWebSearchMaxUses !== undefined ? { max_uses: model.vndAntWebSearchMaxUses } : {}), // Allow up to 10 searches by default
+        // max_uses: model.vndAntWebSearchMaxUses ?? DEFAULT_WEB_SEARCH_MAX_USES, // Allow up to 10 searches by default
         // Pass user geolocation for location-aware search results
         ...(model.userGeolocation ? {
           user_location: { type: 'approximate' as const, ...model.userGeolocation },
@@ -222,7 +232,8 @@ export function aixToAnthropicMessageCreate(model: AixAPI_Model, _chatGenerate: 
       hostedTools.push({
         type: 'web_fetch_20250910',
         name: 'web_fetch',
-        max_uses: 5, // Allow up to 5 fetches
+        ...(model.vndAntWebFetchMaxUses !== undefined ? { max_uses: model.vndAntWebFetchMaxUses } : {}), // Allow up to 5 fetches by default
+        // max_uses: model.vndAntWebFetchMaxUses ?? DEFAULT_WEB_FETCH_MAX_USES, // Allow up to 5 fetches by default
         citations: { enabled: true }, // Enable citations
       });
     }

@@ -9,6 +9,10 @@ import { createVariantInjector, ModelVariantMap } from '../llm.server.variants';
 import { llmDevCheckModels_DEV } from '../models.mappings';
 
 
+// Note: these model definitions are shared across Anthropic API, OpenRouter, and AWS Bedrock.
+// Bedrock may support older/retired models longer than the Anthropic API, so we keep
+// retired models in this file rather than removing them immediately. Removal is manual.
+
 // configuration
 const DEV_DEBUG_ANTHROPIC_MODELS = (Release.TenantSlug as any) === 'staging' /* ALSO IN STAGING! */ || Release.IsNodeDevBuild;
 
@@ -18,16 +22,18 @@ const IF_4_R = [...IF_4, LLM_IF_OAI_Reasoning];
 
 
 // Anthropic Parameters Semantics:
+// - llmVndAntEffort             Anthropic effort: each model declares its subset via enumValues
 // - llmVndAnt1MContext         only available on select models
-// - llmVndAntEffort            since 4.5: low/medium/high (3 levels). Since 4.6: +max (4 levels, 'max' is 4.6-exclusive). Check if future models expand support.
 // - llmVndAntSkills            2026-02-06: seems GA to any model now: a parameter spec for user/UI configurability
 // - llmVndAntThinkingBudget    2026-02-06: deprecated since 4.6 in favor of adaptive thinking, was used for manual control of thinking up to 4.5, we pre-default it to 16384 and the user can set it to another value or null to turn thinking off
 // - llmVndAntWebFetch/Search   seem an API feature available on all models
 
 const ANT_TOOLS: ModelDescriptionSchema['parameterSpecs'] = [
-  { paramId: 'llmVndAntWebSearch' },
-  { paramId: 'llmVndAntWebFetch' },
   { paramId: 'llmVndAntSkills' },
+  { paramId: 'llmVndAntWebFetch' },
+  { paramId: 'llmVndAntWebFetchMaxUses' },
+  { paramId: 'llmVndAntWebSearch' },
+  { paramId: 'llmVndAntWebSearchMaxUses' },
 ] as const;
 
 
@@ -41,7 +47,28 @@ const _hardcodedAnthropicThinkingVariants: ModelVariantMap & { [id: string]: { i
     label: 'Claude Opus 4.6 (Adaptive)',
     description: 'Claude Opus 4.6 with adaptive thinking mode for the most complex reasoning and agentic workflows',
     interfaces: [...IF_4_R, LLM_IF_ANT_ToolsSearch],
-    parameterSpecs: [...ANT_TOOLS, { paramId: 'llmVndAntThinkingBudget', hidden: true, initialValue: -1 /* adaptive */ }, { paramId: 'llmVndAntEffortMax' }, { paramId: 'llmVndAnt1MContext' }],
+    parameterSpecs: [
+      { paramId: 'llmVndAntThinkingBudget', hidden: true, initialValue: -1 /* FORCE adaptive */ },
+      { paramId: 'llmVndAntEffort', enumValues: ['low', 'medium', 'high', 'max'] },
+      { paramId: 'llmVndAnt1MContext' },
+      { paramId: 'llmVndAntInfSpeed' },
+      ...ANT_TOOLS,
+    ],
+    // benchmark: { cbaElo: ... }, // TBD
+  },
+
+  'claude-sonnet-4-6': {
+    idVariant: 'thinking',
+    label: 'Claude Sonnet 4.6 (Adaptive)',
+    description: 'Claude Sonnet 4.6 with adaptive thinking mode for balanced speed and intelligence',
+    interfaces: [...IF_4_R, LLM_IF_ANT_ToolsSearch],
+    parameterSpecs: [
+      { paramId: 'llmVndAntThinkingBudget', hidden: true, initialValue: -1 /* FORCE adaptive */ },
+      // Note: sweep validates 'max' effort, but Anthropic docs state max is not available on Sonnet 4.6 as of 2026-02-18
+      { paramId: 'llmVndAntEffort', enumValues: ['low', 'medium', 'high'] },
+      { paramId: 'llmVndAnt1MContext' },
+      ...ANT_TOOLS,
+    ],
     // benchmark: { cbaElo: ... }, // TBD
   },
 
@@ -51,7 +78,11 @@ const _hardcodedAnthropicThinkingVariants: ModelVariantMap & { [id: string]: { i
     label: 'Claude Opus 4.5 (Thinking)',
     description: 'Claude Opus 4.5 with extended thinking mode for complex reasoning and agentic workflows',
     interfaces: [...IF_4_R, LLM_IF_ANT_ToolsSearch],
-    parameterSpecs: [...ANT_TOOLS, { paramId: 'llmVndAntThinkingBudget' }, { paramId: 'llmVndAntEffort' }],
+    parameterSpecs: [
+      { paramId: 'llmVndAntThinkingBudget' },
+      { paramId: 'llmVndAntEffort', enumValues: ['low', 'medium', 'high'] },
+      ...ANT_TOOLS,
+    ],
     benchmark: { cbaElo: 1468 }, // claude-opus-4-5-20251101-thinking-32k
     maxCompletionTokens: 32000,
   },
@@ -62,7 +93,11 @@ const _hardcodedAnthropicThinkingVariants: ModelVariantMap & { [id: string]: { i
     description: 'Claude Sonnet 4.5 with extended thinking mode enabled for complex reasoning',
     maxCompletionTokens: 64000,
     interfaces: [...IF_4_R, LLM_IF_ANT_ToolsSearch],
-    parameterSpecs: [...ANT_TOOLS, { paramId: 'llmVndAntThinkingBudget' }, { paramId: 'llmVndAnt1MContext' }],
+    parameterSpecs: [
+      { paramId: 'llmVndAntThinkingBudget' },
+      { paramId: 'llmVndAnt1MContext' },
+      ...ANT_TOOLS,
+    ],
     benchmark: { cbaElo: 1450 }, // claude-sonnet-4-5-20250929-thinking-32k
   },
 
@@ -72,7 +107,10 @@ const _hardcodedAnthropicThinkingVariants: ModelVariantMap & { [id: string]: { i
     description: 'Claude Haiku 4.5 with extended thinking mode - first Haiku model with reasoning capabilities',
     maxCompletionTokens: 64000,
     interfaces: IF_4_R,
-    parameterSpecs: [...ANT_TOOLS, { paramId: 'llmVndAntThinkingBudget' }],
+    parameterSpecs: [
+      { paramId: 'llmVndAntThinkingBudget' },
+      ...ANT_TOOLS,
+    ],
   },
 
   // Claude 4.1 models with thinking variants
@@ -82,7 +120,10 @@ const _hardcodedAnthropicThinkingVariants: ModelVariantMap & { [id: string]: { i
     description: 'Claude Opus 4.1 with extended thinking mode enabled for complex reasoning',
     maxCompletionTokens: 32000,
     interfaces: IF_4_R,
-    parameterSpecs: [...ANT_TOOLS, { paramId: 'llmVndAntThinkingBudget' }],
+    parameterSpecs: [
+      { paramId: 'llmVndAntThinkingBudget' },
+      ...ANT_TOOLS,
+    ],
     benchmark: { cbaElo: 1448 }, // claude-opus-4-1-20250805-thinking-16k
   },
 
@@ -94,7 +135,10 @@ const _hardcodedAnthropicThinkingVariants: ModelVariantMap & { [id: string]: { i
     description: 'Claude Opus 4 with extended thinking mode enabled for complex reasoning',
     maxCompletionTokens: 32000,
     interfaces: IF_4_R,
-    parameterSpecs: [...ANT_TOOLS, { paramId: 'llmVndAntThinkingBudget' }],
+    parameterSpecs: [
+      { paramId: 'llmVndAntThinkingBudget' },
+      ...ANT_TOOLS,
+    ],
     benchmark: { cbaElo: 1424 }, // claude-opus-4-20250514-thinking-16k
   },
 
@@ -104,7 +148,11 @@ const _hardcodedAnthropicThinkingVariants: ModelVariantMap & { [id: string]: { i
     description: 'Claude Sonnet 4 with extended thinking mode enabled for complex reasoning',
     maxCompletionTokens: 64000,
     interfaces: IF_4_R,
-    parameterSpecs: [...ANT_TOOLS, { paramId: 'llmVndAntThinkingBudget' }, { paramId: 'llmVndAnt1MContext' }],
+    parameterSpecs: [
+      { paramId: 'llmVndAntThinkingBudget' },
+      { paramId: 'llmVndAnt1MContext' },
+      ...ANT_TOOLS,
+    ],
     benchmark: { cbaElo: 1400 }, // claude-sonnet-4-20250514-thinking-32k
   },
 
@@ -115,7 +163,10 @@ const _hardcodedAnthropicThinkingVariants: ModelVariantMap & { [id: string]: { i
     description: 'Claude 3.7 with extended thinking mode enabled for complex reasoning',
     maxCompletionTokens: 64000,
     interfaces: IF_4_R,
-    parameterSpecs: [...ANT_TOOLS, { paramId: 'llmVndAntThinkingBudget' }],
+    parameterSpecs: [
+      { paramId: 'llmVndAntThinkingBudget' },
+      ...ANT_TOOLS,
+    ],
     benchmark: { cbaElo: 1389 }, // claude-3-7-sonnet-20250219-thinking-32k
   },
 
@@ -131,12 +182,17 @@ export const hardcodedAnthropicModels: (ModelDescriptionSchema & { isLegacy?: bo
   // Claude 4.6 models
   {
     id: 'claude-opus-4-6', // Active
-    label: 'Claude Opus 4.6', // 🌟
+    label: 'Claude Opus 4.6',
     description: 'Most intelligent model for building agents and coding, with adaptive thinking',
     contextWindow: 200000,
     maxCompletionTokens: 128000,
     interfaces: [...IF_4, LLM_IF_ANT_ToolsSearch],
-    parameterSpecs: [...ANT_TOOLS, { paramId: 'llmVndAntEffortMax' }, { paramId: 'llmVndAnt1MContext' }],
+    parameterSpecs: [
+      { paramId: 'llmVndAntEffort', enumValues: ['low', 'medium', 'high', 'max'] },
+      { paramId: 'llmVndAnt1MContext' },
+      { paramId: 'llmVndAntInfSpeed' },
+      ...ANT_TOOLS,
+    ],
     // Note: Tiered pricing - ≤200K: $5/$25, >200K: $10/$37.50 (with 1M context enabled)
     // Cache pricing also tiered: write 1.25× input, read 0.10× input
     chatPrice: {
@@ -151,6 +207,33 @@ export const hardcodedAnthropicModels: (ModelDescriptionSchema & { isLegacy?: bo
     },
     // benchmark: { cbaElo: ... }, // TBD
   },
+  {
+    id: 'claude-sonnet-4-6', // Active
+    label: 'Claude Sonnet 4.6',
+    description: 'Best combination of speed and intelligence for everyday tasks',
+    contextWindow: 200000,
+    maxCompletionTokens: 64000,
+    interfaces: [...IF_4, LLM_IF_ANT_ToolsSearch],
+    parameterSpecs: [
+      // Note: sweep validates 'max' effort, but Anthropic docs state max is not available on Sonnet 4.6 as of 2026-02-18
+      { paramId: 'llmVndAntEffort', enumValues: ['low', 'medium', 'high'] },
+      { paramId: 'llmVndAnt1MContext' },
+      ...ANT_TOOLS,
+    ],
+    // Note: Tiered pricing - ≤200K: $3/$15, >200K: $6/$22.50 (with 1M context enabled)
+    // Cache pricing also tiered: write 1.25× input, read 0.10× input
+    chatPrice: {
+      input: [{ upTo: 200000, price: 3 }, { upTo: null, price: 6 }],
+      output: [{ upTo: 200000, price: 15 }, { upTo: null, price: 22.50 }],
+      cache: {
+        cType: 'ant-bp',
+        read: [{ upTo: 200000, price: 0.30 }, { upTo: null, price: 0.60 }],
+        write: [{ upTo: 200000, price: 3.75 }, { upTo: null, price: 7.50 }],
+        duration: 300,
+      },
+    },
+    // benchmark: { cbaElo: ... }, // TBD
+  },
 
   // Claude 4.5 models
   {
@@ -160,18 +243,24 @@ export const hardcodedAnthropicModels: (ModelDescriptionSchema & { isLegacy?: bo
     contextWindow: 200000,
     maxCompletionTokens: 64000,
     interfaces: [...IF_4, LLM_IF_ANT_ToolsSearch],
-    parameterSpecs: [...ANT_TOOLS, { paramId: 'llmVndAntEffort' }],
+    parameterSpecs: [
+      { paramId: 'llmVndAntEffort', enumValues: ['low', 'medium', 'high'] },
+      ...ANT_TOOLS,
+    ],
     chatPrice: { input: 5, output: 25, cache: { cType: 'ant-bp', read: 0.50, write: 6.25, duration: 300 } },
     benchmark: { cbaElo: 1466 }, // claude-opus-4-5-20251101
   },
   {
     id: 'claude-sonnet-4-5-20250929', // Active
-    label: 'Claude Sonnet 4.5', // 🌟
-    description: 'Best model for complex agents and coding, with the highest intelligence across most tasks',
+    label: 'Claude Sonnet 4.5',
+    description: 'Previous best combination of speed and intelligence for complex agents and coding',
     contextWindow: 200000,
     maxCompletionTokens: 64000,
     interfaces: [...IF_4, LLM_IF_ANT_ToolsSearch],
-    parameterSpecs: [...ANT_TOOLS, { paramId: 'llmVndAnt1MContext' }],
+    parameterSpecs: [
+      { paramId: 'llmVndAnt1MContext' },
+      ...ANT_TOOLS,
+    ],
     // Note: Tiered pricing - ≤200K: $3/$15, >200K: $6/$22.50 (with 1M context enabled)
     // Cache pricing also tiered: write 1.25× input, read 0.10× input
     chatPrice: {
@@ -188,7 +277,7 @@ export const hardcodedAnthropicModels: (ModelDescriptionSchema & { isLegacy?: bo
   },
   {
     id: 'claude-haiku-4-5-20251001', // Active
-    label: 'Claude Haiku 4.5', // 🌟
+    label: 'Claude Haiku 4.5',
     description: 'Fastest model with exceptional speed and performance',
     contextWindow: 200000,
     maxCompletionTokens: 64000,
@@ -231,7 +320,10 @@ export const hardcodedAnthropicModels: (ModelDescriptionSchema & { isLegacy?: bo
     contextWindow: 200000,
     maxCompletionTokens: 64000,
     interfaces: IF_4,
-    parameterSpecs: [...ANT_TOOLS, { paramId: 'llmVndAnt1MContext' }],
+    parameterSpecs: [
+      { paramId: 'llmVndAnt1MContext' },
+      ...ANT_TOOLS,
+    ],
     // Note: Tiered pricing - ≤200K: $3/$15, >200K: $6/$22.50 (with 1M context enabled)
     // Cache pricing also tiered: write 1.25× input, read 0.10× input
     chatPrice: {
@@ -249,16 +341,16 @@ export const hardcodedAnthropicModels: (ModelDescriptionSchema & { isLegacy?: bo
 
   // Claude 3.7 models
   {
-    id: 'claude-3-7-sonnet-20250219', // Deprecated | Deprecated: October 28, 2025 | Retiring: February 19, 2026 | Replacement: claude-opus-4-6
-    label: 'Claude Sonnet 3.7 [Deprecated]',
-    description: 'High-performance model with early extended thinking. Deprecated October 28, 2025, retiring February 19, 2026.',
+    id: 'claude-3-7-sonnet-20250219', // Retired | Deprecated: October 28, 2025 | Retired: February 19, 2026 | Replacement: claude-opus-4-6
+    label: 'Claude Sonnet 3.7 [Retired]',
+    description: 'High-performance model with early extended thinking. Retired February 19, 2026.',
     contextWindow: 200000,
     maxCompletionTokens: 64000,
     interfaces: IF_4,
     parameterSpecs: ANT_TOOLS,
     chatPrice: { input: 3, output: 15, cache: { cType: 'ant-bp', read: 0.30, write: 3.75, duration: 300 } },
     benchmark: { cbaElo: 1372 }, // claude-3-7-sonnet-20250219
-    hidden: true, // deprecated
+    hidden: true, // retired
     isLegacy: true,
   },
 
@@ -266,31 +358,32 @@ export const hardcodedAnthropicModels: (ModelDescriptionSchema & { isLegacy?: bo
   // retired: 'claude-3-5-sonnet-20241022'
   // retired: 'claude-3-5-sonnet-20240620'
   {
-    id: 'claude-3-5-haiku-20241022', // Deprecated | Deprecated: December 19, 2025 | Retiring: February 19, 2026
-    label: 'Claude Haiku 3.5 [Deprecated]',
-    description: 'Intelligence at blazing speeds. Deprecated December 19, 2025, retiring February 19, 2026.',
+    id: 'claude-3-5-haiku-20241022', // Retired | Deprecated: December 19, 2025 | Retired: February 19, 2026
+    label: 'Claude Haiku 3.5 [Retired]',
+    description: 'Intelligence at blazing speeds. Retired February 19, 2026.',
     contextWindow: 200000,
     maxCompletionTokens: 8192,
     interfaces: IF_4,
     parameterSpecs: ANT_TOOLS,
     chatPrice: { input: 0.80, output: 4.00, cache: { cType: 'ant-bp', read: 0.08, write: 1.00, duration: 300 } },
     benchmark: { cbaElo: 1324 }, // claude-3-5-haiku-20241022
-    hidden: true, // deprecated
+    hidden: true, // retired
     isLegacy: true,
   },
 
   // Claude 3 models
   // retired: 'claude-3-opus-20240229' - Retired January 5, 2026
   {
-    hidden: true, // yield to successors
-    id: 'claude-3-haiku-20240307', // Active
-    label: 'Claude Haiku 3',
-    description: 'Fast and compact model for near-instant responsiveness',
+    hidden: true, // deprecated
+    id: 'claude-3-haiku-20240307', // Deprecated | Deprecated: February 19, 2026 | Retiring: April 20, 2026 | Replacement: claude-haiku-4-5-20251001
+    label: 'Claude Haiku 3 [Deprecated]',
+    description: 'Fast and compact model for near-instant responsiveness. Deprecated February 19, 2026, retiring April 20, 2026.',
     contextWindow: 200000,
     maxCompletionTokens: 4096,
     interfaces: IF_4,
     chatPrice: { input: 0.25, output: 1.25, cache: { cType: 'ant-bp', read: 0.03, write: 0.30, duration: 300 } },
     benchmark: { cbaElo: 1262 }, // claude-3-haiku-20240307
+    isLegacy: true,
   },
 
   // Legacy/Retired models
@@ -354,13 +447,66 @@ export function llmsAntCreatePlaceholderModel(model: AnthropicWire_API_Models_Li
 }
 
 
+// -- Anthropic-through-Bedrock models lookup --
+
+/** Find a hardcoded Anthropic model definition by its Bedrock model ID. */
+export function llmBedrockFindAnthropicModel(bedrockBaseId: string): (ModelDescriptionSchema & { isLegacy?: boolean }) | undefined {
+  const anthropicId = _llmBedrockToAnthropicModelId(bedrockBaseId);
+  if (!anthropicId) return undefined;
+  return hardcodedAnthropicModels.find(m => m.id === anthropicId);
+}
+
+function _llmBedrockToAnthropicModelId(bedrockBaseId: string): string | undefined {
+  if (!bedrockBaseId.startsWith('anthropic.')) return undefined;
+  // e.g. anthropic.claude-opus-4-6-v1 -> claude-opus-4-6; anthropic.claude-opus-4-5-20251101-v1:0   -> claude-opus-4-5-20251101
+  return bedrockBaseId.slice('anthropic.'.length).replace(/-v\d+(:\d+)?$/, '');
+}
+
+// Bedrock supports these interfaces (no Anthropic web tools)
+const _BEDROCK_ANT_IF_ALLOWLIST: ReadonlySet<string> = new Set([
+  LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Reasoning,
+  LLM_IF_ANT_PromptCaching,
+] as const);
+
+// NOTE: llmVndAntInfSpeed not available on Bedrock, llmVndAntWebFetch/llmVndAntSkills not available
+const _BEDROCK_ANT_PARAM_ALLOWLIST: ReadonlySet<string> = new Set([
+  // bedrock params to not strip
+  'llmVndBedrockAPI',
+  // supported
+  'llmVndAnt1MContext',
+  'llmVndAntEffort',
+  'llmVndAntThinkingBudget',
+  // Not supported by Bedrock
+  // 'llmVndAntInfSpeed', // Bad Request - speed: Extra inputs are not permitted
+  // 'llmVndAntSkills', // code execution is not supported: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool#platform-availability
+  // 'llmVndAntWebFetch', // Bad Request - tools.0: Input tag 'web_fetch_20250910' found using 'type' does not match any of the expected tags: 'bash_20250124', 'custom', 'text_editor_20250124', 'text_editor_20250429', 'text_editor_20250728', 'web_search_20250305'
+  // 'llmVndAntWebFetchMaxUses', // requires llmVndAntWebFetch to be supported
+  // 'llmVndAntWebSearch', // Bedrock should support web search, but we get 'Bad Request' if the 'web_search_20250305' tool is added
+  // 'llmVndAntWebSearchMaxUses', // requires llmVndAntWebSearch to be supported
+] as const satisfies DModelParameterId[]);
+
+/** Strip unsupported interfaces and params from an Anthropic model for Bedrock */
+export function llmBedrockStripAnthropicMDS(model: ModelDescriptionSchema): ModelDescriptionSchema {
+  if (!model.parameterSpecs && !model.interfaces.some(i => !_BEDROCK_ANT_IF_ALLOWLIST.has(i)))
+    return model; // nothing to filter
+  return {
+    ...model,
+    interfaces: model.interfaces.filter(i => _BEDROCK_ANT_IF_ALLOWLIST.has(i)),
+    ...(model.parameterSpecs ? {
+      parameterSpecs: model.parameterSpecs.filter(spec => _BEDROCK_ANT_PARAM_ALLOWLIST.has(spec.paramId)),
+    } : {}),
+  };
+}
+
+
 // -- Anthropic-through-OpenRouter Vendor Lookup --
 
 const _ORT_ANT_IF_ALLOWLIST: ReadonlySet<string> = new Set([
   LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Reasoning,
 ] as const);
+// NOTE: llmVndAntInfSpeed intentionally NOT included - fast mode not available through OpenRouter
 const _ORT_ANT_PARAM_ALLOWLIST: ReadonlySet<string> = new Set([
-  'llmVndAntEffort', 'llmVndAntEffortMax',
+  'llmVndAntEffort', // Anthropic effort
   'llmVndAntThinkingBudget',
 ] as const satisfies DModelParameterId[]);
 
@@ -398,6 +544,6 @@ export function llmOrtAntLookup_ThinkingVariants(orModelName: string): OrtVendor
     ?.filter((spec) => _ORT_ANT_PARAM_ALLOWLIST.has(spec.paramId))
     .map((spec) => ({ ...spec }));
 
-  // initialTemperature: not set — Anthropic models use the global fallback (0.5)
+  // initialTemperature: not set - Anthropic models use the global fallback (0.5)
   return { interfaces, parameterSpecs };
 }

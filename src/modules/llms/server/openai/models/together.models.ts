@@ -44,6 +44,10 @@ export function togetherAIModelsToModelDescriptions(wireModels: unknown): ModelD
     .parse(wireModels)
 
     .filter((model) => {
+      // filter-out models that don't even have the type
+      if (!model.type)
+        return false;
+
       // filter-out non-llms
       if (!_togetherAllowTypes.includes(model.type))
         return false;
@@ -58,7 +62,7 @@ export function togetherAIModelsToModelDescriptions(wireModels: unknown): ModelD
 
       // heuristics for names
       const label = model.display_name || model.id.replaceAll('/', ' · ').replaceAll(/[_-]/g, ' ');
-      const description = `${model.organization || 'Toghether AI'} ${model.type} model. ${model.link || ''}`;
+      const description = `${model.organization || 'Together AI'} ${model.type} model. ${model.link || ''}`;
       const contextWindow = model.context_length || null;
       let chatPrice: ModelDescriptionSchema['chatPrice'] | undefined = undefined;
       if (typeof model.pricing?.input === 'number' && typeof model.pricing?.output === 'number') {
@@ -71,7 +75,7 @@ export function togetherAIModelsToModelDescriptions(wireModels: unknown): ModelD
           };
       }
       const interfaces = [LLM_IF_OAI_Chat];
-      if (model.id.indexOf('vision') !== -1)
+      if (model.id.toLowerCase().includes('vision') || model.id.toLowerCase().includes('-vl'))
         interfaces.push(LLM_IF_OAI_Vision);
 
       return fromManualMapping(_knownTogetherAIChatModels, model.id, model.created, undefined, {

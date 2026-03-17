@@ -16,10 +16,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import type { AixAPI_Access, AixAPI_Model, AixAPIChatGenerate_Request, AixWire_Particles } from '~/modules/aix/server/api/aix.wiretypes';
-import type { IParticleTransmitter, ParticleServerLogLevel } from '~/modules/aix/server/dispatch/chatGenerate/parsers/IParticleTransmitter';
+import type { IParticleTransmitter, ParticleCGDialectEndReason, ParticleServerLogLevel } from '~/modules/aix/server/dispatch/chatGenerate/parsers/IParticleTransmitter';
 import type { ModelDescriptionSchema } from '~/modules/llms/server/llm.server.types';
+import { ChatGenerateDispatch, createChatGenerateDispatch } from '~/modules/aix/server/dispatch/chatGenerate/chatGenerate.dispatch';
 import { listModelsRunDispatch } from '~/modules/llms/server/listModels.dispatch';
-import { createChatGenerateDispatch } from '~/modules/aix/server/dispatch/chatGenerate/chatGenerate.dispatch';
 import { fetchResponseOrTRPCThrow, TRPCFetcherError } from '~/server/trpc/trpc.router.fetchers';
 
 
@@ -37,13 +37,31 @@ const SWEEP_DEFINITIONS = [
     mode: 'enumerate',
   }),
 
+  // OpenAI: temperature with/without reasoning
+  defineSweep({
+    name: 'oai-temperature-think-high',
+    description: 'Temperature parameter acceptance range',
+    applicability: { type: 'all' },
+    applyToModel: (value) => ({ temperature: value, reasoningEffort: 'high' }),
+    values: [0, 0.5, 1.0, 1.5, 2.0],
+    mode: 'enumerate',
+  }),
+  defineSweep({
+    name: 'oai-temperature-think-none',
+    description: 'Temperature parameter acceptance range',
+    applicability: { type: 'all' },
+    applyToModel: (value) => ({ temperature: value, reasoningEffort: 'none' }),
+    values: [0, 0.5, 1.0, 1.5, 2.0],
+    mode: 'enumerate',
+  }),
+
   // OpenAI: reasoning effort (Chat Completions + Responses API)
   defineSweep({
     name: 'oai-reasoning-effort',
     description: 'OpenAI reasoning_effort values',
     applicability: { type: 'dialects', dialects: ['openai', 'azure', 'openrouter'] },
-    applyToModel: (value) => ({ vndOaiReasoningEffort: value }),
-    values: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] satisfies AixAPI_Model['vndOaiReasoningEffort'][],
+    applyToModel: (value) => ({ reasoningEffort: value }),
+    values: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh' /*, 'max'*/ /* OpenRouter-only? */] satisfies AixAPI_Model['reasoningEffort'][],
     neuteredValues: ['medium'], // medium is the default, so only-medium means no real support
     mode: 'enumerate',
   }),
@@ -85,8 +103,8 @@ const SWEEP_DEFINITIONS = [
     name: 'ant-effort',
     description: 'Anthropic output_config.effort values',
     applicability: { type: 'dialects', dialects: ['anthropic'] },
-    applyToModel: (value) => ({ vndAntEffort: value }),
-    values: ['low', 'medium', 'high'] satisfies AixAPI_Model['vndAntEffort'][],
+    applyToModel: (value) => ({ reasoningEffort: value }),
+    values: ['low', 'medium', 'high', 'max'] satisfies AixAPI_Model['reasoningEffort'][],
     mode: 'enumerate',
   }),
 
@@ -99,7 +117,7 @@ const SWEEP_DEFINITIONS = [
       vndAntThinkingBudget: value,
       maxTokens: 16384,
     }),
-    values: [1024, 8192, 16384, 32768, 65535],
+    values: [1024, 8192, 16384, 32768, 65536],
     mode: 'enumerate',
   }),
 
@@ -112,10 +130,8 @@ const SWEEP_DEFINITIONS = [
     name: 'gemini-thinking-level',
     description: 'Gemini thinkingConfig.thinkingLevel values',
     applicability: { type: 'dialects', dialects: ['gemini'] },
-    applyToModel: (value) => value
-      ? { vndGeminiThinkingLevel: value, vndGeminiShowThoughts: true }
-      : {}, // { vndGeminiShowThoughts: true }, // null = dynamic mode, don't set level
-    values: ['minimal', 'low', 'medium', 'high'] satisfies (AixAPI_Model['vndGeminiThinkingLevel'] | null)[],
+    applyToModel: (value) => value ? { reasoningEffort: value } : {}, // null = dynamic mode, don't set level
+    values: ['minimal', 'low', 'medium', 'high'] satisfies (AixAPI_Model['reasoningEffort'] | null)[],
     mode: 'enumerate',
   }),
 
@@ -140,8 +156,8 @@ const SWEEP_DEFINITIONS = [
     name: 'xai-reasoning-effort',
     description: 'xAI reasoning.effort values',
     applicability: { type: 'dialects', dialects: ['xai'] },
-    applyToModel: (value) => ({ vndOaiReasoningEffort: value }),
-    values: ['low', 'medium', 'high'] satisfies AixAPI_Model['vndOaiReasoningEffort'][],
+    applyToModel: (value) => ({ reasoningEffort: value }),
+    values: ['low', 'medium', 'high'] satisfies AixAPI_Model['reasoningEffort'][],
     mode: 'enumerate',
   }),
 
@@ -287,7 +303,7 @@ class SweepCollectorTransmitter implements IParticleTransmitter {
   get hasError(): boolean { return this.dialectIssue !== null; }
 
   // Parser-initiated Control
-  setEnded(reason: 'done-dialect' | 'issue-dialect'): void {
+  setDialectEnded(reason: ParticleCGDialectEndReason): void {
     this.endReason = reason;
   }
 
@@ -321,6 +337,7 @@ class SweepCollectorTransmitter implements IParticleTransmitter {
 
   // Non-parts data
   setModelName(_modelName: string): void { /* no-op */ }
+  setProviderInfraLabel(_label: string): void { /* no-op */ }
   setUpstreamHandle(_handle: string, _type: 'oai-responses'): void { /* no-op */ }
   setTokenStopReason(reason: AixWire_Particles.GCTokenStopReason): void { this.tokenStopReason = reason; }
   updateMetrics(_update: Partial<AixWire_Particles.CGSelectMetrics>): void { /* no-op */ }
@@ -371,8 +388,9 @@ function modelOverridesFromInterfaces(interfaces: string[]): Partial<AixAPI_Mode
     overrides.vndOaiResponsesAPI = true;
 
   // Client-side HotFixes
-  if (interfaces.includes('hotfix-no-temperature'))
-    overrides.temperature = null;
+  // 2026-02-18: NOTE: disabling this, as we may be actually testing the temperature
+  // if (interfaces.includes('hotfix-no-temperature'))
+  //   overrides.temperature = null;
 
   return overrides;
 }
@@ -408,16 +426,10 @@ async function testParameterValue(
   const chatGenerate = createMinimalChatRequest();
 
   // Build vendor-specific HTTP request via the AIX dispatch system
-  const dispatch = createChatGenerateDispatch(
-    access,
-    model,
-    chatGenerate,
-    false, // streaming = false
-    false, // enableResumability = false
-  );
+  let dispatch: ChatGenerateDispatch | undefined;
 
   // Capture request body for --debug output
-  const debugRequestBody = 'body' in dispatch.request ? JSON.stringify(dispatch.request.body) /*, null, 2)*/ : undefined;
+  const debugRequestBody = dispatch && 'body' in dispatch.request ? JSON.stringify(dispatch.request.body) /*, null, 2)*/ : undefined;
 
   // Helper to build result with common fields
   const makeResult = (fields: Omit<TestResult, 'sweepName' | 'paramValue' | 'debugRequestBody'>): TestResult => ({
@@ -427,6 +439,28 @@ async function testParameterValue(
     debugRequestBody,
     ...fields,
   });
+
+
+  // Create the dispatch, which may throw when building the reuest (e.g. parameter range incompatibility)
+  try {
+    dispatch = await createChatGenerateDispatch(
+      access,
+      model,
+      chatGenerate,
+      false, // streaming = false
+      false, // enableResumability = false
+    );
+  } catch (error: any) {
+    // Exception during request creation - likely parameter incompatibility with the model/dialect
+    return makeResult({
+      outcome: 'fail',
+      errorCategory: 'dialect',
+      errorMessage: error?.message ? String(error.message).slice(0, 300) : String(error).slice(0, 300),
+      verboseLogs: [`Exception creating request: ${error?.message || String(error)}`],
+      durationMs: Date.now() - startTime,
+    });
+  }
+
 
   try {
     // Execute the request
@@ -720,15 +754,22 @@ function saveDialectResults(dialect: string, dialectResults: DialectReultsByMode
       const newModelIds = Object.keys(dialectResults);
       const updatedCount = newModelIds.filter(id => id in existing).length;
       const addedCount = newModelIds.length - updatedCount;
-      // Shallow merge: new models overwrite, existing models are preserved
-      dialectResults = { ...existing, ...dialectResults };
+      // Merge preserving scan order: new models first (in scan order), then remaining old models
+      const merged: DialectReultsByModel = {};
+      for (const id of newModelIds)
+        merged[id] = dialectResults[id];
+      for (const id of Object.keys(existing)) {
+        if (!(id in merged))
+          merged[id] = existing[id];
+      }
+      dialectResults = merged;
       console.log(`${COLORS.dim}Merging into existing file (${Object.keys(existing).length} existing, ${updatedCount} updated, ${addedCount} added -> ${Object.keys(dialectResults).length} total)${COLORS.reset}`);
     }
   }
 
-  // Sort keys for stable output
+  // Preserve scan order for model keys; sort sweep keys alphabetically within each model
   const sorted: DialectReultsByModel = {};
-  for (const model of Object.keys(dialectResults).sort()) {
+  for (const model of Object.keys(dialectResults)) {
     sorted[model] = {};
     for (const sweep of Object.keys(dialectResults[model]).sort()) {
       sorted[model][sweep] = dialectResults[model][sweep];
@@ -798,14 +839,21 @@ function vendorResultToDialectResults(vendorResult: VendorSweepResult): DialectR
       }
 
       // Special case: temperature with contiguous range from 0 -> use range [min, max]
-      if (sweepName === 'temperature') {
+      const collapsibleNumberRanges = [
+        'temperature',
+        // provider-specific
+        'ant-thinking-budget',
+        'gemini-thinking-budget',
+        'oai-temperature-think-high', 'oai-temperature-think-none',
+      ];
+      if (collapsibleNumberRanges.includes(sweepName)) {
         const numericPassing = passingValues.filter((v): v is number => typeof v === 'number').sort((a, b) => a - b);
         const numericTested = sweepResults.map(r => r.paramValue).filter((v): v is number => typeof v === 'number').sort((a, b) => a - b);
         // Check if passing values form a contiguous prefix of tested values (no gaps)
         const isContiguousFromStart = numericPassing.length >= 2 &&
           numericPassing.every((v, i) => v === numericTested[i]);
         if (isContiguousFromStart) {
-          modelResults['temperature-range'] = [numericPassing[0], numericPassing[numericPassing.length - 1]];
+          modelResults[`${sweepName}-range`] = [numericPassing[0], numericPassing[numericPassing.length - 1]];
           continue;
         }
       }

@@ -1,7 +1,8 @@
 import { findServiceAccessOrThrow } from '~/modules/llms/vendors/vendor.helpers';
 
 import type { MaybePromise } from '~/common/types/useful.types';
-import { DLLM, DLLMId, getLLMPricing, LLM_IF_HOTFIX_NoTemperature, LLM_IF_OAI_Responses, LLM_IF_Outputs_Audio, LLM_IF_Outputs_Image, LLM_IF_Outputs_NoText } from '~/common/stores/llms/llms.types';
+import { AudioPlayer } from '~/common/util/audio/AudioPlayer';
+import { DLLM, DLLMId, LLM_IF_HOTFIX_NoTemperature, LLM_IF_OAI_Responses, LLM_IF_Outputs_Audio, LLM_IF_Outputs_Image, LLM_IF_Outputs_NoText } from '~/common/stores/llms/llms.types';
 import { DMessage, DMessageGenerator, messageSetGeneratorAIX_AutoLabel } from '~/common/stores/chat/chat.message';
 import { DMetricsChatGenerate_Lg, metricsChatGenerateLgToMd, metricsComputeChatGenerateCostsMd } from '~/common/stores/metrics/metrics.chatgenerate';
 import { DModelParameterValues, getAllModelParameterValues } from '~/common/stores/llms/llms.parameters';
@@ -9,7 +10,8 @@ import { apiStream } from '~/common/util/trpc.client';
 import { createErrorContentFragment, DMessageContentFragment, DMessageErrorPart, DMessageVoidFragment, isContentFragment, isErrorPart } from '~/common/stores/chat/chat.fragments';
 import { findLLMOrThrow } from '~/common/stores/llms/store-llms';
 import { getAixInspectorEnabled } from '~/common/stores/store-ui';
-import { getLabsDevNoStreaming } from '~/common/stores/store-ux-labs';
+import { getLabsLosslessImages } from '~/common/stores/store-ux-labs';
+import { llmChatPricing_adjusted } from '~/common/stores/llms/llms.pricing';
 import { metricsStoreAddChatGenerate } from '~/common/stores/metrics/store-metrics';
 import { stripUndefined } from '~/common/util/objectUtils';
 import { webGeolocationCached } from '~/common/util/webGeolocationUtils';
@@ -21,7 +23,7 @@ import { AixStreamRetry } from './aix.client.retry';
 import { ContentReassembler } from './ContentReassembler';
 import { aixCGR_ChatSequence_FromDMessagesOrThrow, aixCGR_FromSimpleText, aixCGR_SystemMessage_FromDMessageOrThrow, AixChatGenerate_TextMessages, clientHotFixGenerateRequest_ApplyAll } from './aix.client.chatGenerateRequest';
 import { aixClassifyStreamingError } from './aix.client.errors';
-import { aixClientDebuggerGetRBO } from './debugger/memstore-aix-client-debugger';
+import { aixClientDebuggerGetRBO, getAixDebuggerNoStreaming } from './debugger/memstore-aix-client-debugger';
 import { withDecimator } from './withDecimator';
 
 
@@ -49,14 +51,14 @@ export function aixCreateModelFromLLMOptions(
   // destructure input with the overrides
   const {
     llmRef, llmTemperature, llmResponseTokens, llmTopP, llmForceNoStream,
-    llmVndAnt1MContext, llmVndAntSkills, llmVndAntThinkingBudget, llmVndAntWebFetch, llmVndAntWebSearch, llmVndAntEffort, llmVndAntEffortMax,
-    llmVndGeminiAspectRatio, llmVndGeminiImageSize, llmVndGeminiCodeExecution, llmVndGeminiComputerUse, llmVndGeminiGoogleSearch, llmVndGeminiMediaResolution, llmVndGeminiShowThoughts, llmVndGeminiThinkingBudget, llmVndGeminiThinkingLevel, llmVndGeminiThinkingLevel4,
-    llmVndMoonReasoningEffort, // -> mapped to vndOaiReasoningEffort below
+    llmVndAntEffort, llmVndGemEffort, llmVndOaiEffort, llmVndMiscEffort,
+    llmVndAnt1MContext, llmVndAntInfSpeed, llmVndAntSkills, llmVndAntThinkingBudget, llmVndAntWebFetch, llmVndAntWebFetchMaxUses, llmVndAntWebSearch, llmVndAntWebSearchMaxUses,
+    llmVndBedrockAPI,
+    llmVndGeminiAspectRatio, llmVndGeminiImageSize, llmVndGeminiCodeExecution, llmVndGeminiComputerUse, llmVndGeminiGoogleSearch, llmVndGeminiMediaResolution, llmVndGeminiThinkingBudget,
     // llmVndMoonshotWebSearch,
-    llmVndOaiReasoningEffort, llmVndOaiReasoningEffort4, llmVndOaiReasoningEffort52, llmVndOaiReasoningEffort52Pro, llmVndOaiRestoreMarkdown, llmVndOaiVerbosity, llmVndOaiWebSearchContext, llmVndOaiWebSearchGeolocation, llmVndOaiImageGeneration, llmVndOaiCodeInterpreter,
+    llmVndOaiRestoreMarkdown, llmVndOaiVerbosity, llmVndOaiWebSearchContext, llmVndOaiWebSearchGeolocation, llmVndOaiImageGeneration, llmVndOaiCodeInterpreter,
     llmVndOrtWebSearch,
     llmVndPerplexityDateFilter, llmVndPerplexitySearchMode,
-    // xAI
     llmVndXaiCodeExecution, llmVndXaiSearchInterval, llmVndXaiWebSearch, llmVndXaiXSearch, llmVndXaiXSearchHandles,
   } = {
     ...llmOptions,
@@ -101,16 +103,27 @@ export function aixCreateModelFromLLMOptions(
   return stripUndefined({
     id: llmRef,
     acceptsOutputs: acceptsOutputs,
-    ...(hotfixOmitTemperature ? { temperature: null } : llmTemperature !== undefined ? { temperature: llmTemperature } : {}),
-    ...(llmResponseTokens /* null: similar to undefined, will omit the value */ ? { maxTokens: llmResponseTokens } : {}),
-    ...(llmTopP !== undefined ? { topP: llmTopP } : {}),
-    ...(llmForceNoStream ? { forceNoStream: true } : {}),
+    temperature: (hotfixOmitTemperature || llmTemperature === null) ? null : llmTemperature, // strippable
+    maxTokens: llmResponseTokens ?? undefined, // strippable - null: like undefined -> strip -> omit the value
+    topP: llmTopP, // strippable (likely)
+    forceNoStream: llmForceNoStream ? true : undefined, // strippable
+    userGeolocation: userGeolocation, // strippable (likely)
+
+    // Cross-provider unified options
+    reasoningEffort: llmVndAntEffort ?? llmVndGemEffort ?? llmVndOaiEffort ?? llmVndMiscEffort, // strippable
+
+    // Anthropic
     ...(llmVndAntThinkingBudget !== undefined ? { vndAntThinkingBudget: llmVndAntThinkingBudget === -1 ? 'adaptive' as const : llmVndAntThinkingBudget } : {}),
     ...(llmVndAnt1MContext ? { vndAnt1MContext: llmVndAnt1MContext } : {}),
+    ...(llmVndAntInfSpeed === 'fast' ? { vndAntInfSpeed: 'fast' } : {}),
     ...(llmVndAntSkills ? { vndAntSkills: llmVndAntSkills } : {}),
-    ...(llmVndAntWebFetch === 'auto' ? { vndAntWebFetch: llmVndAntWebFetch } : {}),
-    ...(llmVndAntWebSearch === 'auto' ? { vndAntWebSearch: llmVndAntWebSearch } : {}),
-    ...((llmVndAntEffortMax || llmVndAntEffort) ? { vndAntEffort: llmVndAntEffortMax || llmVndAntEffort } : {}),
+    ...(llmVndAntWebFetch === 'auto' ? { vndAntWebFetch: llmVndAntWebFetch, ...(llmVndAntWebFetchMaxUses ? { vndAntWebFetchMaxUses: llmVndAntWebFetchMaxUses } : {}) } : {}),
+    ...(llmVndAntWebSearch === 'auto' ? { vndAntWebSearch: llmVndAntWebSearch, ...(llmVndAntWebSearchMaxUses ? { vndAntWebSearchMaxUses: llmVndAntWebSearchMaxUses } : {}) } : {}),
+
+    // Bedrock
+    ...(llmVndBedrockAPI ? { vndBedrockAPI: llmVndBedrockAPI } : {}),
+
+    // Gemini
     ...(llmVndGeminiAspectRatio ? { vndGeminiAspectRatio: llmVndGeminiAspectRatio } : {}),
     ...(llmVndGeminiCodeExecution === 'auto' ? { vndGeminiCodeExecution: llmVndGeminiCodeExecution } : {}),
     ...(llmVndGeminiComputerUse ? { vndGeminiComputerUse: llmVndGeminiComputerUse } : {}),
@@ -120,27 +133,27 @@ export function aixCreateModelFromLLMOptions(
     } : {}),
     ...(llmVndGeminiImageSize ? { vndGeminiImageSize: llmVndGeminiImageSize } : {}),
     ...(llmVndGeminiMediaResolution ? { vndGeminiMediaResolution: llmVndGeminiMediaResolution } : {}),
-    ...(llmVndGeminiShowThoughts ? { vndGeminiShowThoughts: llmVndGeminiShowThoughts } : {}),
     ...(llmVndGeminiThinkingBudget !== undefined ? { vndGeminiThinkingBudget: llmVndGeminiThinkingBudget } : {}),
-    ...((llmVndGeminiThinkingLevel || llmVndGeminiThinkingLevel4) ? { vndGeminiThinkingLevel: llmVndGeminiThinkingLevel4 || llmVndGeminiThinkingLevel } : {}), // map both 2-level and 4-level thinking params to the same wire field
     // ...(llmVndGeminiUrlContext === 'auto' ? { vndGeminiUrlContext: llmVndGeminiUrlContext } : {}),
-    // [Moonshot] Map to vndOaiReasoningEffort - adapter converts to thinking format
-    ...((llmVndMoonReasoningEffort && !llmVndOaiReasoningEffort) ? { vndOaiReasoningEffort: llmVndMoonReasoningEffort } : {}),
+
+    // Moonshot
     // ...(llmVndMoonshotWebSearch === 'auto' ? { vndMoonshotWebSearch: 'auto' } : {}),
+
+    // OpenAI
     ...(llmVndOaiResponsesAPI ? { vndOaiResponsesAPI: true } : {}),
-    ...((llmVndOaiReasoningEffort52Pro || llmVndOaiReasoningEffort52 || llmVndOaiReasoningEffort4 || llmVndOaiReasoningEffort) ? {
-      vndOaiReasoningEffort: llmVndOaiReasoningEffort52Pro || llmVndOaiReasoningEffort52 || llmVndOaiReasoningEffort4 || llmVndOaiReasoningEffort,
-      vndOaiReasoningSummary: llmForceNoStream ? 'none' /* we disable the summaries, to not require org verification */ : 'detailed',
-    } : {}),
     ...(llmVndOaiRestoreMarkdown ? { vndOaiRestoreMarkdown: llmVndOaiRestoreMarkdown } : {}),
     ...(llmVndOaiVerbosity ? { vndOaiVerbosity: llmVndOaiVerbosity } : {}),
     ...(llmVndOaiWebSearchContext ? { vndOaiWebSearchContext: llmVndOaiWebSearchContext } : {}),
     ...(llmVndOaiImageGeneration ? { vndOaiImageGeneration: (llmVndOaiImageGeneration as any /* backward comp */) === true ? 'mq' : llmVndOaiImageGeneration } : {}),
     ...(llmVndOaiCodeInterpreter === 'auto' ? { vndOaiCodeInterpreter: llmVndOaiCodeInterpreter } : {}),
+
+    // OpenRouter
     ...(llmVndOrtWebSearch === 'auto' ? { vndOrtWebSearch: 'auto' } : {}),
+
+    // Perplexity
     ...(llmVndPerplexityDateFilter ? { vndPerplexityDateFilter: llmVndPerplexityDateFilter } : {}),
     ...(llmVndPerplexitySearchMode ? { vndPerplexitySearchMode: llmVndPerplexitySearchMode } : {}),
-    ...(userGeolocation ? { userGeolocation } : {}),
+
     // xAI
     ...(llmVndXaiCodeExecution === 'auto' ? { vndXaiCodeExecution: llmVndXaiCodeExecution } : {}),
     ...(llmVndXaiSearchInterval ? { vndXaiSearchInterval: llmVndXaiSearchInterval } : {}),
@@ -239,11 +252,15 @@ export async function aixChatGenerateContent_DMessage_FromConversation(
 
   }
 
-  // TODO: check something beyond this return status (as exceptions almost never happen here)
-  // - e.g. the generator.aix may have error/token stop codes
+  // Derive outcome: client-abort wins (user intent), then errors/issues, then success
+  const tokenStopReason = lastDMessage.generator?.tokenStopReason;
+  const outcome: StreamMessageStatus['outcome'] =
+    tokenStopReason === 'client-abort' ? 'aborted'
+      : (errorMessage || tokenStopReason === 'issue') ? 'errored'
+        : 'success';
 
   return {
-    outcome: errorMessage ? 'errored' : lastDMessage.generator?.tokenStopReason === 'client-abort' ? 'aborted' : 'success',
+    outcome,
     lastDMessage: lastDMessage,
     errorMessage: errorMessage || undefined,
   };
@@ -532,16 +549,19 @@ function _llToDMessageGuts(src: AixChatGenerateContent_LL, dest: AixChatGenerate
     dest.generator.metrics = metricsChatGenerateLgToMd(src.genMetricsLg); // reduce the size to store in DMessage
   if (src.genModelName)
     dest.generator.name = src.genModelName;
+  if (src.genProviderInfraLabel)
+    dest.generator.providerInfraLabel = src.genProviderInfraLabel;
   if (src.genUpstreamHandle)
     dest.generator.upstreamHandle = src.genUpstreamHandle;
-  if (src.genTokenStopReason)
-    dest.generator.tokenStopReason = src.genTokenStopReason;
+  if (src.legacyGenTokenStopReason)
+    dest.generator.tokenStopReason = src.legacyGenTokenStopReason;
 }
 
 function _updateGeneratorCostsInPlace(generator: DMessageGenerator, llm: DLLM, debugCostSource: string) {
   // Compute costs
   const logLlmRefId = getAllModelParameterValues(llm.initialParameters, llm.userParameters).llmRef || llm.id;
-  const costs = metricsComputeChatGenerateCostsMd(generator.metrics, getLLMPricing(llm)?.chat, logLlmRefId);
+  const adjChatPricing = llmChatPricing_adjusted(llm);
+  const costs = metricsComputeChatGenerateCostsMd(generator.metrics, adjChatPricing, logLlmRefId);
   if (!costs) {
     // FIXME: we shall warn that the costs are missing, as the only way to get pricing is through surfacing missing prices
     return;
@@ -571,8 +591,9 @@ export interface AixChatGenerateContent_LL {
   // pieces of generator
   genMetricsLg?: DMetricsChatGenerate_Lg;
   genModelName?: string;
+  genProviderInfraLabel?: string;
   genUpstreamHandle?: DMessageGenerator['upstreamHandle'];
-  genTokenStopReason?: DMessageGenerator['tokenStopReason'];
+  legacyGenTokenStopReason?: DMessageGenerator['tokenStopReason'];
 }
 
 /**
@@ -697,7 +718,14 @@ async function _aixChatGenerateContent_LL(
       sendContentUpdate,
       inspectorTransport,
       inspectorContext,
+      getLabsLosslessImages(),
       abortSignal,
+      (audio) => {
+        const audioUrl = URL.createObjectURL(audio.blob);
+        void AudioPlayer.playUrl(audioUrl)
+          .catch(error => console.log('[AIX] Failed to play audio:', { error }))
+          .finally(() => URL.revokeObjectURL(audioUrl));
+      },
     );
 
     try {
@@ -711,7 +739,7 @@ async function _aixChatGenerateContent_LL(
           aixModel,
           aixChatGenerate,
           aixContext,
-          getLabsDevNoStreaming() ? false : aixStreaming,
+          getAixDebuggerNoStreaming() ? false : aixStreaming,
           aixConnectionOptions,
           abortSignal,
         );
@@ -723,7 +751,7 @@ async function _aixChatGenerateContent_LL(
           model: aixModel,
           chatGenerate: aixChatGenerate,
           context: aixContext,
-          streaming: getLabsDevNoStreaming() ? false : aixStreaming, // [DEV] disable streaming if set in the UX (testing)
+          streaming: getAixDebuggerNoStreaming() ? false : aixStreaming, // [DEV] disable streaming if set in the UX (testing)
           connectionOptions: aixConnectionOptions,
         }, { signal: abortSignal });
 
@@ -752,6 +780,9 @@ async function _aixChatGenerateContent_LL(
       for await (const particle of particleStream)
         reassembler.enqueueWireParticle(particle);
 
+      // [CSF] generators end cleanly on abort (unlike tRPC which throws) - route to catch
+      abortSignal.throwIfAborted();
+
       // stop the deadline decimator before the await, as we're done basically
       sendContentUpdate?.stop?.();
 
@@ -776,10 +807,10 @@ async function _aixChatGenerateContent_LL(
 
         // NOT retryable: e.g. client-abort, or missing handle
         if (errorType === 'client-aborted')
-          await reassembler.setClientAborted().catch(console.error /* never */);
+          reassembler.setClientAborted();
         else {
           const errorHint: DMessageErrorPart['hint'] = `aix-${errorType}`; // MUST MATCH our `aixClassifyStreamingError` hints with 'aix-<type>' in DMessageErrorPart
-          await reassembler.setClientExcepted(errorMessage, errorHint).catch(console.error);
+          reassembler.setClientExcepted(errorMessage, errorHint);
         }
         // ... fall through (traditional single path)
 
@@ -799,7 +830,7 @@ async function _aixChatGenerateContent_LL(
           continue; // -> Loop
 
         // user-aborted during retry-backoff
-        await reassembler.setClientAborted().catch(console.error);
+        reassembler.setClientAborted();
         // ... fall through (aborted during backoff)
 
       }
