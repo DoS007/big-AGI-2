@@ -7,7 +7,7 @@ import MicIcon from '@mui/icons-material/Mic';
 import { ExternalDocsLink } from '~/common/components/ExternalDocsLink';
 import { GoodTooltip } from '~/common/components/GoodTooltip';
 import { KeyStroke } from '~/common/components/KeyStroke';
-import { useDontBlurTextarea } from '~/common/components/useDontBlurTextarea';
+import { dontBlurTextareaOnMouseDown as handleDontBlurTextArea } from '~/common/components/dontBlurTextarea';
 
 
 const micLegend = (errorMessage: string | null) =>
@@ -17,7 +17,7 @@ const micLegend = (errorMessage: string | null) =>
     {errorMessage && (
       <Alert variant='soft' color='danger' sx={{ mt: 2, mb: 0.5, flexDirection: 'column', alignItems: 'flex-start' }}>
         {errorMessage}
-        <ExternalDocsLink color='danger' level='body-sm' docPage='help-feature-microphone'>
+        <ExternalDocsLink color='danger' level='body-sm' docPage='feature-voice'>
           How to fix...
         </ExternalDocsLink>
       </Alert>
@@ -34,9 +34,6 @@ function ButtonMic(props: {
   noBackground?: boolean,
   onClick: () => void,
 }) {
-
-  // Mobile: don't blur the textarea when clicking the mic button
-  const handleDontBlurTextArea = useDontBlurTextarea();
 
   return (
     <GoodTooltip placement='top' arrow enableInteractive title={micLegend(props.errorMessage)}>

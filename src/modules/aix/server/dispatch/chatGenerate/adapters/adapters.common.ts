@@ -1,12 +1,35 @@
 import { escapeXml } from '~/server/wire';
 
-import type { AixAPIChatGenerate_Request, AixMessages_ChatMessage, AixMessages_SystemMessage, AixMessages_UserMessage, AixParts_DocPart, AixParts_MetaInReferenceToPart } from '../../../api/aix.wiretypes';
+import type { AixAPIChatGenerate_Request, AixMessages_ChatMessage, AixMessages_SystemMessage, AixMessages_UserMessage, AixParts_DocPart, AixParts_MediaUrlPart, AixParts_MetaInReferenceToPart } from '../../../api/aix.wiretypes';
 
 
 // types of AixMessages_SystemMessage contents that trigger a 'cut point' from system to user message
 const DEFAULT_SPILL_PART_TYPES: AixMessages_SystemMessage['parts'][number]['pt'][] = [
   'inline_image', // images cannot be in system messages
 ] as const;
+
+
+/**
+ * Anti-wedge stub for a tool call that has no result in the history (see the cat-1 rule in
+ * kb/modules/AIX-stateless-roundtrip-retention.md: all providers accept any string here).
+ *
+ * A tool call left unanswered in stored history is a hard 400 on Anthropic, OpenAI (both dialects)
+ * and Gemini, and it repeats on every later turn - the conversation is bricked until the offending
+ * message is deleted. Each adapter runs an interior-orphan pass over its own wire shape and pairs
+ * the missing results with this text; the trailing (in-flight) tool call is never paired.
+ */
+export const AIX_MISSING_TOOL_RESULT_TEXT = '[result omitted]';
+
+
+/** FNV-1a 32-bit hex digest - tiny, deterministic, edge-safe; for short stable wire ids derived from longer ones. */
+export function aixFnv1aHex(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
 
 
 /**
@@ -67,6 +90,31 @@ export function approxDocPart_To_String({ ref, data }: AixParts_DocPart /*, wrap
   //  - ...more ideas...
   //
   return '```' + (ref || '') + '\n' + data.text + '\n```\n';
+}
+
+/**
+ * Text degradation for URL-referenced media on dialects without native video input.
+ * Honest by design: tells the model a video was attached and that it cannot watch it,
+ * so multi-model runs (Beam) don't fail and don't hallucinate having seen it.
+ */
+export function approxMediaUrlPart_To_String({ url, mediaKind }: AixParts_MediaUrlPart): string {
+  return `[Attached ${mediaKind}: ${url} - this model cannot watch it; only the URL is visible]`;
+}
+
+/**
+ * A stored code cell (vendor-run code and its results) as one text block, for targets that cannot replay it natively:
+ * the code fenced in its own language, then each result. Never an undeclared tool call, which models distrust.
+ * `code` is null for a result stored without its code.
+ */
+export function approxCodeCell_To_String(code: string | null, language: string | undefined, results: readonly { result: string, error?: boolean | string }[]): string {
+  const lines = ['[code execution]'];
+  if (code !== null)
+    lines.push('```' + (language || '').toLowerCase(), code, '```');
+  for (const { result, error } of results)
+    lines.push(!error ? 'output:' : typeof error === 'string' ? `error (${error}):` : 'error:', result);
+  if (!results.length)
+    lines.push('output: not received');
+  return lines.join('\n');
 }
 
 export function approxInReferenceTo_To_XMLString(irt: AixParts_MetaInReferenceToPart): string | null {

@@ -55,14 +55,14 @@ export function TogetherAIServiceSetup(props: { serviceId: DModelsServiceId }) {
       autoCompleteId='togetherai-key' label='Together AI Key'
       rightLabel={<>{needsUserKey
         ? !togetherKey && <Link level='body-sm' href={TOGETHERAI_REG_LINK} target='_blank'>request Key</Link>
-        : <AlreadySet />}
+        : <AlreadySet overridden={!!togetherKey} />}
       </>}
       value={togetherKey} onChange={value => updateSettings({ togetherKey: value })}
       required={needsUserKey} isError={showKeyError}
       placeholder='...'
     />
 
-    {showAdvanced && <FormSwitchControl
+    {(showAdvanced || !!partialSettings?.togetherFreeTrial) && <FormSwitchControl
       title='Rate Limiter' on='Enabled' off='Disabled'
       description={partialSettings?.togetherFreeTrial ? 'Free trial: 2 requests/2s' : 'Disabled'}
       checked={partialSettings?.togetherFreeTrial ?? false}

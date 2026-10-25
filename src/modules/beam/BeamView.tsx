@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
-import { Alert, Box, CircularProgress } from '@mui/joy';
+import { Alert, Box, Button } from '@mui/joy';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import TelegramIcon from '@mui/icons-material/Telegram';
 
-import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
 import { ShortcutKey, useGlobalShortcuts } from '~/common/components/shortcuts/useGlobalShortcuts';
 import { animationEnterScaleUp } from '~/common/util/animUtils';
 import { copyToClipboard } from '~/common/util/clipboardUtils';
@@ -14,6 +15,7 @@ import { BeamExplainer } from './BeamExplainer';
 import { BeamFusionGrid } from './gather/BeamFusionGrid';
 import { BeamGatherPane } from './gather/BeamGatherPane';
 import { BeamRayGrid } from './scatter/BeamRayGrid';
+import { RenderDecayZone } from '~/common/render-decay/RenderDecayZone';
 import { BeamScatterInput } from './scatter/BeamScatterInput';
 import { BeamScatterPane } from './scatter/BeamScatterPane';
 import { BeamStoreApi, useBeamStore } from './store-beam.hooks';
@@ -29,7 +31,6 @@ export function BeamView(props: {
 
   // state
   const [hasAutoMerged, setHasAutoMerged] = React.useState(false);
-  const [warnIsScattering, setWarnIsScattering] = React.useState(false);
 
   // external state
   const { novel: explainerUnseen, touch: explainerCompleted, forget: explainerShow } = useUICounter('beam-wizard');
@@ -38,7 +39,7 @@ export function BeamView(props: {
     gatherAutoStartAfterScatter: state.gatherAutoStartAfterScatter,
   })));
   const {
-    /* root */ inputHistoryReplaceMessageFragment,
+    /* root */ inputHistoryReplaceMessageFragments,
     /* scatter */ setRayCount, startScatteringAll, stopScatteringAll,
   } = props.beamStore.getState();
   const {
@@ -81,7 +82,8 @@ export function BeamView(props: {
           copyToClipboard(combinedText, 'All Beams');
           break;
         case 'use':
-          onSuccessCallback?.({ fragments: allFragments });
+          // named generator: a replaced message must not keep its former model and metrics
+          onSuccessCallback?.({ fragments: allFragments, generator: { mgt: 'named', name: rays.length > 1 ? `${rays.length} Beams` : 'Beam' } });
           break;
       }
     }
@@ -92,24 +94,16 @@ export function BeamView(props: {
     startScatteringAll(restart);
   }, [startScatteringAll]);
 
+  const handleScatterStop = React.useCallback(() => {
+    setHasAutoMerged(true); // a manual stop never starts a merge
+    stopScatteringAll();
+  }, [stopScatteringAll]);
+
 
   const handleCreateFusion = React.useCallback(() => {
-    // if scatter is busy, ask for confirmation
-    if (isScattering) {
-      setWarnIsScattering(true);
-      return;
-    }
+    // while replies are still generating, a started merge waits for them on its own card
     props.beamStore.getState().createFusion();
-  }, [isScattering, props.beamStore]);
-
-
-  const handleStartMergeConfirmation = React.useCallback(() => {
-    setWarnIsScattering(false);
-    stopScatteringAll();
-    handleCreateFusion();
-  }, [handleCreateFusion, stopScatteringAll]);
-
-  const handleStartMergeDenial = React.useCallback(() => setWarnIsScattering(false), []);
+  }, [props.beamStore]);
 
 
   // auto-merge
@@ -117,17 +111,9 @@ export function BeamView(props: {
   React.useEffect(() => {
     if (shallAutoMerge) {
       setHasAutoMerged(true);
-      handleStartMergeConfirmation();
+      handleCreateFusion();
     }
-  }, [handleStartMergeConfirmation, shallAutoMerge]);
-
-  // (great ux) scatter finished while the "start merge" (warning) dialog is up: dismiss dialog and proceed
-  // here we assume that 'warnIsScattering' shows the intention of the user to proceed with a merge asap
-  const shallResumeMerge = warnIsScattering && !isScattering && !gatherAutoStartAfterScatter;
-  React.useEffect(() => {
-    if (shallResumeMerge)
-      handleStartMergeConfirmation();
-  }, [handleStartMergeConfirmation, shallResumeMerge]);
+  }, [handleCreateFusion, shallAutoMerge]);
 
 
   // runnning
@@ -142,8 +128,8 @@ export function BeamView(props: {
   // intercept ctrl+enter and esc
   useGlobalShortcuts('BeamView', React.useMemo(() => [
     { key: ShortcutKey.Enter, ctrl: true, action: () => handleScatterStart(false), disabled: isScattering, level: 1 },
-    ...(isScattering ? [{ key: ShortcutKey.Esc, action: stopScatteringAll, level: 10 + 1 /* becasuse > ChatBarAltBeam */ }] : []),
-  ], [handleScatterStart, isScattering, stopScatteringAll]));
+    ...(isScattering ? [{ key: ShortcutKey.Esc, action: handleScatterStop, level: 10 + 1 /* becasuse > ChatBarAltBeam */ }] : []),
+  ], [handleScatterStart, handleScatterStop, isScattering]));
 
 
   // Explainer, if unseen
@@ -179,7 +165,7 @@ export function BeamView(props: {
       <BeamScatterInput
         isMobile={props.isMobile}
         history={inputHistory}
-        onMessageFragmentReplace={inputHistoryReplaceMessageFragment}
+        onMessageFragmentsReplace={inputHistoryReplaceMessageFragments}
       />
 
       {/* Scatter Controls */}
@@ -193,23 +179,40 @@ export function BeamView(props: {
         startBusy={isScattering}
         startRestart={!props.isMobile && raysReady >= 1 && raysReady < raysCount && !isScattering}
         onStart={handleScatterStart}
-        onStop={stopScatteringAll}
+        onStop={handleScatterStop}
         onExplainerShow={explainerShow}
       />
 
 
-      {/* Rays Grid - BeamRay[] > <ChatMessage /> */}
-      <BeamRayGrid
+      {/* Rays Grid - BeamRay[] > <ChatMessage /> - one render decay zone */}
+      <RenderDecayZone><BeamRayGrid
         beamStore={props.beamStore}
         isMobile={props.isMobile}
         rayIds={rayIds}
         showRayAdd={cardAdd}
-        showRaysOps={(isScattering || raysReady < 2) ? undefined : raysReady}
         hadImportedRays={hadImportedRays}
         onIncreaseRayCount={handleRayIncreaseCount}
-        onRaysOperation={handleRaysOperation}
         // linkedLlmId={currentGatherLlmId}
-      />
+      /></RenderDecayZone>
+
+      {/* Rays Action Bar (2+ ready beams) - sibling of the grid (NOT a grid child); an in-grid spanning element with gridColumn:'1/-1' pins all auto-fit tracks open and leaves dead whitespace when raysCount < tracksCount. Fixes #1073. */}
+      {(!isScattering && raysReady >= 2) && (
+        <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, mx: 'var(--Pad)' }}>
+          <Button size='sm' variant='outlined' color='neutral' onClick={() => handleRaysOperation('copy')} endDecorator={<ContentCopyIcon sx={{ fontSize: 'md' }} />} sx={{
+            backgroundColor: 'background.surface',
+            '&:hover': { backgroundColor: 'background.popup' },
+          }}>
+            Copy {raysReady}
+          </Button>
+          <Button size='sm' variant='outlined' color='success' onClick={() => handleRaysOperation('use')} endDecorator={<TelegramIcon sx={{ fontSize: 'xl' }} />} sx={{
+            justifyContent: 'space-between',
+            backgroundColor: 'background.surface',
+            '&:hover': { backgroundColor: 'background.popup' },
+          }}>
+            Use {raysReady === 2 ? 'both' : 'all ' + raysReady} messages
+          </Button>
+        </Box>
+      )}
 
 
       {/* Gapper between Rays and Merge, without compromising the auto margin of the Ray Grid */}
@@ -225,35 +228,18 @@ export function BeamView(props: {
         raysReady={raysReady}
       />
 
-      {/* Fusion Grid - Fusion[] > <ChatMessage /> */}
-      <BeamFusionGrid
+      {/* Fusion Grid - Fusion[] > <ChatMessage /> - one render decay zone for the merges */}
+      <RenderDecayZone><BeamFusionGrid
         beamStore={props.beamStore}
         canGather={canGather}
         fusionIds={fusionIds}
         isMobile={props.isMobile}
         onAddFusion={handleCreateFusion}
         raysCount={raysCount}
-      />
+      /></RenderDecayZone>
 
     </Box>
 
-
-    {/* Confirm Stop Scattering */}
-    {warnIsScattering && (
-      <ConfirmationModal
-        open
-        onClose={handleStartMergeDenial}
-        onPositive={handleStartMergeConfirmation}
-        // lowStakes
-        noTitleBar
-        confirmationText='Some responses are still being generated. Do you want to stop and proceed with merging the available responses now?'
-        positiveActionText='Proceed with Merge'
-        negativeActionText='Wait for All Responses'
-        negativeActionStartDecorator={
-          <CircularProgress color='neutral' sx={{ '--CircularProgress-size': '24px', '--CircularProgress-trackThickness': '1px' }} />
-        }
-      />
-    )}
 
   </>;
 }

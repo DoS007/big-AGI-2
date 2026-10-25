@@ -3,22 +3,20 @@ import * as z from 'zod/v4';
 import type { AixAPI_Model, AixAPIChatGenerate_Request, AixMessages_ChatMessage, AixParts_DocPart, AixTools_ToolDefinition, AixTools_ToolsPolicy } from '../../../api/aix.wiretypes';
 import { GeminiWire_API_Generate_Content, GeminiWire_ContentParts, GeminiWire_Messages, GeminiWire_Safety, GeminiWire_ToolDeclarations } from '../../wiretypes/gemini.wiretypes';
 
-import { aixSpillSystemToUser, approxDocPart_To_String, approxInReferenceTo_To_XMLString } from './adapters.common';
+import { AIX_MISSING_TOOL_RESULT_TEXT, aixSpillSystemToUser, approxDocPart_To_String, approxInReferenceTo_To_XMLString } from './adapters.common';
 
 
 // configuration
-const hotFixImagePartsFirst = true; // https://ai.google.dev/gemini-api/docs/image-understanding#tips-best-practices
 const hotFixReplaceEmptyMessagesWithEmptyTextPart = true;
 
 // [Gemini 3, 2025-11-20] Bypass dummy thoughtSignature for Gemini 3+ validation
 // https://ai.google.dev/gemini-api/docs/thought-signatures
 const GEMINI_BYPASS_THOUGHT_SIGNATURE = 'context_engineering_is_the_way_to_go';
 const MODELS_REQUIRING_THOUGHT_SIGNATURE = [
-  'nano-banana-pro',
-  // preview, e.g.:
-  // 'gemini-3.1-flash-image-preview',
-  // 'gemini-3-pro-image-preview',
-  '-image-preview', // catch-all for image (nano banana) preview models
+  'nano-banana-pro', // matches the 'nano-banana-pro-preview' alias
+  // Gemini 3 image models (Nano Banana Pro / Nano Banana 2) - substrings match both the '-preview' and the graduated stable IDs
+  'gemini-3-pro-image',
+  'gemini-3.1-flash-image',
 ] as const;
 
 
@@ -70,6 +68,9 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
   // Chat Messages
   const contents: TRequest['contents'] = _toGeminiContents(chatGenerate.chatSequence, api3RequiresSignatures);
 
+  // Pair every interior functionCall with a functionResponse, or the request is rejected wholesale
+  _pairInteriorFunctionCalls(contents);
+
   // constrained output modes - only JSON (not tool invocations for now)
   const jsonOutputEnabled = !!model.strictJsonOutput || jsonOutput;
   const jsonOutputSchema = model.strictJsonOutput?.schema;
@@ -78,7 +79,7 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
   // Construct the request payload
   const payload: TRequest = {
     contents,
-    safetySettings: _toGeminiSafetySettings(geminiSafetyThreshold),
+    safetySettings: geminiSafetySettings(geminiSafetyThreshold),
     systemInstruction,
     generationConfig: {
       stopSequences: undefined, // (default, optional)
@@ -176,22 +177,11 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
 
   // --- Tools ---
 
-  // Allow/deny auto-adding hosted tools when custom tools are present
-  const hasCustomTools = chatGenerate.tools?.some(t => t.type === 'function_call');
-  const hasRestrictivePolicy = chatGenerate.toolsPolicy?.type === 'any' || chatGenerate.toolsPolicy?.type === 'function_call';
-  const skipHostedToolsDueToCustomTools = hasCustomTools && hasRestrictivePolicy; // FIXME: re-evaluate in the future whether this shall be on higher information levels (callers)
-
-  // Function Calls (Custom Tools)
-  if (chatGenerate.tools) {
-    payload.tools = _toGeminiTools(chatGenerate.tools);
-    if (chatGenerate.toolsPolicy)
-      payload.toolConfig = _toGeminiToolConfig(chatGenerate.toolsPolicy);
-  }
-
-  // Hosted tools
+  // --- Hosted tools (added first, custom tools below) ---
+  let _addedHostedTools = false;
 
   // [Gemini, 2025-11-18] Code Execution: add tool when enabled
-  if (model.vndGeminiCodeExecution === 'auto' && !skipHostedToolsDueToCustomTools) {
+  if (model.vndGeminiCodeExecution === 'auto') {
     if (!payload.tools) payload.tools = [];
 
     // Build the Code Execution tool configuration (empty object)
@@ -201,25 +191,28 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
 
     // Add to tools array
     payload.tools.push(codeExecutionTool);
+    _addedHostedTools = true;
   }
 
-  // [Gemini, 2025-11-01] Computer Use: add tool when environment is specified
-  if (model.vndGeminiComputerUse && !skipHostedToolsDueToCustomTools) {
+  // [Gemini, 2025-11-01] Computer Use: add tool when explicitly enabled or auto-detected from model ID
+  const computerUseEnv = model.vndGeminiComputerUse || (model.id.includes('-computer-use') ? 'browser' : undefined);
+  if (computerUseEnv) {
     if (!payload.tools) payload.tools = [];
 
     // Build the Computer Use tool configuration
     const computerUseTool: NonNullable<TRequest['tools']>[number] = {
       computerUse: {
-        environment: model.vndGeminiComputerUse === 'browser' ? 'ENVIRONMENT_BROWSER' : 'ENVIRONMENT_BROWSER',
+        environment: computerUseEnv === 'browser' ? 'ENVIRONMENT_BROWSER' : 'ENVIRONMENT_BROWSER',
       },
     };
 
     // Add to tools array
     payload.tools.push(computerUseTool);
+    _addedHostedTools = true;
   }
 
   // [Gemini, 2025-10-13] Google Search Grounding: add tool when enabled
-  if (model.vndGeminiGoogleSearch && !skipHostedToolsDueToCustomTools) {
+  if (model.vndGeminiGoogleSearch) {
     if (!payload.tools) payload.tools = [];
 
     // Build the Google Search tool configuration
@@ -229,11 +222,11 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
 
     // Add to tools array
     payload.tools.push(googleSearchTool);
+    _addedHostedTools = true;
   }
 
   // [Gemini, 2025-08-18] URL Context: add tool when enabled
-  const disableUrlContext = isFamilyNanoBanana /* Nano Bananas don't fetch */ || skipHostedToolsDueToCustomTools;
-  if (model.vndGeminiUrlContext === 'auto' && !disableUrlContext) {
+  if (model.vndGeminiUrlContext === 'auto' && !isFamilyNanoBanana /* Nano Bananas don't fetch */) {
     if (!payload.tools) payload.tools = [];
 
     // Build the URL Context tool configuration (empty object)
@@ -243,7 +236,56 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
 
     // Add to tools array
     payload.tools.push(urlContextTool);
+    _addedHostedTools = true;
   }
+
+
+  // --- Custom tools (function calling) ---
+
+  const hasUserTools = chatGenerate.tools?.some(t => t.type === 'function_call');
+
+  // Tool Context Circulation: Gemini 3+ can combine hosted + custom tools and expose server-side tool invocations.
+  // (What it is: the server replays its OWN hosted-tool calls/results back into the stream as toolCall/toolResponse
+  //  parts - enabled via `includeServerSideToolInvocations`; models that don't support it reject the request with HTTP 400.)
+  // - https://ai.google.dev/gemini-api/docs/tool-combination
+  // - AUTO mode is NOT supported - forces VALIDATED.
+  // Deny-list: models WITHOUT circulation (pre-Gemini 3, dedicated image-gen models, deep research).
+  // Match the '-image' id segment. '-image' also covers the '-image-preview' aliases, and
+  // the graduated GA ids like 'gemini-3.1-flash-image'.
+  const _noToolContextCirculation = ['gemini-2.', '-image', 'nano-banana', 'deep-research'];
+  const hasToolContextCirculation = !_noToolContextCirculation.some((p) => model.id.includes(p));
+
+  // [NO-CIRCULATION] can't combine hosted + custom tools with restrictive policies - custom wins -> wipe hosted if any
+  const hasUserRestrictivePolicy = chatGenerate.toolsPolicy?.type === 'any' /* || chatGenerate.toolsPolicy?.type === 'function_call' - DISABLED 2026-07-17, see ToolsPolicy_schema */;
+  // NOTE: we may have to remove the 'hasUserRestrictivePolicy' as some models seem to not want any other tool when user tools are set
+  if (_addedHostedTools && hasUserTools && !hasToolContextCirculation && hasUserRestrictivePolicy) {
+    _addedHostedTools = false;
+    payload.tools = undefined; // wipe
+  }
+
+  // Function Calls
+  if (chatGenerate.tools) {
+    payload.tools = [
+      ...payload.tools || [],
+      ..._toGeminiTools(chatGenerate.tools)
+    ];
+    if (chatGenerate.toolsPolicy)
+      payload.toolConfig = _toGeminiToolConfig(chatGenerate.toolsPolicy);
+  }
+
+  // [CIRCULATION] Enables server-side tool invocation visibility (toolCall/toolResponse parts in the stream). For:
+  //  A. hosted+custom on Gemini 3+ -> circulation + VALIDATED
+  //  B. hosted-only on Gemini 3+ -> circulation
+  //  C. hosted on Gemini 2.x -> tools work without circulation
+  //  D. custom-only -> no circulation needed.
+  if (_addedHostedTools && hasToolContextCirculation) {
+    payload.toolConfig = { ...payload.toolConfig, includeServerSideToolInvocations: true };
+
+    // When combining hosted + custom tools, AUTO mode is not supported - force VALIDATED
+    if (hasUserTools && payload.toolConfig?.functionCallingConfig?.mode === 'AUTO')
+      payload.toolConfig.functionCallingConfig.mode = 'VALIDATED';
+  }
+
 
   // Preemptive error detection with server-side payload validation before sending it upstream
   const validated = GeminiWire_API_Generate_Content.Request_schema.safeParse(payload);
@@ -258,6 +300,56 @@ export function aixToGeminiGenerateContent(model: AixAPI_Model, _chatGenerate: A
 type TRequest = GeminiWire_API_Generate_Content.Request;
 
 
+/**
+ * Anti-wedge: a model `functionCall` with no `functionResponse` for it in the next user content is a
+ * 400 ("the number of function response parts should be equal to the number of function call parts")
+ * that rejects the whole request. The orphan lives in stored history (a run that failed/aborted
+ * before the tool ran, or a tool no client processor claimed), so every later turn replays it and
+ * gets the same 400 - the conversation is bricked until the message is deleted.
+ *
+ * Synthesizes the stub prescribed in kb/modules/AIX-stateless-roundtrip-retention.md (cat-1), which
+ * also retro-heals conversations already poisoned in users' stores. No-op when well-formed.
+ * The LAST content is skipped: a trailing call is the in-flight call of an agentic loop.
+ * `executableCode` (hosted code execution) is untouched: it is answered by Gemini itself.
+ */
+function _pairInteriorFunctionCalls(contents: GeminiWire_Messages.Content[]): void {
+  for (let i = 0; i < contents.length - 1; i++) {
+    const content = contents[i];
+    if (content.role !== 'model') continue;
+
+    // client tool calls of this turn, in wire order
+    const functionCalls: { id?: string, name: string }[] = [];
+    for (const part of content.parts)
+      if ('functionCall' in part)
+        functionCalls.push({ id: part.functionCall.id, name: part.functionCall.name });
+    if (!functionCalls.length) continue;
+
+    // the responses must be in the next content: if that isn't a user turn, insert one to hold them
+    let responsesContent = contents[i + 1];
+    if (responsesContent.role !== 'user') {
+      responsesContent = { role: 'user', parts: [] };
+      contents.splice(i + 1, 0, responsesContent);
+    }
+
+    // match on the call id (always emitted by this adapter), falling back to the function name
+    const answeredKeys = new Set<string>();
+    for (const part of responsesContent.parts)
+      if ('functionResponse' in part)
+        answeredKeys.add(part.functionResponse.id ?? part.functionResponse.name);
+
+    const orphanCalls = functionCalls.filter(fc => !answeredKeys.has(fc.id ?? fc.name));
+    if (!orphanCalls.length) continue;
+
+    // head-insert, in functionCall order: responses lead the user turn, ahead of any user content
+    console.warn(`[Gemini] Pairing ${orphanCalls.length} orphan functionCall part(s) with a placeholder functionResponse (contents.${i})`);
+    responsesContent.parts.unshift(...orphanCalls.map(fc => GeminiWire_ContentParts.FunctionResponsePart({
+      id: fc.id,
+      name: fc.name,
+      response: { output: AIX_MISSING_TOOL_RESULT_TEXT },
+    })));
+  }
+}
+
 function _toGeminiContents(chatSequence: AixMessages_ChatMessage[], apiRequiresSignatures: boolean): GeminiWire_Messages.Content[] {
 
   // Remove messages that are made of empty parts
@@ -265,28 +357,43 @@ function _toGeminiContents(chatSequence: AixMessages_ChatMessage[], apiRequiresS
   //   chatSequence = chatSequence.filter(message => message.parts.length > 0);
 
 
-  return chatSequence.map(message => {
-    const parts: GeminiWire_ContentParts.ContentPart[] = [];
+  return chatSequence.reduce<GeminiWire_Messages.Content[]>((contents, message) => {
+    const isModelMessage = message.role === 'model';
+    const baseRole: GeminiWire_Messages.Content['role'] = isModelMessage ? 'model' : 'user';
 
-    if (hotFixImagePartsFirst) {
-      // https://ai.google.dev/gemini-api/docs/image-understanding#tips-best-practices
-      // "When using a single image with text, place the text prompt after the image part in the contents array."
-      message.parts.sort((a, b) => {
-        if (a.pt === 'inline_image' && b.pt !== 'inline_image') return -1;
-        if (a.pt !== 'inline_image' && b.pt === 'inline_image') return 1;
-        return 0;
-      });
+    const messageParts = message.parts;
+
+    // Gemini requires tool_response (FunctionResponse/CodeExecutionResult) in 'user' Content,
+    // but tool_invocation (FunctionCall/ExecutableCode) in 'model' Content. For model messages
+    // that contain both (multi-turn tool loop), we emit separate Content objects at each role
+    // boundary to preserve part ordering and thought signature positional context.
+    let currentRole: GeminiWire_Messages.Content['role'] = baseRole;
+    let parts: GeminiWire_ContentParts.ContentPart[] = [];
+
+    function flushContent() {
+      if (parts.length > 0)
+        contents.push({ role: currentRole, parts: parts });
+      parts = [];
     }
 
     /* Semantically we want to preserve an empty assistant response, but Gemini requires
      * at least one part for a `Content` object, so the empty message becomes a "" instead.
      * E.g. { role: 'rolename', parts: [{text: ''}] }
      */
-    if (hotFixReplaceEmptyMessagesWithEmptyTextPart && message.parts.length === 0) {
+    if (hotFixReplaceEmptyMessagesWithEmptyTextPart && messageParts.length === 0) {
       parts.push(GeminiWire_ContentParts.TextPart(''));
     }
 
-    for (const part of message.parts) {
+    for (const part of messageParts) {
+      // Determine the target Gemini role for this part: tool_response -> 'user', everything else -> baseRole
+      const partRole: GeminiWire_Messages.Content['role'] = (isModelMessage && part.pt === 'tool_response') ? 'user' : baseRole;
+
+      // Flush on role boundary to preserve ordering
+      if (partRole !== currentRole) {
+        flushContent();
+        currentRole = partRole;
+      }
+
       let partRequiresSignature = false;
       switch (part.pt) {
 
@@ -294,7 +401,7 @@ function _toGeminiContents(chatSequence: AixMessages_ChatMessage[], apiRequiresS
           parts.push(GeminiWire_ContentParts.TextPart(part.text));
 
           // [Gemini, 2025-11-20] Nano Banana Pro requires thoughtSignature on the first model text part
-          if (apiRequiresSignatures && message.role === 'model')
+          if (apiRequiresSignatures && isModelMessage)
             partRequiresSignature = true;
           break;
 
@@ -303,6 +410,13 @@ function _toGeminiContents(chatSequence: AixMessages_ChatMessage[], apiRequiresS
           parts.push(GeminiWire_ContentParts.InlineDataPart(part.mimeType, part.base64));
           if (apiRequiresSignatures)
             partRequiresSignature = true;
+          break;
+
+        case 'media_url':
+          // URL-referenced video (YouTube or direct https): native fileData - Google fetches it server-side.
+          // FUTURE: when the wire part regains clipStartSec/clipEndSec/fps, lower them to the third
+          // FileDataPart arg (videoMetadata: startOffset '<n>s' / endOffset / fps - probe-verified, clips bill only the slice)
+          parts.push(GeminiWire_ContentParts.FileDataPart(part.url, part.mimeType));
           break;
 
         case 'doc':
@@ -342,12 +456,12 @@ function _toGeminiContents(chatSequence: AixMessages_ChatMessage[], apiRequiresS
                   functionCallArgs = invocation.args;
                 }
               }
-              parts.push(GeminiWire_ContentParts.FunctionCallPart(invocation.name, functionCallArgs));
+              parts.push(GeminiWire_ContentParts.FunctionCallPart({ id: part.id, name: invocation.name, args: functionCallArgs }));
               break;
             case 'code_execution':
               if (invocation.language?.toLowerCase() !== 'python')
                 console.warn('Gemini only supports Python code execution, but got:', invocation.language);
-              parts.push(GeminiWire_ContentParts.ExecutableCodePart('PYTHON', invocation.code));
+              parts.push(GeminiWire_ContentParts.ExecutableCodePart('PYTHON', invocation.code, part.id));
               break;
             default:
               const _exhaustiveCheck: never = invocation;
@@ -378,10 +492,10 @@ function _toGeminiContents(chatSequence: AixMessages_ChatMessage[], apiRequiresS
                   functionResponseResponse = part.response.result;
                 }
               }
-              parts.push(GeminiWire_ContentParts.FunctionResponsePart(part.response._name || part.id, functionResponseResponse));
+              parts.push(GeminiWire_ContentParts.FunctionResponsePart({ id: part.id, name: part.response.name, response: functionResponseResponse }));
               break;
             case 'code_execution':
-              parts.push(GeminiWire_ContentParts.CodeExecutionResultPart(!part.error ? 'OUTCOME_OK' : 'OUTCOME_FAILED', toolErrorPrefix + part.response.result));
+              parts.push(GeminiWire_ContentParts.CodeExecutionResultPart(!part.error ? 'OUTCOME_OK' : 'OUTCOME_FAILED', toolErrorPrefix + part.response.result, part.id));
               break;
             default:
               const _exhaustiveCheck: never = part.response;
@@ -413,11 +527,9 @@ function _toGeminiContents(chatSequence: AixMessages_ChatMessage[], apiRequiresS
       }
     }
 
-    return {
-      role: message.role === 'model' ? 'model' : 'user',
-      parts,
-    };
-  });
+    flushContent();
+    return contents;
+  }, []);
 }
 
 function _toGeminiTools(itds: AixTools_ToolDefinition[]): NonNullable<TRequest['tools']> {
@@ -491,17 +603,18 @@ function _toGeminiToolConfig(itp: AixTools_ToolsPolicy): NonNullable<TRequest['t
       return { functionCallingConfig: { mode: 'AUTO' } };
     case 'any':
       return { functionCallingConfig: { mode: 'ANY' } };
-    case 'function_call':
-      return {
-        functionCallingConfig: {
-          mode: 'ANY',
-          allowedFunctionNames: [itp.function_call.name],
-        },
-      };
+    // DISABLED 2026-07-17 - forced named tool, see ToolsPolicy_schema
+    // case 'function_call':
+    //   return {
+    //     functionCallingConfig: {
+    //       mode: 'ANY',
+    //       allowedFunctionNames: [itp.function_call.name],
+    //     },
+    //   };
   }
 }
 
-function _toGeminiSafetySettings(threshold: GeminiWire_Safety.HarmBlockThreshold): TRequest['safetySettings'] {
+export function geminiSafetySettings(threshold: GeminiWire_Safety.HarmBlockThreshold): TRequest['safetySettings'] {
   return threshold === 'HARM_BLOCK_THRESHOLD_UNSPECIFIED' ? undefined : [
     { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: threshold },
     { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: threshold },

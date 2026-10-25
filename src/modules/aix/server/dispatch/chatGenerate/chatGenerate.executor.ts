@@ -1,6 +1,8 @@
 import { createEmptyReadableStream, safeErrorString } from '~/server/wire';
-import { createRetryablePromise, RetryAttempt } from '~/server/trpc/trpc.fetchers.retrier';
 import { fetchResponseOrTRPCThrow } from '~/server/trpc/trpc.router.fetchers';
+import { fetchWithAbortableConnectionRetry, RetryAttempt } from '~/server/trpc/trpc.fetchers.retrier';
+
+import { llmAppIdentityHeaders } from '~/modules/llms/shared/llm.appIdentity';
 
 import { objectDeepCloneWithStringLimit } from '~/common/util/objectUtils';
 
@@ -9,10 +11,24 @@ import { AixWire_Particles } from '../../api/aix.wiretypes';
 
 import { AixDebugObject } from './chatGenerate.debug';
 import { AixDemuxers } from '../stream.demuxers';
-import { ChatGenerateDispatch, ChatGenerateDispatchRequest, ChatGenerateParseFunction } from './chatGenerate.dispatch';
+import { ChatGenerateDispatch, ChatGenerateDispatchRequest, ChatGenerateParseContext, ChatGenerateParseFunction } from './chatGenerate.dispatch';
 import { ChatGenerateTransmitter } from './ChatGenerateTransmitter';
-import { RequestRetryError } from './chatGenerate.retrier';
+import { DispatchContinuationSignal } from './chatGenerate.continuation';
+import { OperationRetrySignal } from './chatGenerate.operation-retry';
 import { heartbeatsWhileAwaiting } from '../heartbeatsWhileAwaiting';
+
+
+/**
+ * Local replacement for Promise.withResolvers (ES2024). Native in Node 22+/Edge, but this file
+ * ships to the browser via AIX client-side-fetch (CSF), where older browsers (Safari < 17.4,
+ * Chrome < 119, Firefox < 121) lack it. This manual form works on every runtime.
+ */
+function promiseWithResolvers<T>(): { promise: Promise<T>, resolve: (value: T | PromiseLike<T>) => void, reject: (reason?: any) => void } {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: any) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
 
 
 // --- ChatGenerate Core procedure ---
@@ -23,12 +39,11 @@ import { heartbeatsWhileAwaiting } from '../heartbeatsWhileAwaiting';
  *
  * Can be called directly from server-side code or wrapped in retry logic, batching, etc.
  */
-export async function* executeChatGenerate(
+export async function* executeChatGenerateDispatch(
   dispatchCreatorFn: () => Promise<ChatGenerateDispatch>,
-  streaming: boolean,
   intakeAbortSignal: AbortSignal,
   _d: AixDebugObject,
-  parseContext?: { retriesAvailable: boolean },
+  parseContext?: ChatGenerateParseContext,
 ): AsyncGenerator<AixWire_Particles.ChatGenerateOp, void> {
 
   // AIX ChatGenerate Particles - Intake Transmitter
@@ -38,6 +53,8 @@ export async function* executeChatGenerate(
   let dispatch: ChatGenerateDispatch;
   try {
     dispatch = await dispatchCreatorFn();
+    // attach outbound app identity, for every dialect (no-op in the browser)
+    dispatch.request.headers = llmAppIdentityHeaders(dispatch.request.headers);
   } catch (error: any) {
     // log but don't warn on the server console, this is typically a service configuration issue (e.g. a missing password will throw here)
     chatGenerateTx.setDispatchRpcTerminatingIssue('dispatch-prepare', `**[AIX Configuration Issue] ${_d.prettyDialect}**: ${safeErrorString(error) || 'Unknown service preparation error'}`, 'srv-log');
@@ -49,27 +66,47 @@ export async function* executeChatGenerate(
   if (_d.requestBodyOverride && 'body' in dispatch.request)
     dispatch.request.body = { ...dispatch.request.body, ..._d.requestBodyOverride };
 
-  // Connect to the dispatch
-  const dispatchResponse = yield* _connectToDispatch(dispatch.request, intakeAbortSignal, chatGenerateTx, _d);
+  // Connect to the dispatch (yields debug echo particles directly, bypasses particle transforms)
+  const dispatchResponse = yield* _connectToDispatch(dispatch.request, dispatch.customConnect, intakeAbortSignal, chatGenerateTx, _d);
   if (!dispatchResponse)
     return; // exit: error already handled
 
-  // Consume dispatch response
-  if (!streaming)
-    yield* _consumeDispatchUnified(dispatchResponse, dispatch.chatGenerateParse, chatGenerateTx, _d, parseContext);
-  else
-    yield* _consumeDispatchStream(dispatchResponse, dispatch.bodyTransform ?? null, dispatch.demuxerFormat, dispatch.chatGenerateParse, chatGenerateTx, _d, parseContext);
+  // Inner stream
+  const innerStream = (async function* () {
 
-  // Tack profiling particles if generated
-  if (_d.profiler) {
-    chatGenerateTx.addDebugProfilerData(_d.profiler.getResultsData());
-    // performanceProfilerLog('AIX Router Performance', profiler?.getResultsData()); // uncomment to log to server console
-    _d.profiler.clearMeasurements();
+    // Consume dispatch response
+    if (dispatch.demuxerFormat === null /* NS */)
+      yield* _consumeDispatchUnified(dispatchResponse, dispatch.chatGenerateParse, chatGenerateTx, _d, parseContext);
+    else
+      yield* _consumeDispatchStream(dispatchResponse, dispatch.bodyTransform ?? null, dispatch.demuxerFormat, dispatch.chatGenerateParse, chatGenerateTx, _d, parseContext);
+
+    // Tack profiling particles if generated
+    if (_d.profiler) {
+      chatGenerateTx.addDebugProfilerData(_d.profiler.getResultsData());
+      // performanceProfilerLog('AIX Router Performance', profiler?.getResultsData()); // uncomment to log to server console
+      _d.profiler.clearMeasurements();
+    }
+
+    // Flush everything that's left; if we're here we have encountered a clean end condition,
+    // or an error that has already been queued up for this last flush
+    yield* chatGenerateTx.flushParticles();
+
+  })();
+
+  // Transform (optional): pipe the stream through a 1:1 async particle transformer (see anthropic.transform-fileInline.ts)
+  const transform = dispatch.particleTransform;
+  if (!transform) {
+    yield* innerStream; // no transform, passthrough
+    return;
   }
-
-  // Flush everything that's left; if we're here we have encountered a clean end condition,
-  // or an error that has already been queued up for this last flush
-  yield* chatGenerateTx.flushParticles();
+  for await (const particle of innerStream) {
+    try {
+      yield await transform(particle);
+    } catch (error: any) {
+      console.warn(`[AIX] ${_d.prettyDialect}: particle transform '${transform.name}' threw, passing original particle through`, { error: error?.message || error });
+      yield particle;
+    }
+  }
 }
 
 
@@ -82,6 +119,7 @@ export async function* executeChatGenerate(
  */
 async function* _connectToDispatch(
   request: ChatGenerateDispatchRequest,
+  customConnect: ((signal: AbortSignal) => Promise<Response>) | undefined,
   intakeAbortSignal: AbortSignal,
   chatGenerateTx: ChatGenerateTransmitter,
   _d: AixDebugObject,
@@ -101,23 +139,42 @@ async function* _connectToDispatch(
 
     // Blocking fetch with heartbeats - combats timeouts, for instance with long Anthropic requests (>25s on large requests for Opus 3 models)
     _d.profiler?.measureStart('connect');
-    const connectionOperationCreator = () => fetchResponseOrTRPCThrow({
+    // [customConnect] dialects that need multi-step I/O (e.g. Gemini Interactions poll loop) own the connection
+    const connectionOperationCreator = customConnect ? () => customConnect(intakeAbortSignal) : () => fetchResponseOrTRPCThrow({
       ...request,
       signal: intakeAbortSignal,
       name: `Aix.${_d.prettyDialect}`,
       throwWithoutName: true,
     });
+    // drain (▼) signal allows to interrupt the heartbeat loop and yield particles
+    let singnaldrain = promiseWithResolvers<'▼'>();
     const onRetryAttempt = (info: RetryAttempt) => {
       // -> retry-server-dispatch
-      chatGenerateTx.sendControl({ cg: 'retry-reset', rScope: 'srv-dispatch', rShallClear: false, reason: 'retrying initial connection', ...info });
+      chatGenerateTx.sendCGControl({
+        cg: 'aix-retry-reset', rScope: 'srv-dispatch',
+        rClearStrategy: 'none', // clear nothing, because no content has been streamed while trying to connect
+        ...info, // reason, attempt (2..) of maxAttempts: same notation as the operation retrier
+      });
+      singnaldrain.resolve('▼'); // -> breaks the heartbeat loop
     };
-    const chatGenerateResponsePromise = createRetryablePromise(connectionOperationCreator, intakeAbortSignal, onRetryAttempt);
-    const dispatchResponse = yield* heartbeatsWhileAwaiting(chatGenerateResponsePromise);
-    _d.profiler?.measureEnd('connect');
+    // loops on connection issues, or throws the original error (TRPCFetcherError) from fetchResponseOrTRPCThrow when: not retryable, aborted, or attempts exhausted
+    const chatGenerateResponsePromise = fetchWithAbortableConnectionRetry(connectionOperationCreator, intakeAbortSignal, onRetryAttempt);
 
-    // Continue with the successful Fetch response (errors are caught below)
-    return dispatchResponse;
+    while (true) {
+      // this only yields heartbeat particles, does not yield while blocked on the connection attempt (which could be a long loop)
+      const dispatchResponse = yield* heartbeatsWhileAwaiting(Promise.race([chatGenerateResponsePromise, singnaldrain.promise]));
 
+      // ▼ interrupt: emit particles and restart heartbeat loop
+      if (dispatchResponse === '▼') {
+        singnaldrain = promiseWithResolvers<'▼'>(); // re-arm BEFORE draining, so a retry firing mid-drain resolves the fresh promise (else it's lost)
+        yield* chatGenerateTx.emitParticles();
+        continue;
+      }
+      _d.profiler?.measureEnd('connect');
+
+      // Continue with the successful Fetch response (errors are caught below)
+      return dispatchResponse;
+    }
   } catch (error: any) {
 
     // CSF - rethrow aborts to prevent particle creation and instead break the outer loops, as-if it was a tRPC client-side error
@@ -135,7 +192,13 @@ async function* _connectToDispatch(
     const dispatchFetchError = safeErrorString(error) + (error?.cause ? ' · ' + JSON.stringify(error.cause) : '');
     const extraDevMessage = AIX_SECURITY_ONLY_IN_DEV_BUILDS ? ` - [DEV_URL: ${request.url}]` : '';
 
-    chatGenerateTx.setDispatchRpcTerminatingIssue('dispatch-fetch', `**[Service Issue] ${_d.prettyDialect}**: ${dispatchFetchError}${extraDevMessage}`, _d.consoleLogErrors);
+    // upstream rejections that are user/key/policy issues (401 bad key, 402 billing, 403 region/permission, 404 unknown model, 429 quota) log instead of warn;
+    // 400/422 and the rest keep warning, as they can signal adapter bugs (malformed requests we generated)
+    const demoteToLog = [401, 402, 403, 404, 429];
+    const isUpstreamUserError = error?.name === 'TRPCFetcherError' && error.category === 'http' && demoteToLog.includes(error.httpStatus);
+    const serverLogLevel = _d.consoleLogErrors === 'srv-warn' && isUpstreamUserError ? 'srv-log' : _d.consoleLogErrors;
+
+    chatGenerateTx.setDispatchRpcTerminatingIssue('dispatch-fetch', `**[Service Issue] ${_d.prettyDialect}**: ${dispatchFetchError}${extraDevMessage}`, serverLogLevel);
     yield* chatGenerateTx.flushParticles();
     return null; // signal caller to exit
   }
@@ -150,7 +213,7 @@ async function* _consumeDispatchUnified(
   dispatchParserNS: ChatGenerateParseFunction,
   chatGenerateTx: ChatGenerateTransmitter,
   _d: AixDebugObject,
-  parseContext?: { retriesAvailable: boolean },
+  parseContext?: ChatGenerateParseContext,
 ): AsyncGenerator<AixWire_Particles.ChatGenerateOp, void> {
   let dispatchBody: string | undefined = undefined;
   try {
@@ -178,6 +241,10 @@ async function* _consumeDispatchUnified(
     }
 
   } catch (error: any) {
+    // NS pass-through dispatch signals - thrown by parsers to request operation retry or continuation
+    if (error instanceof DispatchContinuationSignal) throw error;
+    if (error instanceof OperationRetrySignal) throw error;
+
     if (dispatchBody === undefined)
       chatGenerateTx.setDispatchRpcTerminatingIssue('dispatch-read', `**[Reading Issue] ${_d.prettyDialect}**: ${safeErrorString(error) || 'Unknown stream reading error'}`, 'srv-warn');
     else
@@ -196,7 +263,7 @@ async function* _consumeDispatchStream(
   dispatchParser: ChatGenerateParseFunction,
   chatGenerateTx: ChatGenerateTransmitter,
   _d: AixDebugObject,
-  parseContext?: { retriesAvailable: boolean },
+  parseContext?: ChatGenerateParseContext,
 ): AsyncGenerator<AixWire_Particles.ChatGenerateOp, void> {
 
   // Body reader with optional transform (e.g. AWS EventStream binary -> SSE text)
@@ -272,6 +339,9 @@ async function* _consumeDispatchStream(
 
       // ignore events post termination
       if (chatGenerateTx.isEnded) {
+        // the SSE '[DONE]' sentinel after the terminal event is not a protocol issue ([Meta AI] Responses closes every stream with it)
+        if (demuxedItem.type === 'event' && demuxedItem.data === '[DONE]')
+          break; // inner for {}, will break outer
         // DEV-only message to fix dispatch protocol parsing -- warning on, because this is important and a sign of a bug
         console.warn(`[AIX] _consumeDispatchStream: ${_d.prettyDialect}: received stream event after termination. ignoring.`, demuxedItem);
         break; // inner for {}, will break outer
@@ -301,8 +371,9 @@ async function* _consumeDispatchStream(
           yield* chatGenerateTx.emitParticles();
 
       } catch (error: any) {
-        // special: pass-through ONLY our retriable errors, for full operation-level retry - these are thrown by Parsers to remand reconnection
-        if (error instanceof RequestRetryError) throw error;
+        // pass-through dispatch signals - thrown by parsers to request operation retry or continuation
+        if (error instanceof DispatchContinuationSignal) throw error;
+        if (error instanceof OperationRetrySignal) throw error;
 
         // Handle parsing issue (likely a schema break); print it to the server console as well
         chatGenerateTx.setDispatchRpcTerminatingIssue('dispatch-parse', ` **[Service Parsing Issue] ${_d.prettyDialect}**: ${safeErrorString(error) || 'Unknown stream parsing error'}.\n\nInput data: ${objectDeepCloneWithStringLimit(demuxedItem.data, 'aix.service-parsing-issue', 2048)}.\n\nPlease open a support ticket on GitHub.`, 'srv-warn');

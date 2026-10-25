@@ -8,7 +8,12 @@ import { navItems } from '~/common/app.nav';
 import { OPTIMA_OPEN_DEBOUNCE, OPTIMA_PEEK_HOVER_ENTER_DELAY, OPTIMA_PEEK_HOVER_ENTER_DELAY_PANEL, OPTIMA_PEEK_HOVER_TIMEOUT } from './optima.config';
 
 
-export type PreferencesTabId = 'chat' | 'voice' | 'draw' | 'tools' | undefined;
+export type PreferencesTabId =
+  | 'chat' | 'voice' | 'draw' | 'tools' // legacy aliases (still valid; resolved to nav nodes inside SettingsModal)
+  | 'appearance' | 'ai' | 'labs' // new top-level leaves
+  | 'voice-in' | 'voice-out' // Voice sub-items
+  | 'tools-draw' | 'tools-browse' | 'tools-search' // Tools sub-items
+  | undefined;
 
 export type ModelOptionsContext = 'full' | 'parameters';
 
@@ -31,6 +36,7 @@ interface OptimaState {
   showModelOptions: DLLMId | false;
   showModelOptionsContext: ModelOptionsContext;
   showModels: boolean;
+  showModelsTab: 'changelog' | null; // open the models dialog on a screen other than the setup
   showPreferences: boolean;
   preferencesTab: PreferencesTabId;
 
@@ -56,6 +62,7 @@ const modalsClosedState = {
   showModelOptions: false,
   showModelOptionsContext: 'full' as ModelOptionsContext,
   showModels: false,
+  showModelsTab: null,
   showPreferences: false,
 } as const;
 
@@ -109,7 +116,7 @@ export interface OptimaActions {
   openModelOptions: (id: DLLMId, context?: ModelOptionsContext) => void;
 
   closeModels: () => void;
-  openModels: () => void;
+  openModels: (initialTab?: 'changelog') => void;
 
   closePreferences: () => void;
   openPreferences: (changeTab?: PreferencesTabId) => void;
@@ -215,8 +222,8 @@ export const useLayoutOptimaStore = create<OptimaState & OptimaActions>((_set, _
   closeModelOptions: () => _set({ showModelOptions: false }),
   openModelOptions: (id: DLLMId, context?: ModelOptionsContext) => _set({ showModelOptions: id, showModelOptionsContext: context ?? 'full' }),
 
-  closeModels: () => _set({ showModels: false }),
-  openModels: () => _set({ showModels: true }),
+  closeModels: () => _set({ showModels: false, showModelsTab: null }),
+  openModels: (initialTab?: 'changelog') => _set({ showModels: true, showModelsTab: initialTab ?? null }),
 
   closePreferences: () => _set({ showPreferences: false }),
   openPreferences: (tab) => _set({ showPreferences: true, ...(tab !== undefined && { preferencesTab: tab }) }),

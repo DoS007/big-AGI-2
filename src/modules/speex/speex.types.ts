@@ -1,6 +1,7 @@
 import type { DConversationId } from '~/common/stores/chat/chat.conversation';
 import type { DModelsServiceId } from '~/common/stores/llms/llms.service.types';
 
+import type { SPEEX_MODELS } from './speex.config';
 import type { SpeexWire_VoiceOption } from './protocols/rpc/rpc.wiretypes';
 
 
@@ -8,7 +9,7 @@ import type { SpeexWire_VoiceOption } from './protocols/rpc/rpc.wiretypes';
 
 // Speex Vendor Types (supported TTS providers)
 
-export type DSpeexVendorType = 'elevenlabs' | 'inworld' | 'localai' | 'openai' | 'webspeech';
+export type DSpeexVendorType = 'elevenlabs' | 'gemini' | 'inworld' | 'localai' | 'openai' | 'webspeech';
 
 
 // Speex Engines - instances of TTS Vendors Types - persisted in store-module-speex
@@ -34,6 +35,7 @@ export type SpeexEngineId = string; // agiUuidV4('speex.engine.instance')
 // helper for mapping credentials and voice types to the engine type
 interface _TypeMap extends Record<DSpeexVendorType, { voice: unknown; credentials: unknown }> {
   'elevenlabs': { voice: DVoiceElevenLabs; credentials: DCredentialsApiKey };
+  'gemini': { voice: DVoiceGemini; credentials: DCredentialsLLMSService | DCredentialsApiKey };
   'inworld': { voice: DVoiceInworld; credentials: DCredentialsApiKey };
   'localai': { voice: DVoiceLocalAI; credentials: DCredentialsLLMSService | DCredentialsApiKey };
   'openai': { voice: DVoiceOpenAI; credentials: DCredentialsLLMSService | DCredentialsApiKey };
@@ -49,7 +51,7 @@ export type DSpeexVoice<TVt extends DSpeexVendorType> = _TypeMap[TVt]['voice'];
 
 export interface DVoiceElevenLabs {
   dialect: 'elevenlabs';
-  ttsModel?: 'eleven_v3' | 'eleven_multilingual_v2' | 'eleven_flash_v2_5' | 'eleven_turbo_v2_5';
+  ttsModel?: typeof SPEEX_MODELS.elevenlabs[number]; // unset = Auto
   ttsVoiceId?: string;
   // ttsStability?: number;
   // ttsSimilarityBoost?: number;
@@ -57,9 +59,15 @@ export interface DVoiceElevenLabs {
   // ttsS?: boolean;
 }
 
+export interface DVoiceGemini {
+  dialect: 'gemini';
+  ttsModel?: typeof SPEEX_MODELS.gemini[number]; // unset = Auto
+  ttsVoiceId?: string;        // Voice Library id, e.g. 'kore' (multilingual) or 'en-us-arlo' (localized)
+}
+
 export interface DVoiceInworld {
   dialect: 'inworld';
-  ttsModel?: 'inworld-tts-1.5-max' | 'inworld-tts-1.5-mini';
+  ttsModel?: typeof SPEEX_MODELS.inworld[number]; // unset = Auto
   ttsVoiceId?: string;        // e.g., 'Alex', 'Ashley', 'Dennis'
   ttsTemperature?: number;    // 0-2, default 1.1 (controls expressiveness)
   ttsSpeakingRate?: number;   // 0.5-1.5, default 1.0
@@ -76,7 +84,7 @@ export interface DVoiceLocalAI {
 
 export interface DVoiceOpenAI {
   dialect: 'openai';
-  ttsModel: 'tts-1' | 'tts-1-hd' | 'gpt-4o-mini-tts';
+  ttsModel?: typeof SPEEX_MODELS.openai[number]; // unset = Auto
   ttsVoiceId?: 'alloy' | 'ash' | 'coral' | 'echo' | 'fable' | 'nova' | 'onyx' | 'sage' | 'shimmer' | string;
   ttsSpeed?: number;       // 0.25-4.0
   ttsInstruction?: string; // voice instructions (gpt-4o-mini-tts only?)

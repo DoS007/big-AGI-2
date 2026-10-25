@@ -20,7 +20,7 @@ import type { AttachmentCreationOptions, AttachmentDraft, AttachmentDraftConvert
 import type { AttachmentsDraftsStore } from './store-attachment-drafts_slice';
 import { attachmentCloudConverterPrefix, attachmentCloudFetchFile, attachmentCloudGoogleWorkspaceExportMIME, CloudFetchError } from './attachment.cloud';
 import { attachmentGetLiveFileId, attachmentSourceSupportsLiveFile } from './attachment.livefile';
-import { guessInputContentTypeFromMime, heuristicMimeTypeFixup, mimeTypeIsDocX, mimeTypeIsPDF, mimeTypeIsPlainText, mimeTypeIsSupportedImage, reverseLookupMimeType } from './attachment.mimetypes';
+import { guessInputContentTypeFromMime, guessMimeTypeFromFilename, heuristicMimeTypeFixup, mimeTypeIsDocX, mimeTypeIsPDF, mimeTypeIsPlainText, mimeTypeIsSupportedImage, mimeTypeIsXlsx } from './attachment.mimetypes';
 import { imageDataToImageAttachmentFragmentViaDBlob } from './attachment.dblobs';
 
 
@@ -163,8 +163,7 @@ export async function attachmentLoadInputAsync(source: Readonly<AttachmentDraftS
       const fileExtension = source.refPath.split('.').pop()?.toLowerCase() || undefined;
       if (!fileMime) {
         // see note on 'attachAppendDataTransfer'; this is a fallback for drag/drop missing Mimes sometimes
-        if (fileExtension)
-          fileMime = reverseLookupMimeType(fileExtension);
+        fileMime = guessMimeTypeFromFilename(source.refPath);
 
         // unknown extension or missing extension and mime: falling back to text/plain
         if (!fileMime) {
@@ -352,6 +351,11 @@ export function attachmentDefineConverters(source: AttachmentDraftSource, input:
     // DOCX
     case mimeTypeIsDocX(input.mimeType):
       converters.push({ id: 'docx-to-html', name: 'DOCX to HTML' });
+      break;
+
+    // XLSX
+    case mimeTypeIsXlsx(input.mimeType):
+      converters.push({ id: 'xlsx-to-text', name: 'Spreadsheet Text' });
       break;
 
     // URL: custom converters because of a custom input structure with multiple inputs
@@ -578,6 +582,12 @@ export async function attachmentPerformConversion(
 
     // prepare the doc data
     let { title, caption, refString, docMeta } = _prepareDocData(source, input, converter.name);
+
+    // user-renamed draft: the label overrides the derived title and LLM-facing ref - caption keeps provenance
+    if (attachment.labelUserSet && attachment.label) {
+      title = attachment.label;
+      refString = humanReadableHyphenated(attachment.label);
+    }
 
     switch (converter.id) {
 
@@ -938,6 +948,22 @@ export async function attachmentPerformConversion(
           newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.VndAgiCode, createDMessageDataInlineText(html, 'text/html'), refString, DOCPART_DEFAULT_VERSION, docMeta));
         } catch (error) {
           console.error('Error in DOCX to Markdown conversion:', error);
+        }
+        break;
+
+
+      // XLSX to text (all worksheets)
+      case 'xlsx-to-text':
+        if (!_expectBlob(input.data, 'XLSX converter')) break;
+        try {
+          const { convertXlsxToText } = await import('./file-converters/XlsxToText');
+          const { text, sheetCount } = await convertXlsxToText(await input.data.arrayBuffer());
+          newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, createDMessageDataInlineText(text, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, docMeta));
+          edit(attachment.id, {
+            outputsHeuristic: { isAuto: false, actualConverterId: 'xlsx-to-text', explain: `${sheetCount} worksheet${sheetCount === 1 ? '' : 's'}` },
+          });
+        } catch (error) {
+          edit(attachment.id, { outputWarnings: [error instanceof Error ? error.message : 'Could not convert this XLSX file.'] });
         }
         break;
 

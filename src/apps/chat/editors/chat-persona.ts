@@ -1,4 +1,4 @@
-import { aixChatGenerateContent_DMessage_FromConversation, AixChatGenerateContent_DMessageGuts } from '~/modules/aix/client/aix.client';
+import { aixChatGenerateContent_DMessage_FromConversation, AixChatGenerateContent_DMessageGuts, aixOutcomeIsSuccess } from '~/modules/aix/client/aix.client';
 import { autoChatFollowUps } from '~/modules/aifn/auto-chat-follow-ups/autoChatFollowUps';
 import { autoConversationTitle } from '~/modules/aifn/autotitle/autoTitle';
 
@@ -10,7 +10,7 @@ import { DMessage, MESSAGE_FLAG_NOTIFY_COMPLETE, messageWasInterruptedAtStart } 
 import { getLabsHighPerformance } from '~/common/stores/store-ux-labs';
 
 import { PersonaChatMessageSpeak } from './persona/PersonaChatMessageSpeak';
-import { getChatAutoAI, getIsNotificationEnabledForModel } from '../store-app-chat';
+import { getChatAutoAI, getChatThinkingPolicy, getIsNotificationEnabledForModel } from '../store-app-chat';
 import { getInstantAppChatPanesCount } from '../components/panes/store-panes-manager';
 
 
@@ -55,7 +55,7 @@ export async function runPersonaOnConversationHead(
   const parallelViewCount = getLabsHighPerformance() ? 0 : getInstantAppChatPanesCount();
 
   // ai follow-up operations (fire/forget)
-  const { autoSpeak, autoSuggestDiagrams, autoSuggestHTMLUI, autoSuggestQuestions, autoTitleChat, chatThinkingPolicy } = getChatAutoAI();
+  const { autoSpeak, autoSuggestDiagrams, autoSuggestHTMLUI, autoSuggestQuestions, autoTitleChat } = getChatAutoAI();
 
   // AutoSpeak
   const autoSpeaker: PersonaProcessorInterface | null = autoSpeak !== 'off' ? new PersonaChatMessageSpeak(autoSpeak) : null;
@@ -78,15 +78,14 @@ export async function runPersonaOnConversationHead(
       // if (abortController.signal.aborted)
       //   console.warn('runPersonaOnConversationHead: Aborted', { conversationId, assistantLlmId, messageOverwrite });
 
-      // deep copy the object to avoid partial updates
-      let deepCopy = structuredClone(messageOverwrite);
+      // fragments and generator are already immutable (new refs per update) - no deep clone needed
+      const { fragments, ...rest } = messageOverwrite;
 
       // [Cosmetic Logic] if the content hasn't come yet, don't replace the fragments to still show the placeholder
-      if (!messageComplete && deepCopy.pendingIncomplete && deepCopy.fragments?.length === 0)
-        delete (deepCopy as any).fragments;
+      const includeFragments = !!fragments?.length || messageComplete || !messageOverwrite.pendingIncomplete;
 
       // update the message
-      cHandler.messageEdit(assistantMessageId, deepCopy, messageComplete, false);
+      cHandler.messageEdit(assistantMessageId, { ...(includeFragments && { fragments }), ...rest }, messageComplete, false);
 
       // if requested, speak the message
       autoSpeaker?.handleMessage(messageOverwrite, messageComplete);
@@ -97,12 +96,12 @@ export async function runPersonaOnConversationHead(
   );
 
   // final message update (needed only in case of error)
-  const lastDeepCopy = structuredClone(messageStatus.lastDMessage);
-  if (messageStatus.outcome === 'errored')
-    cHandler.messageEdit(assistantMessageId, lastDeepCopy, true, false);
+  const lastDMessage = messageStatus.lastDMessage;
+  if (messageStatus.outcome === 'failed')
+    cHandler.messageEdit(assistantMessageId, lastDMessage, true, false);
 
   // special case: if the last message was aborted and had no content, delete it
-  if (messageWasInterruptedAtStart(lastDeepCopy)) {
+  if (messageWasInterruptedAtStart(lastDMessage)) {
     cHandler.messagesDelete([assistantMessageId]);
     // NOTE: ok to exit here, as the abort was already done
     return false;
@@ -129,11 +128,12 @@ export async function runPersonaOnConversationHead(
   if (!hasBeenAborted && (autoSuggestDiagrams || autoSuggestHTMLUI || autoSuggestQuestions))
     void autoChatFollowUps(conversationId, assistantMessageId, autoSuggestDiagrams, autoSuggestHTMLUI, autoSuggestQuestions);
 
+  const chatThinkingPolicy = getChatThinkingPolicy();
   if (chatThinkingPolicy === 'last-only')
     cHandler.historyStripThinking(1);
   else if (chatThinkingPolicy === 'discard-all')
     cHandler.historyStripThinking(0);
 
   // return true if this succeeded
-  return messageStatus.outcome === 'success';
+  return aixOutcomeIsSuccess(messageStatus.outcome);
 }

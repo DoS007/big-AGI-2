@@ -1,24 +1,256 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+import { agiUuidV4 } from '~/common/util/idUtils';
+import { llmsStoreState, useModelsStore } from '~/common/stores/llms/store-llms';
 
-interface TextToImageStore {
+import type { DT2ICredentialsAny, DT2IEngine, DT2IEngineAny, DT2IEngineId, DT2IVendorType } from './t2i.types';
+import { isDalleModelId } from './t2i.config';
+import { t2iFindVendor, t2iFindVendorForLLMVendor } from './t2i.vendors-registry';
 
-  selectedT2IProviderId: string | null; // null = auto-select, specific ID = user choice
-  setSelectedT2IProviderId: (providerId: string | null) => void;
+
+interface T2IStoreState {
+
+  // map of engineId -> engine (for O(1) lookups and future ZYNC sync)
+  engines: Record<DT2IEngineId, DT2IEngineAny>;
+  activeEngineId: DT2IEngineId | null; // null = no user selection -> global auto-selection
+
+  // to avoid repeated migrations / initializations
+  hasInitializedLlms: boolean;
 
 }
 
-export const useTextToImageStore = create<TextToImageStore>()(
-  persist(
-    (_set) => ({
+interface T2IStoreActions {
 
-      selectedT2IProviderId: null, // null: auto-select highest priority configured provider
-      setSelectedT2IProviderId: (selectedT2IProviderId: string | null) => _set({ selectedT2IProviderId }),
+  // engine CRUD
+  createEngine: <TVt extends DT2IVendorType>(vendorType: TVt, partial?: Partial<DT2IEngine<TVt>>) => DT2IEngineId;
+  updateEngine: (engineId: DT2IEngineId, partial: Partial<DT2IEngineAny>) => void;
+  deleteEngine: (engineId: DT2IEngineId) => void;
 
-    }),
-    {
-      name: 'app-module-t2i',
-      version: 1,
-    }),
-);
+  // selection
+  setActiveEngineId: (engineId: DT2IEngineId | null) => void;
+
+  // auto-detection / sync from LLM services
+  syncEnginesFromLLMServices: (llmsSources: ReturnType<typeof useModelsStore.getState>['sources']) => boolean;
+
+}
+
+type T2IStore = T2IStoreState & T2IStoreActions;
+
+
+export const useT2IStore = create<T2IStore>()(persist(
+  (set, get) => ({
+
+    // initial state
+    engines: {},
+    activeEngineId: null,
+    hasInitializedLlms: false,
+
+
+    // Engine CRUD
+
+    createEngine: (vendorType, partial) => {
+      type TVt = typeof vendorType;
+      const v = t2iFindVendor(vendorType);
+      if (!v) throw new Error(`Unknown T2I engine type: ${vendorType}`);
+
+      const engineId = agiUuidV4('t2i.engine.instance');
+      const now = Date.now();
+
+      const engine = {
+        engineId,
+        vendorType,
+        label: partial?.label ?? v.name,
+        isAutoDetected: partial?.isAutoDetected ?? false,
+        isAutoLinked: partial?.isAutoLinked ?? false,
+        isDeleted: false,
+        credentials: partial?.credentials ?? v.getDefaultCredentials(),
+        profile: partial?.profile ?? v.getDefaultProfile(),
+        createdAt: now,
+        updatedAt: now,
+      } as const satisfies DT2IEngine<TVt>;
+
+      set(state => ({ engines: { ...state.engines, [engineId]: engine as DT2IEngineAny } }));
+      return engineId;
+    },
+
+    updateEngine: (engineId, partial) => {
+      set(state => {
+        const engine = state.engines[engineId];
+        if (!engine) return state;
+        return {
+          engines: {
+            ...state.engines,
+            [engineId]: {
+              ...engine,
+              ...partial,
+              updatedAt: Date.now(),
+            } as DT2IEngineAny,
+          },
+        };
+      });
+    },
+
+    deleteEngine: (engineId) => {
+      set(state => {
+        const engine = state.engines[engineId];
+        if (!engine) return state;
+
+        // soft-delete for auto-detected engines (so sync can restore them if the source returns)
+        if (engine.isAutoDetected)
+          return {
+            engines: { ...state.engines, [engineId]: { ...engine, isDeleted: true, updatedAt: Date.now() } },
+            activeEngineId: state.activeEngineId === engineId ? null : state.activeEngineId,
+          };
+
+        // hard removal for user-created engines
+        const { [engineId]: _removed, ...restEngines } = state.engines;
+        return {
+          engines: restEngines,
+          activeEngineId: state.activeEngineId === engineId ? null : state.activeEngineId,
+        };
+      });
+    },
+
+
+    // Selection
+
+    setActiveEngineId: (engineId) => {
+      set({ activeEngineId: engineId });
+    },
+
+
+    // Auto-detection
+
+    syncEnginesFromLLMServices: (llmsSources) => {
+      const { engines, createEngine, updateEngine } = get();
+
+      let hasChanges = false;
+      const autoLinkedIds = new Set<DT2IEngineId>();
+
+      // restore or create auto-linked engines
+      for (const source of llmsSources) {
+        const vendor = t2iFindVendorForLLMVendor(source.vId);
+        if (!vendor) continue;
+
+        // secondary qualifier: e.g. OpenAI opts out when the LLM service uses a custom host
+        // (likely an OpenAI-compatible proxy that doesn't implement image generation)
+        if (vendor.shouldAutoLinkFromLLMSource && !vendor.shouldAutoLinkFromLLMSource(source)) continue;
+
+        // check if we already have an auto-linked engine for this service
+        let existing: DT2IEngineAny | undefined;
+        for (const engineId in engines) {
+          const e = engines[engineId];
+          if (e.isAutoLinked && e.credentials?.type === 'llms-service' && e.credentials.serviceId === source.id) {
+            existing = e;
+            break;
+          }
+        }
+
+        // existing: mark as valid and restore if soft-deleted
+        if (existing) {
+          if (existing.isDeleted) {
+            hasChanges = true;
+            updateEngine(existing.engineId, { isDeleted: false });
+          }
+          autoLinkedIds.add(existing.engineId);
+          continue;
+        }
+
+        // non-existing: create
+        hasChanges = true;
+        const engineId = createEngine(vendor.vendorType, {
+          label: source?.label || vendor.name,
+          isAutoDetected: true,
+          isAutoLinked: true,
+          credentials: {
+            type: 'llms-service',
+            serviceId: source.id,
+          },
+        });
+        autoLinkedIds.add(engineId);
+      }
+
+      // soft-delete auto-linked engines whose service disappeared
+      for (const engineId in engines) {
+        const engine = engines[engineId];
+        if (engine.isAutoLinked && !autoLinkedIds.has(engine.engineId) && !engine.isDeleted) {
+          hasChanges = true;
+          updateEngine(engine.engineId, { isDeleted: true });
+        }
+      }
+
+      if (hasChanges)
+        set({ hasInitializedLlms: true });
+
+      return hasChanges;
+    },
+
+  }), {
+    name: 'app-module-t2i',
+    version: 3,
+
+    // 2: engine-instance store (ASRx-style) - discard the v1 shape ({selectedT2IProviderId});
+    //    auto-detection re-creates engines and re-resolves the active one
+    // 3: DALL·E 2/3 retired - null their model selection (-> auto) and drop their profile fields
+    migrate: (state: unknown, fromVersion) => {
+      if (fromVersion < 2)
+        return { engines: {}, activeEngineId: null, hasInitializedLlms: false };
+      if (fromVersion < 3) {
+        const engines = (state as T2IStoreState)?.engines ?? {};
+        for (const engine of Object.values(engines)) {
+          const profile: any = engine?.profile;
+          if (profile?.dialect !== 'dalle') continue;
+          if (!isDalleModelId(profile.dalleModelId)) profile.dalleModelId = null;
+          delete profile.dalleNoRewrite;
+          delete profile.dalleSizeD3;
+          delete profile.dalleQualityD3;
+          delete profile.dalleStyleD3;
+          delete profile.dalleSizeD2;
+        }
+      }
+      return state;
+    },
+
+    // Run auto-detections & migrations after rehydrate
+    onRehydrateStorage: () => (store) => {
+      if (!store) return;
+
+      // initial auto-sync from LLM services (only runs once until marked initialized)
+      if (!store.hasInitializedLlms)
+        store.syncEnginesFromLLMServices(useModelsStore.getState().sources);
+
+      // ongoing sync when LLM services change
+      useModelsStore.subscribe((state, prevState) => {
+        if (state.sources === prevState.sources) return;
+        store.syncEnginesFromLLMServices(state.sources);
+      });
+    },
+  },
+));
+
+
+// --- Getters ---
+// NOTE: engine resolution (active-or-auto) lives in t2i.client's provider view,
+// the single resolution path - do not duplicate it here
+
+export function t2iFindEngineById(engineId: DT2IEngineId | null): DT2IEngineAny | null {
+  if (!engineId) return null;
+  const { engines } = useT2IStore.getState();
+  const engine = engines[engineId];
+  if (!engine || engine.isDeleted) return null;
+  return engine;
+}
+
+/**
+ * Credential validity:
+ * - 'llms-service' passes when the linked LLM service still exists; generation goes
+ *   through the server with the service's transport access, so no CSF check is needed.
+ */
+export function t2iAreCredentialsValid(credentials: DT2ICredentialsAny): boolean {
+  switch (credentials.type) {
+    case 'llms-service':
+      const { sources: llmSources } = llmsStoreState();
+      return llmSources.some(s => s.id === credentials.serviceId);
+  }
+}

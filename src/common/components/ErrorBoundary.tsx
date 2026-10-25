@@ -3,6 +3,7 @@ import * as React from 'react';
 import { BaseProduct } from '~/common/app.release';
 import { logger } from '~/common/logger';
 import { posthogCaptureException } from '~/common/components/3rdparty/PostHogAnalytics';
+import { isBenignDomMutationError, isChunkLoadError } from '~/common/util/errorUtils';
 
 
 export interface ErrorBoundaryProps {
@@ -51,10 +52,26 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     const { componentName, onError } = this.props;
 
     // Check for benign DOM errors and handle silently
-    if (error.name === 'NotFoundError' && error.message?.includes('removeChild')) {
+    if (isBenignDomMutationError(error)) {
       console.warn(`Benign DOM error in ${componentName}: ${error.message}`);
       this.setState({ hasError: false, error: null });
       return;
+    }
+
+    // Stale-deploy chunk load failures: auto-reload once per session to fetch current files.
+    // The transient first-time case is expected after a deploy (don't report it); only a
+    // failure that survives a reload (broken deploy / CDN / offline) is worth reporting.
+    if (isChunkLoadError(error)) {
+      if (this.tryReloadOnceForChunkError())
+        return; // reloading now - fallback UI not needed
+      console.warn(`Persistent chunk load error in ${componentName}: ${error.message}`);
+      posthogCaptureException(error, {
+        agi_domain: 'client-error-boundary',
+        agi_runtime: 'browser',
+        component: componentName,
+        chunk_reload_failed: true,
+      });
+      return; // keep hasError=true so the "Update Required" fallback renders
     }
 
     // Log the error using the custom logger (skip reporting to PostHog since we handle it directly below)
@@ -80,6 +97,27 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     onError?.(error, errorInfo);
   }
 
+  /**
+   * Reload the page once per session to recover from a stale-deploy chunk load failure.
+   * Guarded by sessionStorage (with a short time window) to avoid reload loops when the
+   * chunk is genuinely unreachable (offline / broken deploy / sessionStorage unavailable).
+   * @returns true if a reload was triggered, false if we should fall back to the manual UI.
+   */
+  private tryReloadOnceForChunkError(): boolean {
+    if (typeof window === 'undefined') return false;
+    const RELOAD_GUARD_KEY = 'agi-chunk-reload-at';
+    try {
+      const prev = window.sessionStorage.getItem(RELOAD_GUARD_KEY);
+      if (prev && (Date.now() - Number(prev)) < 30_000)
+        return false; // already auto-reloaded recently - don't loop
+      window.sessionStorage.setItem(RELOAD_GUARD_KEY, String(Date.now()));
+    } catch {
+      return false; // sessionStorage unavailable (private mode etc.) - don't risk a loop
+    }
+    window.location.reload();
+    return true;
+  }
+
   resetErrorBoundary = (): void => {
     const { onReset } = this.props;
     onReset?.();
@@ -89,6 +127,12 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   render(): React.ReactNode {
     const { hasError, error } = this.state;
     const { outer, children, fallback } = this.props;
+    const isChunkLoad = isChunkLoadError(error);
+    const heading = isChunkLoad ? 'Update Required' : 'Oops, we hit a snag';
+    const message = isChunkLoad
+      ? 'A part of Big-AGI could not be loaded. This usually happens when the app has been updated while this tab is still running, '
+        + 'so the loaded app and deployed files are out of sync. Reloading should fetch the current version.'
+      : `An unexpected error occurred.${outer ? ' Please try reloading Big-AGI.' : ''}`;
 
     if (hasError && error)
       return fallback ? fallback : (
@@ -113,9 +157,9 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
             maxWidth: '90%',
           }}>
             <div className='vivided'>
-              <h2 className='heading'>Oops, we hit a snag</h2>
+              <h2 className='heading'>{heading}</h2>
               <div className='message'>
-                <p style={{ fontWeight: 500 }}>An unexpected error occurred.{outer ? ' Please try reloading Big-AGI.' : ''}</p>
+                <p style={{ fontWeight: 500 }}>{message}</p>
                 {outer && (
                   <p style={{ fontWeight: 500 }}>
                     {' '}If the issue persists, please{' '}
@@ -138,7 +182,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
               </div>
             </div>
             <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
-              {outer ? (
+              {outer || isChunkLoad ? (
                 <button className='button' onClick={() => window.location.reload()}>
                   Reload Big-AGI
                 </button>

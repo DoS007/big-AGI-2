@@ -1,37 +1,54 @@
 import * as React from 'react';
 
+import { Box } from '@mui/joy';
+
 import type { ContentScaling } from '~/common/app.theme';
 import type { DMessageRole } from '~/common/stores/chat/chat.message';
+import { useRenderDecay } from '~/common/render-decay/RenderDecayZone';
 
+import { BLOCK_CODE_MERMAID_TITLE, BLOCK_CODE_PLANTUML_TITLE, BLOCK_CODE_SVG_TITLE, BLOCK_CODE_VND_AGI_CHARTJS, RenderCodeMemo } from './code/RenderCode';
 import { BlocksContainer } from './BlocksContainers';
-import { EnhancedRenderCode } from './enhanced-code/EnhancedRenderCode';
-import { RenderDangerousHtml } from './danger-html/RenderDangerousHtml';
+import { EnhancedRenderCodeMemo } from './enhanced-code/EnhancedRenderCode';
 import { RenderImageURL } from './image/RenderImageURL';
-import { RenderMarkdown, RenderMarkdownMemo } from './markdown/RenderMarkdown';
-import { RenderPlainText } from './plaintext/RenderPlainText';
+import { RenderMarkdownMemo } from './markdown/RenderMarkdown';
+import { isTextChatCommand, RenderPlainText } from './plaintext/RenderPlainText';
 import { RenderWordsDiff, WordsDiff } from './wordsdiff/RenderWordsDiff';
 import { ToggleExpansionButton } from './ToggleExpansionButton';
-import { renderCodeMemoOrNot } from './code/RenderCode';
-import { useAutoBlocksMemoSemiStable, useTextCollapser } from './blocks.hooks';
+import { heuristicIsBlockPureHTML, RenderDangerousHtml } from './danger-html/RenderDangerousHtml';
+import { removeCodeBlockFromText } from './blocks.textparser';
+import { useAutoBlocksMemoSemiStable, useHeightCollapser } from './blocks.hooks';
 import { useScaledCodeSx, useScaledImageSx, useScaledTypographySx, useToggleExpansionButtonSx } from './blocks.styles';
 
 
 // configuration
-const DISABLE_MARKDOWN_PROGRESSIVE_PREPROCESS = true; // set to false to render LaTeX inline formulas as they come in, not at the end of the message
+const DEFER_MARKDOWN_PREPROCESS = true; // set to false to render LaTeX inline formulas as they come in, not at the end of the message
+const USER_CODE_COLLAPSED_LINES = 15; // longer code in user text starts collapsed, so the words around it stay in view
 // import '~/common/util/forceTouchToDoubleClick'; // Future: Mac trackpad: force press → double-click
+
+
+const _styles = {
+  collapsible: {
+    // the grid slot of BlocksContainer: stretches or hugs with the grid; minWidth 0 so wide code scrolls inside instead of widening it
+    maxWidth: '100%',
+    minWidth: 0,
+  },
+} as const;
 
 
 // To get to the 'ref' version (which doesn't seem to be used anymore, and was used to isolate the source of the bubble bar):
 // export const AutoBlocksRenderer = React.forwardRef<HTMLDivElement, BlocksRendererProps>((props, ref) => {
 // AutoBlocksRenderer.displayName = 'AutoBlocksRenderer';
 
-export type AutoBlocksCodeRenderVariant = 'outlined' | 'plain' | 'enhanced';
+export type AutoBlocksCodeRenderVariant = 'outlined' | 'embedded-plain' | 'enhanced';
+
+export type AutoBlocksHtmlRenderVariant = 'show-code' | 'render-at-end' | 'render';
 
 /**
- * Features: collpase/expand, auto-detects HTML, SVG, Code, etc..
+ * Features: collapse/expand, auto-detects HTML, SVG, Code, etc..
  * Used by (and more):
- * - DocAttachmentFragmentEditor
- * - ContentPartPlaceholder
+ * - BlockPartText_AutoBlocks - the main text blocks in ChatMessage > CMRenderTreeNodes > *
+ * - DocAttachmentFragmentPane - when not editing and with a switch to show text/fenced (which could be rendered)
+ * - DiagramsModal - for the diagram blocks
  */
 export function AutoBlocksRenderer(props: {
   // required
@@ -44,29 +61,29 @@ export function AutoBlocksRenderer(props: {
 
   showAsDanger?: boolean;
   showAsItalic?: boolean;
-  showUnsafeHtmlCode?: boolean;
-
-  renderAsCodeWithTitle?: string;
-  renderAsWordsDiff?: WordsDiff;
 
   blocksProcessor?: 'diagram',
+  inputAsCodeWithTitle?: string;
+  inputAsWordsDiff?: WordsDiff;
+
   codeRenderVariant?: AutoBlocksCodeRenderVariant /* default: outlined */,
-  textRenderVariant: 'markdown' | 'text',
+  htmlRenderVariant?: AutoBlocksHtmlRenderVariant /* default: show-code */,
+  textRenderVariant: 'markdown' | 'markdown-user' | 'text', // 'markdown-user': typed by a person, see remarkUserText
 
-  /**
-   * optimization: allow memo to all individual blocks except the last one
-   * work in progress on that
-   */
-  optiAllowSubBlocksMemo?: boolean;
+  /** disables the height collapse of long user text - e.g. print/export trees and document panes render in full */
+  disableTextCollapser?: boolean;
 
-  onContextMenu?: (event: React.MouseEvent) => void;
+  /** The text is still being appended to: render its last block in streaming mode. */
+  inFlux?: boolean;
+
   onDoubleClick?: (event: React.MouseEvent) => void;
 
   /**
-   * If defined, this is a function that will replace the first occurrence of
-   * the search string with the replace string.
+   * If defined, this will replace the Fragment text with the new one.
    */
   setText?: (newText: string) => void;
+  /** If defined, attaches the file in the owner. */
+  onReattachAsFile?: (file: File) => void;
 
 }) {
 
@@ -74,23 +91,40 @@ export function AutoBlocksRenderer(props: {
   const fromAssistant = props.fromRole === 'assistant';
   const fromSystem = props.fromRole === 'system';
   const fromUser = props.fromRole === 'user';
-  const isUserCommand = fromUser && props.text.startsWith('/');
+  const userMarkdown = props.textRenderVariant === 'markdown-user';
+  const userCommandAsText = userMarkdown && isTextChatCommand(props.text); // plain text renders the command chip
 
   // state
-  const { text, isTextCollapsed, forceTextExpanded, handleToggleExpansion } =
-    useTextCollapser(props.text, fromUser);
+  const isPureHTML = heuristicIsBlockPureHTML(props.text);
+  const fixUserHtmlPaste = fromUser && isPureHTML;
+  const collapseUserText = fromUser && !fixUserHtmlPaste && !props.disableTextCollapser;
+  const { contentRef, clipSx, isCollapsed, showToggle, handleToggleExpansion } = useHeightCollapser(collapseUserText, props.contentScaling);
+  const { text } = props;
   const autoBlocksStable = useAutoBlocksMemoSemiStable(
     text,
-    props.renderAsCodeWithTitle,
+    props.inputAsCodeWithTitle || (fixUserHtmlPaste ? 'HTML' : undefined),
     fromSystem,
-    props.renderAsWordsDiff,
+    props.inputAsWordsDiff,
     props.blocksProcessor === 'diagram',
   );
 
+  // render decay: while in flux this is a live stream of the enclosing zone; the in-flux block reports its parse cost,
+  // and renders lighter once the zone is over budget
+  const { active: decayActive, onParseCost: decayOnParseCost } = useRenderDecay(props.inFlux === true);
+
   // handlers
   const { setText } = props;
+
+  // Perf: stabilize text alteration callbacks. During streaming, `text` changes every packet, and we don't want to
+  // re-render completed non-last Code/Markdown blocks.
+  const curTextRef = React.useRef(text);
+  curTextRef.current = text;
+  const curBlocksRef = React.useRef(autoBlocksStable);
+  curBlocksRef.current = autoBlocksStable;
+
   const handleReplaceCode = React.useCallback((search: string, replace: string): boolean => {
     if (setText) {
+      const text = curTextRef.current;
       const newText = text.replace(search, replace);
       if (newText !== text) {
         setText(newText);
@@ -98,7 +132,16 @@ export function AutoBlocksRenderer(props: {
       }
     }
     return false;
-  }, [setText, text]);
+  }, [setText]);
+
+  const handleDeleteContainingCodeBlock = React.useCallback((code: string, semiStableId: string | undefined) => {
+    if (!setText || props.inFlux || !semiStableId) return;
+    const block = curBlocksRef.current.find(block => block.bkId === semiStableId);
+    if (!block || block.bkt !== 'code-bk' || block.code !== code) return;
+    const newText = removeCodeBlockFromText(curTextRef.current, block);
+    if (newText !== null)
+      setText(newText);
+  }, [props.inFlux, setText]);
 
 
   // Memo the styles, to minimize re-renders
@@ -108,80 +151,88 @@ export function AutoBlocksRenderer(props: {
   const toggleExpansionButtonSx = useToggleExpansionButtonSx(props.contentScaling, props.codeRenderVariant || 'outlined');
 
 
-  return (
+  const blocksContainer = (
     <BlocksContainer
-      // ref={ref /* this will assign the ref, now not needed anymore */}
+      ref={contentRef /* measured by the height collapser, when enabled */}
       // data-edit-intent={props.onDoubleClick ? true : undefined /* Future: Mac Force Touch */}
-      onContextMenu={props.onContextMenu}
       onDoubleClick={props.onDoubleClick}
     >
 
       {/* sequence of render components, for each Block */}
       {autoBlocksStable.map((bkInput, index) => {
 
-        // Optimization: only memo the non-currently-rendered components, if the message is still in flux
-        const optimizeMemoBeforeLastBlock = props.optiAllowSubBlocksMemo === true && index < (autoBlocksStable.length - 1);
+        // Optimization: Code being written won't get tooltips or snap to page
+        const lastBlockInFlux = props.inFlux === true && index === (autoBlocksStable.length - 1);
         // Optimization: disable the markdown preprocessor on the last block, only do it at the end not while in progress
-        const optimizeDisableProcessorsOnLast = DISABLE_MARKDOWN_PROGRESSIVE_PREPROCESS && props.optiAllowSubBlocksMemo === true && index === (autoBlocksStable.length - 1);
+        const deferPreprocessor = DEFER_MARKDOWN_PREPROCESS && lastBlockInFlux;
 
         switch (bkInput.bkt) {
 
           case 'md-bk':
-            const RenderMarkdownMemoOrNot = optimizeMemoBeforeLastBlock ? RenderMarkdownMemo : RenderMarkdown;
-            return (props.textRenderVariant === 'text' || fromSystem || isUserCommand) ? (
+            return (props.textRenderVariant === 'text' || fromSystem || (index === 0 && userCommandAsText)) ? (
               // Keep in sync with ScaledPlainTextRenderer
               <RenderPlainText
                 key={'txt-bk-' + index}
                 content={bkInput.content}
+                renderHighlightCommands={index === 0}
                 sx={scaledTypographySx}
               />
             ) : (
               // Keep in sync with ScaledMarkdownRenderer
-              <RenderMarkdownMemoOrNot
+              <RenderMarkdownMemo
                 key={'md-bk-' + index}
                 content={bkInput.content}
-                disablePreprocessor={optimizeDisableProcessorsOnLast}
+                disablePreprocessor={deferPreprocessor}
+                userTextFlavor={userMarkdown}
+                lite={lastBlockInFlux && decayActive}
+                onParseCost={lastBlockInFlux ? decayOnParseCost : undefined}
+                replaceContent={!setText ? undefined : handleReplaceCode}
                 sx={scaledTypographySx}
               />
             );
 
           case 'code-bk':
-            // NOTE: 2024-09-24: Just memo the code all the time to prevent state loss on the last block when it switches to complete
-            // const RenderCodeMemoOrNot = renderCodeMemoOrNot(true /* optimizeMemoBeforeLastBlock */);
-            // NOTE: 2024-09-24/2: Keep it for now, as the issue seems to be on the upstream ChatMessage
-            const RenderCodeMemoOrNot = renderCodeMemoOrNot(optimizeMemoBeforeLastBlock);
+            // Keep the component type stable across fence closure, completion and resume.
+            // Content controls the frame, while the renderer keeps its DOM, iframe and toggles.
+            const lowerCaseTitle = bkInput.title.toLowerCase();
+            const isDiagram = lowerCaseTitle === BLOCK_CODE_MERMAID_TITLE || lowerCaseTitle === BLOCK_CODE_PLANTUML_TITLE || lowerCaseTitle === BLOCK_CODE_VND_AGI_CHARTJS;
+            const frameless = isDiagram
+              ? !bkInput.isPartial // diagrams: framed and collapsed while written, bare once they render
+              : (bkInput.isPartial && lastBlockInFlux) || (!bkInput.title && bkInput.lines <= 3) || lowerCaseTitle === BLOCK_CODE_SVG_TITLE;
+            const startCollapsed = (isDiagram && bkInput.isPartial) || fixUserHtmlPaste || (collapseUserText && bkInput.lines > USER_CODE_COLLAPSED_LINES);
 
-            // Custom handling for some of our blocks
-            const disableBecauseInProgress = bkInput.isPartial && props.optiAllowSubBlocksMemo === true;
-            const disableBecauseTooShort = !bkInput.title && bkInput.lines <= 3;
-            let disableEnhancedRender = disableBecauseInProgress || disableBecauseTooShort;
-            let enhancedStartCollapsed = false;
-
-            return (props.codeRenderVariant === 'enhanced' && !disableEnhancedRender) ? (
-              <EnhancedRenderCode
+            return props.codeRenderVariant === 'enhanced' ? (
+              <EnhancedRenderCodeMemo
+                // EnhancedRenderCode props
+                frameless={frameless}
+                contentScaling={props.contentScaling}
+                initialIsCollapsed={startCollapsed}
+                isMobile={props.isMobile}
+                noApplyButton={props.blocksProcessor === 'diagram' || fromUser}
+                // RenderCode pass through
                 key={'code-bk-' + index}
                 semiStableId={bkInput.bkId}
-                code={bkInput.code} title={bkInput.title} isPartial={bkInput.isPartial || isTextCollapsed}
-                contentScaling={props.contentScaling}
+                code={bkInput.code} title={bkInput.title} isPartial={bkInput.isPartial}
                 fitScreen={props.fitScreen}
-                isMobile={props.isMobile}
-                initialShowHTML={props.showUnsafeHtmlCode}
-                initialIsCollapsed={enhancedStartCollapsed}
-                noCopyButton={props.blocksProcessor === 'diagram' || isTextCollapsed}
-                optimizeLightweight={optimizeMemoBeforeLastBlock}
-                onReplaceInCode={(!setText || isTextCollapsed) ? undefined : handleReplaceCode}
+                initialRenderHTML={props.htmlRenderVariant === 'render' || (props.htmlRenderVariant === 'render-at-end' && !bkInput.isPartial)}
+                noCopyButton={props.blocksProcessor === 'diagram'}
+                optimizeLightweight={lastBlockInFlux}
+                onDeleteContainingCodeBlock={!setText || props.inFlux || bkInput.isPartial || bkInput.sourceStart === undefined ? undefined : handleDeleteContainingCodeBlock}
+                onReattachAsFile={props.onReattachAsFile}
+                onReplaceInCode={!setText ? undefined : handleReplaceCode}
                 codeSx={scaledCodeSx}
               />
             ) : (
-              <RenderCodeMemoOrNot
+              <RenderCodeMemo
                 key={'code-bk-' + index}
                 semiStableId={bkInput.bkId}
-                code={bkInput.code} title={bkInput.title} isPartial={bkInput.isPartial || isTextCollapsed}
+                code={bkInput.code} title={bkInput.title} isPartial={bkInput.isPartial}
                 fitScreen={props.fitScreen}
-                initialShowHTML={props.showUnsafeHtmlCode /* && !bkInput.isPartial NOTE: with this, it would be only auto-rendered at the end, preventing broken renders */}
-                noCopyButton={props.blocksProcessor === 'diagram' || isTextCollapsed}
-                optimizeLightweight={optimizeMemoBeforeLastBlock}
-                onReplaceInCode={(!setText || isTextCollapsed) ? undefined : handleReplaceCode}
+                initialRenderHTML={props.htmlRenderVariant === 'render' || (props.htmlRenderVariant === 'render-at-end' && !bkInput.isPartial)}
+                noCopyButton={props.blocksProcessor === 'diagram'}
+                optimizeLightweight={lastBlockInFlux}
+                onReattachAsFile={props.onReattachAsFile}
+                onReplaceInCode={!setText ? undefined : handleReplaceCode}
                 sx={scaledCodeSx}
               />
             );
@@ -218,15 +269,26 @@ export function AutoBlocksRenderer(props: {
         }
       })}
 
-      {(isTextCollapsed || forceTextExpanded) && (
+    </BlocksContainer>
+  );
+
+  if (!collapseUserText)
+    return blocksContainer;
+
+  // long user text: clipped by height, with the toggle outside the clip; stable structure, so measuring never remounts blocks
+  return (
+    <Box sx={_styles.collapsible}>
+      <Box sx={clipSx}>
+        {blocksContainer}
+      </Box>
+      {showToggle && (
         <ToggleExpansionButton
-          color={props.codeRenderVariant === 'plain' ? 'neutral' : undefined}
-          isCollapsed={isTextCollapsed}
+          color={props.codeRenderVariant === 'embedded-plain' ? 'neutral' : undefined}
+          isCollapsed={isCollapsed}
           onToggle={handleToggleExpansion}
           sx={toggleExpansionButtonSx}
         />
       )}
-
-    </BlocksContainer>
+    </Box>
   );
 }

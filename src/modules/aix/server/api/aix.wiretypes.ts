@@ -1,13 +1,16 @@
 import * as z from 'zod/v4';
 
 // Used to align Particles to the Typescript definitions from the frontend-side, on 'chat.fragments.ts'
-import type { DMessageToolResponsePart } from '~/common/stores/chat/chat.fragments';
+import type { DMessageFragmentVendorStateKnown, DMessageToolResponsePart } from '~/common/stores/chat/chat.fragments';
+import type { DMessageGenerator } from '~/common/stores/chat/chat.message';
 
 import { anthropicAccessSchema } from '~/modules/llms/server/anthropic/anthropic.access';
 import { bedrockAccessSchema } from '~/modules/llms/server/bedrock/bedrock.access';
 import { geminiAccessSchema } from '~/modules/llms/server/gemini/gemini.access';
 import { ollamaAccessSchema } from '~/modules/llms/server/ollama/ollama.access';
 import { openAIAccessSchema } from '~/modules/llms/server/openai/openai.access';
+
+import { OrtMaxToolCalls_schema, OrtWebFetchTool_schema, OrtWebSearchTool, OrtWebSearchTool_schema } from './aix.wiretypes.openrouter';
 
 
 //
@@ -21,13 +24,13 @@ import { openAIAccessSchema } from '~/modules/llms/server/openai/openai.access';
 export type AixParts_DocPart = z.infer<typeof AixWire_Parts.DocPart_schema>;
 export type AixParts_InlineAudioPart = z.infer<typeof AixWire_Parts.InlineAudioPart_schema>;
 export type AixParts_InlineImagePart = z.infer<typeof AixWire_Parts.InlineImagePart_schema>;
+export type AixParts_MediaUrlPart = z.infer<typeof AixWire_Parts.MediaUrlPart_schema>;
 export type AixParts_ModelAuxPart = z.infer<typeof AixWire_Parts.ModelAuxPart_schema>;
 export type AixParts_MetaCacheControl = z.infer<typeof AixWire_Parts.MetaCacheControl_schema>;
 export type AixParts_MetaInReferenceToPart = z.infer<typeof AixWire_Parts.MetaInReferenceToPart_schema>;
 
 export type AixMessages_SystemMessage = z.infer<typeof AixWire_Content.SystemInstruction_schema>;
 export type AixMessages_ModelMessage = z.infer<typeof AixWire_Content.ModelMessage_schema>;
-export type AixMessages_ToolMessage = z.infer<typeof AixWire_Content.ToolMessage_schema>;
 export type AixMessages_UserMessage = z.infer<typeof AixWire_Content.UserMessage_schema>;
 export type AixMessages_ChatMessage = z.infer<typeof AixWire_Content.ChatMessage_schema>;
 
@@ -38,7 +41,7 @@ export type AixTools_ToolsPolicy = z.infer<typeof AixWire_Tooling.ToolsPolicy_sc
 export type AixAPI_Access = z.infer<typeof AixWire_API.Access_schema>;
 export type AixAPI_Context_ChatGenerate = z.infer<typeof AixWire_API.ContextChatGenerate_schema>;
 export type AixAPI_Model = z.infer<typeof AixWire_API.Model_schema>;
-export type AixAPI_ResumeHandle = z.infer<typeof AixWire_API.ResumeHandle_schema>;
+export type AixAPI_ResumeHandle = z.infer<typeof AixWire_API.UpstreamHandle_schema>;
 export type AixAPI_ConnectionOptions_ChatGenerate = z.infer<typeof AixWire_API.ConnectionOptionsChatGenerate_schema>;
 export type AixAPIChatGenerate_Request = z.infer<typeof AixWire_API_ChatContentGenerate.Request_schema>;
 
@@ -92,18 +95,65 @@ export namespace OpenAPI_Schema {
 
 }
 
+
+export namespace AixWire_Vendors {
+
+  /**
+   * Responses-API dialect vendors: the OpenAI Responses wire format is shared by these, but each keeps its OWN `_vnd`
+   * namespace for continuity state (encrypted reasoning blobs, server-side item ids, message phase) - the blobs are
+   * vendor-server-private and must round-trip back to the SAME vendor only (OpenAI 404s "Item with id rs_... not
+   * found", Meta 400s "not found or has expired"). The parser is tagged with the dialect, the adapter reads its own key.
+   * Adding one: append here, add the key in `AixWire_Parts._vnd` and in `DMessageFragmentVendorState` (chat.fragments.ts),
+   * then map the transport dialect to it in openai.responsesCreate.ts (`_RSP_DIALECT_QUIRKS`).
+   */
+  export const RSP_VENDORS = ['metaai', 'openai', 'sakanaai', 'xai'] as const satisfies (keyof DMessageFragmentVendorStateKnown)[];
+  export type RspVendor = typeof RSP_VENDORS[number];
+  export function isRspVendor(vendor: string): vendor is RspVendor {
+    return (RSP_VENDORS as readonly string[]).includes(vendor);
+  }
+
+  /** One Responses-dialect namespace - the same shape for every RspVendor */
+  const _RspVndState_schema = z.object({
+    // reasoning item continuity handle: mirrors the source output item ({ id, encrypted_content }); parallels
+    // _vnd Anthropic's { container: { id, expiresAt } } pattern
+    reasoningItem: z.object({
+      id: z.string().optional(),               // rs_... - item id
+      encryptedContent: z.string().optional(), // blob returned when include:['reasoning.encrypted_content']
+    }).optional(),
+    // message phase (on text parts): gpt-5.4+ and Muse Spark tag assistant messages 'commentary' | 'final_answer';
+    // resent on replay (dropping it degrades performance per OpenAI docs)
+    phase: z.enum(['commentary', 'final_answer']).optional(),
+  });
+
+  /**
+   * Every namespace is optional and any subset may be present (a fragment normally carries one vendor's state).
+   * NOTE: not a z.record / z.partialRecord over the enum: in zod 4 an enum-keyed record rejects every key outside the
+   * enum (`invalid_key`, verified 4.4.3), so it can neither sit next to `gemini` nor tolerate state from a vendor this
+   * build does not know. A z.object strips unknown keys instead - dropped, not fatal.
+   */
+  export const VndState_schema = z.object({
+    gemini: z.object({
+      thoughtSignature: z.string().optional(),
+    }).optional(),
+    // one optional key per Responses dialect - `satisfies` keeps this list in lockstep with RSP_VENDORS
+    ...({
+      metaai: _RspVndState_schema.optional(),
+      openai: _RspVndState_schema.optional(),
+      sakanaai: _RspVndState_schema.optional(),
+      xai: _RspVndState_schema.optional(),
+    } satisfies Record<RspVendor, z.ZodOptional<typeof _RspVndState_schema>>),
+  });
+
+}
+
+
 export namespace AixWire_Parts {
 
   /** Parts that come from the model shall inherit this, so they can echo-back vendor data */
   const _BasePart_schema = z.object({
 
     /** DMessageFragment.vendorState <- model-generated, vendor-specific opaque state (protocol continuity, not content) */
-    _vnd: z.object({
-      gemini: z.object({
-        thoughtSignature: z.string().optional(),
-      }).optional(),
-    }).optional(),
-    // _vnd: z.record(z.string(), z.unknown()).optional(),
+    _vnd: AixWire_Vendors.VndState_schema.optional(),
 
   });
 
@@ -139,7 +189,7 @@ export namespace AixWire_Parts {
      * - image/gif: Anthropic, OpenAI
      * - image/heic, image/heif: Gemini
      */
-    mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+    mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']), // keep in sync with AIX_WIRE_IMAGE_MIMETYPES
     base64: z.string(),
   });
 
@@ -175,11 +225,27 @@ export namespace AixWire_Parts {
     // meta: ignored...
   });
 
+  /**
+   * URL-referenced media (user-only part): a public URL the provider fetches server-side - never
+   * downloaded or inlined by us (e.g. YouTube or direct .mp4 for Gemini video understanding).
+   * Dialects without native support lower this to text via `approxMediaUrlPart_To_String`.
+   */
+  export const MediaUrlPart_schema = z.object({
+    pt: z.literal('media_url'),
+    mediaKind: z.literal('video'), // future: 'audio'
+    url: z.string(),
+    mimeType: z.string().optional(), // for direct media URLs; absent for YouTube
+    // FUTURE (no producer yet - enable with the trim/sampling UI; the Gemini lowering maps these to videoMetadata):
+    // clipStartSec: z.number().optional(), // -> videoMetadata.startOffset '<n>s' (verified: bills only the slice)
+    // clipEndSec: z.number().optional(),   // -> videoMetadata.endOffset '<n>s'
+    // fps: z.number().optional(),          // -> videoMetadata.fps (default: 1)
+  });
+
   // Tool Call
 
   const _FunctionCallInvocation_schema = z.object({
     type: z.literal('function_call'),
-    name: z.string(),
+    name: z.string(), // function name
     args: z.string(), //.nullable(), // 2024-11-03: disabled .nullable(), as we'll use '' for no args (which some APIs weirdly don't support so we'll mock downstream as '{}')
     // _description: z.string().optional(),
     // _args_schema: z.object({}).optional(),
@@ -206,7 +272,12 @@ export namespace AixWire_Parts {
   const _FunctionCallResponse_schema = z.object({
     type: z.literal('function_call'),
     result: z.string(),
-    _name: z.string().optional(),
+    /**
+     * Function name of the response
+     * - for Gemini this must match the _FunctionCallDeclaration.name
+     * - other APIs usually match the id (of the parent ToolResponsePart) to the ID of the call
+     */
+    name: z.string(),
   });
 
   const _CodeExecutionResponse_schema = z.object({
@@ -228,8 +299,10 @@ export namespace AixWire_Parts {
 
   // Model Auxiliary Part (for thinking blocks)
 
-  // NOTE: not a _BasePart_schema for now, may become if we put the vndAnt attributes there
-  export const ModelAuxPart_schema = z.object({
+  // Inherits _BasePart_schema so vendor-opaque protocol state (e.g. OpenAI Responses encrypted_content,
+  // future Anthropic/Gemini continuity handles) can ride on the ma part via _vnd, instead of adding
+  // more vendor-specific top-level fields alongside the existing Anthropic textSignature/redactedData.
+  export const ModelAuxPart_schema = _BasePart_schema.extend({
     pt: z.literal('ma'),
     aType: z.literal('reasoning'),
     aText: z.string(),
@@ -277,6 +350,7 @@ export namespace AixWire_Content {
       // AixWire_Parts.InlineAudioPart_schema,
       AixWire_Parts.InlineImagePart_schema,
       AixWire_Parts.DocPart_schema,
+      AixWire_Parts.MediaUrlPart_schema, // Aug 14, 2026: URL-referenced video input (user-only)
       AixWire_Parts.MetaCacheControl_schema,
       AixWire_Parts.MetaInReferenceToPart_schema,
     ])),
@@ -289,15 +363,8 @@ export namespace AixWire_Content {
       AixWire_Parts.InlineAudioPart_schema,
       AixWire_Parts.InlineImagePart_schema,
       AixWire_Parts.ToolInvocationPart_schema,
-      AixWire_Parts.ModelAuxPart_schema,
-      AixWire_Parts.MetaCacheControl_schema,
-    ])),
-  });
-
-  export const ToolMessage_schema = z.object({
-    role: z.literal('tool'),
-    parts: z.array(z.discriminatedUnion('pt', [
       AixWire_Parts.ToolResponsePart_schema,
+      AixWire_Parts.ModelAuxPart_schema,
       AixWire_Parts.MetaCacheControl_schema,
     ])),
   });
@@ -305,7 +372,6 @@ export namespace AixWire_Content {
   export const ChatMessage_schema = z.discriminatedUnion('role', [
     UserMessage_schema,
     ModelMessage_schema,
-    ToolMessage_schema,
   ]);
 
 }
@@ -314,7 +380,7 @@ export namespace AixWire_Tooling {
 
   /// Function Call Tool Definition
 
-  const _FunctionCall_schema = z.object({
+  const _FunctionCallDeclaration_schema = z.object({
     /**
      * The name of the function to call. Up to 64 characters long, and can only contain letters, numbers, underscores, and hyphens.
      */
@@ -349,7 +415,7 @@ export namespace AixWire_Tooling {
 
   const _FunctionCallTool_schema = z.object({
     type: z.literal('function_call'),
-    function_call: _FunctionCall_schema,
+    function_call: _FunctionCallDeclaration_schema,
     // domain: z.enum(['server', 'client']).optional(),
   });
 
@@ -398,14 +464,24 @@ export namespace AixWire_Tooling {
   /**
    * Policy for tools that the model can use:
    * - auto: can use a tool or not (default, same as not specifying a policy)
-   * - any: MUST use one tool at least
-   * - function_call: MUST use a specific Function Tool
+   * - any: MUST use one tool at least - DEPRECATED, see below
+   * - function_call: MUST use a specific Function Tool [DISABLED 2026-07-17 - see below]
    * - none: same as not giving the model any tool [REMOVED - just give no tools]
+   *
+   * @deprecated forced tool use is a thing of the past - 2026-06-09: Claude Fable/Mythos 5 (and 5.1) reject it
+   * with a 400 ('tool_choice ... not supported for this model'); the Anthropic and OpenRouter adapters
+   * coerce to 'auto' + a system steering hint. New code should use 'auto' (or no policy)
+   * and instruct the model to call the tool in the prompt instead.
+   *
+   * 2026-07-17: 'function_call' (forced NAMED tool) commented out AIX-wide: Moonshot also 400s it on
+   * all thinking-mode requests ("tool_choice 'specified' is incompatible with thinking enabled" - K3
+   * always), modern models don't need it, and with a single tool 'any' is equivalent. 'any' is kept.
    */
   export const ToolsPolicy_schema = z.discriminatedUnion('type', [
     z.object({ type: z.literal('auto') }),
+    // @deprecated - prefer 'auto' + prompt steering
     z.object({ type: z.literal('any') /*, parallel: z.boolean()*/ }),
-    z.object({ type: z.literal('function_call'), function_call: z.object({ name: z.string() }) }),
+    // z.object({ type: z.literal('function_call'), function_call: z.object({ name: z.string() }) }), // DISABLED 2026-07-17 - forced named tool, see deprecation note above
   ]);
 
 }
@@ -477,22 +553,29 @@ export namespace AixWire_API {
 
     // Anthropic
     vndAnt1MContext: z.boolean().optional(),
+    vndAntCodeSandbox: z.enum(['auto']).optional(), // standalone server-side code sandbox (also implied by Skills / programmatic tool calling)
+    vndAntContainerId: z.string().optional(),
     vndAntInfSpeed: z.enum(['fast']).optional(),
     vndAntSkills: z.string().optional(),
     vndAntThinkingBudget: z.number().or(z.literal('adaptive')).nullable().optional(),
     vndAntToolSearch: z.enum(['regex', 'bm25']).optional(), // Tool Search Tool variant
+    vndAntTransformInlineFiles: z.enum(['inline-file', 'inline-file-and-delete', 'discard']).optional(), // 'discard': delete upstream without embedding, a void notice in the chat
+    vndAntWebDynamic: z.boolean().optional(),
     vndAntWebFetch: z.enum(['auto']).optional(),
     vndAntWebFetchMaxUses: z.number().int().min(1).max(50).optional(),
     vndAntWebSearch: z.enum(['auto']).optional(),
     vndAntWebSearchMaxUses: z.number().int().min(1).max(50).optional(),
 
     // Bedrock
-    vndBedrockAPI: z.enum(['converse', 'invoke-anthropic', 'mantle']).optional(),
+    vndBedrockAPI: z.enum(['converse', 'invoke-anthropic', 'mantle', 'mantle-responses']).optional(),
 
     // Gemini
-    vndGeminiAspectRatio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9']).optional(),
+    vndGeminiAPI: z.enum(['interactions-agent']).optional(), // opt-in per-model API dialect; unset = generateContent
+    vndGeminiAgentViz: z.enum(['auto', 'off']).optional(), // agent_config.visualization; default 'auto' upstream
+    vndGeminiAspectRatio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9', '1:4', '4:1', '1:8', '8:1']).optional(),
     vndGeminiCodeExecution: z.enum(['auto']).optional(),
     vndGeminiComputerUse: z.enum(['browser']).optional(),
+    vndGeminiEnvironmentId: z.string().optional(), // [vndGeminiAPI === 'interactions-agent'] Gemini Interactions API session/sandbox handle from a prior turn (forward-carry; best-effort - if upstream rejects the env, the request fails and the error surfaces)
     vndGeminiGoogleSearch: z.enum(['unfiltered', '1d', '1w', '1m', '6m', '1y']).optional(),
     vndGeminiImageSize: z.enum(['1K', '2K', '4K']).optional(),
     vndGeminiMediaResolution: z.enum(['mr_high', 'mr_medium', 'mr_low']).optional(),
@@ -504,14 +587,19 @@ export namespace AixWire_API {
 
     // OpenAI
     vndOaiCodeInterpreter: z.enum(['off', 'auto']).optional(),
-    vndOaiImageGeneration: z.enum(['mq', 'hq', 'hq_edit', 'hq_png']).optional(),
+    vndOaiContainerId: z.string().optional(), // [Responses] reuse a prior code-interpreter session container (caller checks expiry before setting)
+    vndOaiImageGeneration: z.enum(['mq', 'hq', 'max', 'hq_edit' /* legacy -> hq */, 'hq_png' /* legacy -> hq */]).optional(), // legacy values still accepted from older bundles
+    vndOaiReasoningMode: z.enum(['standard', 'pro']).optional(), // [2026-07-09, OpenAI] [Responses] GPT-5.6+ reasoning.mode - 'pro' performs additional model work, billed at standard rates
+    vndOaiServiceTier: z.enum(['flex', 'fast', 'ultrafast']).optional(), // [2026-09-03, OpenAI] request service_tier: flex (0.5x, slower) | fast (2x, faster) | ultrafast (6x, fastest; Responses only, 2026-09-29); native OpenAI only
     vndOaiResponsesAPI: z.boolean().optional(),
     vndOaiRestoreMarkdown: z.boolean().optional(),
     vndOaiVerbosity: z.enum(['low', 'medium', 'high']).optional(),
     vndOaiWebSearchContext: z.enum(['low', 'medium', 'high']).optional(),
 
-    // OpenRouter
-    vndOrtWebSearch: z.enum(['auto']).optional(),
+    // OpenRouter - web tools run by OpenRouter itself, not by the model provider (types: aix.wiretypes.openrouter.ts)
+    vndOrtWebSearch: z.union([OrtWebSearchTool_schema, z.literal('auto').transform((): OrtWebSearchTool => ({ via: 'plugin' }))]).optional(), // 'auto': the plain switch of clients built before 2026-09-08, which always got the plugin; drop when no longer seen
+    vndOrtWebFetch: OrtWebFetchTool_schema.optional(),
+    vndOrtMaxToolCalls: OrtMaxToolCalls_schema.optional(), // server-tool step budget for the request, across search and fetch
 
     // Perplexity
     vndPerplexityDateFilter: z.enum(['unfiltered', '1m', '3m', '6m', '1y']).optional(),
@@ -529,13 +617,24 @@ export namespace AixWire_API {
   /// Resume Handle
 
   /**
-   * TEMP - Not well defined yet - OpenAI Responses-only implementation
-   * [OpenAI Responses API] Allows reconnecting to an in-progress response by its ID.
+   * Discriminated by upstream handle type:
+   *  - vnd.oai.responses: OpenAI Responses API - GET /v1/responses/{id}
+   *  - vnd.gem.interactions: Gemini Interactions API for background agents - GET-poll /v1beta/interactions/{id}
    */
-  export const ResumeHandle_schema = z.object({
-    responseId: z.string(),
-    startingAfter: z.number().optional(), // the sequence number of event after which to start streaming
-  });
+  // Wire input for reattach: server only consumes `runId` (+ `startingAfter` for OpenAI). Timestamps live
+  // on the persisted `DMessageGenerator.upstreamHandle` (client concerns) and on the `set-upstream-handle`
+  // particle (server-to-client transport), but don't need to travel back in the reattach request.
+  export const UpstreamHandle_schema = z.discriminatedUnion('uht', [
+    z.object({
+      uht: z.literal('vnd.oai.responses'),
+      runId: z.string(), // upstream: OpenAI Responses `response.id`
+      startingAfter: z.number().optional(), // the sequence number of event after which to start streaming
+    }),
+    z.object({
+      uht: z.literal('vnd.gem.interactions'),
+      runId: z.string(), // upstream: Gemini Interactions `interaction.id`
+    }),
+  ]);
 
   /// Context
 
@@ -661,13 +760,14 @@ export namespace AixWire_Particles {
 
   export type ChatControlOp =
   // | { cg: 'start' } // not really used for now
-    | { cg: 'end', terminationReason: CGEndReason /* we know why we're sending 'end' */, tokenStopReason?: GCTokenStopReason /* we may or not have gotten a logical token stop reason from the dispatch */ }
+    | { cg: 'end', terminationReason: CGEndReason /* we know why we're sending 'end' */, tokenStopReason?: GCTokenStopReason /* we may or not have gotten a logical token stop reason from the dispatch */, tokenStopError?: string /* optional vendor-composed human-readable detail paired with tokenStopReason */ }
     | { cg: 'issue', issueId: CGIssueId, issueText: string }
-    | { cg: 'retry-reset', rScope: 'srv-dispatch' | 'srv-op' | 'cli-ll', rShallClear: boolean, reason: string, attempt: number, maxAttempts: number, delayMs: number, causeHttp?: number, causeConn?: string }
+    | { cg: 'aix-info', ait: 'flow-cont' /* important: establishes a checkpoint */, text: string }
+    | { cg: 'aix-retry-reset', rScope: 'srv-dispatch' | 'srv-op' | 'cli-ll', rClearStrategy: 'none' | 'since-checkpoint' | 'all', reason: string, attempt: number, maxAttempts: number, delayMs: number, causeHttp?: number, causeConn?: string }
     | { cg: 'set-metrics', metrics: CGSelectMetrics }
     | { cg: 'set-model', name: string }
     | { cg: 'set-provider-infra', label: string }
-    | { cg: 'set-upstream-handle', handle: { uht: 'vnd.oai.responses', responseId: string, expiresAt: number | null } }
+    | { cg: 'set-upstream-handle', handle: { uht: 'vnd.oai.responses' | 'vnd.gem.interactions', runId: string, createdAt: number | null, expiresAt: number | null } }
     | { cg: '_debugDispatchRequest', security: 'dev-env', dispatchRequest: { url: string, headers: string, body: string, bodySize: number } } // may generalize this in the future
     | { cg: '_debugProfiler', measurements: Record<string, number | string>[] };
 
@@ -685,16 +785,39 @@ export namespace AixWire_Particles {
     | 'dispatch-read'           // [2] "
     | 'dispatch-parse';         // [2] "
 
-  export type GCTokenStopReason =
+
+  // Token stop reasons, grouped by class. The class is the one grouping shared by the edge (analytics) and the
+  // browser (reassembler outcome): 'ok' is the only success, 'truncated' is an error typed apart, 'error' is the rest.
+  export type GCTokenStopReason = _GCTokenStopReason_Ok | _GCTokenStopReason_Truncated | _GCTokenStopReason_Error;
+  type _GCTokenStopReason_Ok =
     | 'ok'                      // clean, including reaching 'stop sequences'
-    | 'ok-tool_invocations'     // clean & tool invocations
-    | 'ok-pause_continue'       // clean, but paused (e.g. Anthropic server tools like web search) - requires continuation
-    // premature:
+    | 'ok-tool_invocations';    // clean & tool invocations
+  type _GCTokenStopReason_Truncated =
+    | 'out-of-tokens';          // got out of tokens: the output is cut, kept but not usable as-is
+  type _GCTokenStopReason_Error =
     | 'cg-issue'                // [1][2] chat-generation issue (see CGIssueId, mostly a dispatch or dialect issue)
     | 'filter-content'          // content filter (e.g. profanity)
     | 'filter-recitation'       // recitation filter (e.g. recitation)
-    | 'filter-refusal'          // safety refusal filter (e.g. Anthropic safety concerns)
-    | 'out-of-tokens';          // got out of tokens
+    | 'filter-refusal';         // safety refusal filter (e.g. Anthropic safety concerns)
+
+  type GCStopClass = 'ok' | 'truncated' | 'error';
+
+  /** The projections of one wire stop reason: the class (edge analytics), the stored stop reason (DMessageGenerator.tokenStopReason, the client's persisted fact), the user-facing message appended on a cut */
+  export type GCStopReasonRow = { class: GCStopClass; stored: DMessageGenerator['tokenStopReason']; message?: string };
+
+  /** One row per wire stop reason. Read a row through GCStopReasonRow: rows without `message` are a different literal type under `as const`. */
+  export const GC_STOP_REASONS = {
+    'ok':                  { class: 'ok', stored: undefined },
+    'ok-tool_invocations': { class: 'ok', stored: undefined },
+    'out-of-tokens':       { class: 'truncated', stored: 'out-of-tokens' },
+    'cg-issue':            { class: 'error', stored: 'issue' },
+    // emitted by: OpenAI content_filter, Gemini SAFETY/BLOCKLIST/PROHIBITED_CONTENT/SPII/IMAGE_*, Bedrock content filter
+    'filter-content':      { class: 'error', stored: 'filter', message: 'Response blocked by the provider\'s content filter.' },
+    // emitted by: Gemini RECITATION/IMAGE_RECITATION (note: can be FP-prone on benign content like code/quotes)
+    'filter-recitation':   { class: 'error', stored: 'filter', message: 'Response blocked - potential copyrighted/recited content.' },
+    // emitted by: Anthropic stop_reason=refusal, Gemini LANGUAGE (unsupported)
+    'filter-refusal':      { class: 'error', stored: 'filter', message: 'Response refused by the provider\'s safety classifier.' },
+  } as const satisfies Record<GCTokenStopReason, GCStopReasonRow>;
 
   /**
    * NOTE: break compatibility with this D-stored-type only when we'll
@@ -712,6 +835,11 @@ export namespace AixWire_Particles {
     TOutR?: number,       // Portion of TOut that was used for reasoning (e.g. not for output)
     // TOutA?: number,    // Portion of TOut that was used for Audio
 
+    // n = Counts of per-call billed server tools
+    nWebSearch?: number,  // web searches executed
+    nWebFetch?: number,   // web fetches executed
+    nCodeExec?: number,   // hosted code executions, container sub-tools included
+
     // dt = milliseconds
     dtStart?: number,
     dtInner?: number,
@@ -722,6 +850,7 @@ export namespace AixWire_Particles {
 
     // $c = Cents of USD
     $cReported?: number,  // Total cost in cents as reported by provider (e.g. Perplexity usage.cost.total_cost)
+    $xPrice?: number,     // Provider-confirmed price multiplier vs listed rates, from the echoed service tier (flex 0.5, fast 2, ...)
   };
 
   // TextParticle / PartParticle - keep in line with the DMessage*Part counterparts
@@ -743,9 +872,41 @@ export namespace AixWire_Particles {
     | { p: 'cei', id: string, language: string, code: string, author: 'gemini_auto_inline' | 'code_interpreter' }
     | { p: 'cer', id: string, error: DMessageToolResponsePart['error'], result: string, executor: 'gemini_auto_inline' | 'code_interpreter', environment: DMessageToolResponsePart['environment'] }
     | { p: 'ia', mimeType: string, a_b64: string, label?: string, generator?: string, durationMs?: number } // inline audio, complete
-    | { p: 'ii', mimeType: string, i_b64: string, label?: string, generator?: string, prompt?: string } // inline image, complete
+    | { p: 'ii', mimeType: string, i_b64: string, label?: string, generator?: string, prompt?: string, hintSkipResize?: boolean } // inline image, complete
+    | { p: 'iv', mimeType: string, v_b64: string, label?: string, generator?: string } // inline video, complete (EXPERIMENTAL: Gemini Omni; client plays it in-memory and does NOT persist it)
+    /**
+     * Model Operation - tracks instant model's operation(s) state, primarily for hosted tools.
+     * - state is 'active' unless specified otherwise, 'error' is done too
+     * - shall be called 'mos' but for legacy/compatibility it's still 'vp' (backwards comp to simple void placeholder particles)
+     */
+    | { p: /*'mo'*/ 'vp', opId: string, text: string, mot: 'search-web' | 'gen-image' | 'code-exec', state?: 'done' | 'error', parentOpId?: string, iTexts?: string[], oTexts?: string[] }
     | { p: 'urlc', title: string, url: string, num?: number, from?: number, to?: number, text?: string, pubTs?: number } // url citation - pubTs: publication timestamp
-    | { p: 'svs', vendor: string, state: Record<string, unknown> } // set vendor state - applies to the last emitted part (opaque protocol state)
-    | { p: 'vp', text: string, mot: 'search-web' | 'gen-image' | 'code-exec' }; // void placeholder - temporary status text that gets wiped when real content arrives
+    /**
+     * Void Notice - inline, display-only, dismissible, never sent upstream.
+     * - `text`/`detail` are the common rendering, composed by the sender; `detail` may use a markdown subset:
+     *   blank-line paragraphs, '- ' bullets, inline **label**, *excerpt* and `code`
+     * - `nt` (notice type) carries the structured facts of each notice, so clients can later filter, log
+     *   or render a type specially without re-parsing text; add a variant per new notice, no catch-all
+     */
+    | { p: 'vnt', text: string, detail?: string, level?: 'warn' } & ( // `level` 'warn': the sender judged this notice unexpected (e.g. a reasoning reset inside a paused turn); default is informational
+      | { nt: 'input-transform', itt: 'thinking-dropped', cause: 'prefix-changed' | 'model-switch' | (string & {}), reason: string, paths: string[] } // the server rewrote our request: dropped replayed thinking blocks, one particle per vendor reason; `cause` normalizes `reason` (open set), `paths` are wire locations. 'prefix-changed' is deliberately unspecific: the vendor's 'prefix_binding_mismatch' covers system/tools/message edits alike and doesn't say which - don't narrow it to "history edited" in copy, that's provably wrong for tool/system changes. client-side log for now
+      | { nt: 'hres-discarded', kind: 'vnd.ant.file', fileId: string, filename?: string } // a provider-hosted file deleted by the Save policy without embedding; it may still exist in the model's sandbox
+      | { nt: 'flow-cont', kind: 'vnd.ant.pause_turn', turn: number } // the generation continued in a new upstream request at this point (hosted-tool loop paused itself); rendered as a divider, `turn` is the 1-based continuation count
+      )
+    | { p: 'hres' } & ( // hosted resource - provider-hosted resource
+      | { kind: 'vnd.ant.file', fileId: string, containerId?: string }
+      | { kind: 'vnd.gem.file', fileName: string, mimeType: string, isVideo?: boolean } // [Gemini Omni] Files-API artifact (e.g. delivery:uri video): re-fetchable by `files/{id}` name for ~48h via the key-proxied Gemini download route
+      | { kind: 'vnd.oai.container_file', fileId: string, containerId: string, filename?: string } // OpenAI code-interpreter container file (download via /v1/containers/.../files/.../content)
+      | { kind: 'inline-download', mimeType: string, b64: string, filename?: string } // inline bytes (e.g. Gemini code-exec file): client downloads & discards, never stored/re-fetchable
+      )
+    | { p: 'svs' } & ( // set vendor state - vendor-specific opaque protocol state
+      | { vendor: 'anthropic', state: { container: { id: string; expiresAt: string } } } // message-level - container reuse
+      | { vendor: 'openai-container', state: { container: { id: string; expiresAt: string } } } // message-level - OpenAI Responses code-interpreter container reuse; 20min TTL stamped by parser
+      | { vendor: 'gemini-envid', state: { environment: { id: string; expiresAt: string | null } } } // message-level - Gemini Interactions sandbox handle (today: Antigravity); 7d TTL stamped by parser
+      | { vendor: 'gemini', state: { thoughtSignature: string } } // fragment-level
+      | { vendor: AixWire_Vendors.RspVendor, state: { reasoningItem?: { id?: string, encryptedContent?: string }, messagePhase?: 'commentary' | 'final_answer' } } // fragment-level, one namespace per Responses vendor (AixWire_Vendors.RSP_VENDORS): reasoningItem attaches to the last (ma) fragment; messagePhase breaks + tags the NEXT text fragment. Vendor-private (keys + server-side ids), never crosses namespaces
+      // | { vendor: string, state: Record<string, unknown> } // disable catch-all becasue it forces casts in type discriminations
+      )
+    ;
 
 }

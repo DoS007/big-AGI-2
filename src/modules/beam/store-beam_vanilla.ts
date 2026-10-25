@@ -3,7 +3,7 @@ import { createStore as createVanillaStore, StateCreator } from 'zustand/vanilla
 
 import type { DLLMId } from '~/common/stores/llms/llms.types';
 import type { DMessage, DMessageId } from '~/common/stores/chat/chat.message';
-import type { DMessageFragment, DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
+import type { DMessageFragment } from '~/common/stores/chat/chat.fragments';
 import { llmsHeuristicGetTopDiverseLlmIds } from '~/common/stores/llms/store-llms-domains_slice';
 
 import { BeamConfigSnapshot, useModuleBeamStore } from './store-module-beam';
@@ -62,7 +62,7 @@ export interface RootStoreSlice extends RootStateSlice {
   loadBeamConfig: (preset: BeamConfigSnapshot | null) => void;
 
   setIsMaximized: (maximized: boolean) => void;
-  inputHistoryReplaceMessageFragment: (messageId: DMessageId, fragmentId: DMessageFragmentId, newFragment: DMessageFragment) => void;
+  inputHistoryReplaceMessageFragments: (messageId: DMessageId, fragments: DMessageFragment[]) => void;
 
 }
 
@@ -75,6 +75,12 @@ const createRootSlice: StateCreator<BeamStore, [], [], RootStoreSlice> = (_set, 
 
   open: (chatHistory: Readonly<DMessage[]>, initialChatLlmId: DLLMId | null, isEditMode: boolean, callback: BeamSuccessCallback) => {
     const { isOpen: wasAlreadyOpen, terminateKeepingSettings, loadBeamConfig, hadImportedRays, setRayLlmIds, setCurrentGatherLlmId } = _get();
+
+    // if already open, preserve the live state (rays, fusions, callback) - re-invocation must never wipe an ongoing beam
+    if (wasAlreadyOpen) {
+      console.warn('[DEV] Beam is already open');
+      return;
+    }
 
     // reset pending operations
     terminateKeepingSettings();
@@ -112,7 +118,7 @@ const createRootSlice: StateCreator<BeamStore, [], [], RootStoreSlice> = (_set, 
       return;
 
     // it no config (first-time): Heuristic: auto-pick the best models for the user, based on their ELO and variety
-    const autoLlmIds = llmsHeuristicGetTopDiverseLlmIds(SCATTER_RAY_DEF, true, initialChatLlmId);
+    const autoLlmIds = llmsHeuristicGetTopDiverseLlmIds(SCATTER_RAY_DEF, true, initialChatLlmId ?? undefined);
     if (autoLlmIds.length > 0) {
       setRayLlmIds(autoLlmIds);
       setCurrentGatherLlmId(autoLlmIds[0]);
@@ -142,30 +148,9 @@ const createRootSlice: StateCreator<BeamStore, [], [], RootStoreSlice> = (_set, 
       isMaximized: maximized,
     }),
 
-  inputHistoryReplaceMessageFragment: (messageId: DMessageId, fragmentId: DMessageFragmentId, newFragment: DMessageFragment) =>
+  inputHistoryReplaceMessageFragments: (messageId: DMessageId, fragments: DMessageFragment[]) =>
     _set(state => ({
-      inputHistory: state.inputHistory?.map((message): DMessage => {
-        if (message.id !== messageId)
-          return message;
-
-        // probably unnecessary development warning
-        if (message.fragments.findIndex(f => f.fId === fragmentId) === -1) {
-          console.error(`inputHistoryReplaceMessageFragment: cannot find missing fragment ID ${fragmentId} for message ${messageId}`);
-          return message;
-        }
-
-        const updatedFragments = message.fragments.map((fragment) =>
-          (fragment.fId === fragmentId)
-            ? newFragment
-            : fragment,
-        );
-
-        return {
-          ...message,
-          fragments: updatedFragments,
-          updated: Date.now(),
-        };
-      }),
+      inputHistory: state.inputHistory?.map((message): DMessage => message.id !== messageId ? message : { ...message, fragments, updated: Date.now() }),
     })),
 
 });

@@ -21,6 +21,7 @@ const TOKEN_RATIOS = {
   'gpt': 3.85,     // GPT-3.5/4 refined ratio
   'o1': 3.9,       // O1 models slightly different
   'claude': 3.7,   // Claude models more efficient
+  'claude-47': 2.85, // Opus 4.7+ tokenizer (4.7/4.8, Opus/Sonnet 5, Opus/Sonnet 5.5, Fable/Mythos 5): ~30-35% more tokens for the same text
   'gemini': 4.1,   // Google models
   'llama': 4.0,    // Meta models
   'mistral': 3.95, // Mistral models
@@ -116,6 +117,10 @@ function detectContentType(text: string): keyof typeof LANGUAGE_MULTIPLIERS {
   return 'default';
 }
 
+// Models on the Opus 4.7+ tokenizer: opus-4-7/8/9, Opus 5/5.5, Sonnet 5/5.5, Haiku 5.5, Fable 5/5.1, Mythos 5/5.1/Preview - in both Anthropic ('claude-opus-4-7') and OpenRouter ('claude-4.7-opus') id shapes
+// (count_tokens 2026-09-22: opus-4-8, opus-5, opus-5-5, sonnet-5, fable-5-1 within 0.1% of each other, 1.37-1.51x opus-4-6; 2026-10-07: haiku-5-5 equal to sonnet-5-5)
+const _CLAUDE_NEW_TOKENIZER_RE = /(opus[-.]4[-.][789]|4[-.][789][-.]opus|(opus|sonnet|haiku)[-.]5|fable|mythos)/;
+
 /**
  * Optimized model family detection with early exits
  */
@@ -126,7 +131,12 @@ function getModelFamily(llm: DLLM): keyof typeof TOKEN_RATIOS {
   
   // Use indexOf for faster string matching (no need to toLowerCase for common cases)
   if (modelId.indexOf('gpt') !== -1 || modelRef.indexOf('gpt') !== -1) return 'gpt';
-  if (modelId.indexOf('claude') !== -1 || modelRef.indexOf('claude') !== -1) return 'claude';
+  if (modelId.indexOf('claude') !== -1 || modelRef.indexOf('claude') !== -1) {
+    // Opus 4.7 introduced a denser tokenizer, also used by 4.8 and Fable/Mythos 5.x
+    // (also matches OpenRouter-style ids, e.g. 'claude-4.7-opus')
+    if (_CLAUDE_NEW_TOKENIZER_RE.test(modelId) || _CLAUDE_NEW_TOKENIZER_RE.test(modelRef)) return 'claude-47';
+    return 'claude';
+  }
   if (modelId.indexOf('gemini') !== -1 || modelRef.indexOf('gemini') !== -1) return 'gemini';
   
   // Less common models (now check lowercase for edge cases)

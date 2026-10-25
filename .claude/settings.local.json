@@ -17,15 +17,19 @@
       "Bash(git mv:*)",
       "Bash(git show:*)",
       "Bash(grep:*)",
+      "Bash(head:*)",
       "Bash(ls:*)",
       "Bash(mkdir:*)",
       "Bash(node:*)",
       "Bash(npm install)",
       "Bash(npm install:*)",
       "Bash(npm run:*)",
+      "Bash(npx eslint:*)",
+      "Bash(npx tsc:*)",
       "Bash(rg:*)",
       "Bash(rm:*)",
       "Bash(sed:*)",
+      "Bash(tail:*)",
       "Bash(tree:*)",
       "Bash(tsc:*)",
       "Read(//tmp/**)",
@@ -36,10 +40,6 @@
       "mcp__chrome-devtools",
       "mcp__github",
       "mcp__ide__getDiagnostics"
-    ],
-    "deny": [
-      "Read(node_modules)",
-      "Read(node_modules/**)"
     ]
   }
 }

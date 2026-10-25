@@ -1,17 +1,17 @@
 import * as React from 'react';
 
-import type { ColorPaletteProp } from '@mui/joy/styles/types';
-import { Box, Chip, Typography } from '@mui/joy';
+import type { ColorPaletteProp, SxProps } from '@mui/joy/styles/types';
+import { Box, Chip } from '@mui/joy';
 import AllInclusiveIcon from '@mui/icons-material/AllInclusive';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import TextFieldsIcon from '@mui/icons-material/TextFields';
 
-import { RenderMarkdown } from '~/modules/blocks/markdown/RenderMarkdown';
+import { AutoBlocksRenderer } from '~/modules/blocks/AutoBlocksRenderer';
 import { useScaledTypographySx } from '~/modules/blocks/blocks.styles';
 
 import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
 import { ExpanderControlledBox } from '~/common/components/ExpanderControlledBox';
-import { adjustContentScaling, ContentScaling } from '~/common/app.theme';
+import { adjustContentScaling, ContentScaling, themeScalingMap } from '~/common/app.theme';
 import { animationSpinHalfPause } from '~/common/util/animUtils';
 import { createTextContentFragment, DMessageContentFragment, DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
 import { useOverlayComponents } from '~/common/layout/overlays/useOverlayComponents';
@@ -32,35 +32,32 @@ const _styles = {
   },
 
   chip: {
-    px: 1.5,
-    py: 0.375,
+    pl: 1.5,
+    pr: 1.75,
     my: '1px', // to not crop the outline on mobile, or on beam
+    minHeight: '1.5rem', // similar parts, modelOps and paired tools, are 1.75rem
+    '& .MuiChip-startDecorator': {
+      marginRight: '0.5em',
+    },
+  },
+
+  chipActive: {
     outline: '1px solid',
     outlineColor: `${REASONING_COLOR}.solidBg`, // .outlinedBorder
     boxShadow: `1px 2px 4px -3px var(--joy-palette-${REASONING_COLOR}-solidBg)`,
+    // '& > button': {
+    //   boxShadow: `inset 1px 2px 4px -3px var(--joy-palette-${REASONING_COLOR}-solidBg)`,
+    // },
   },
 
-  chipDisabled: {
-    px: 1.5,
-    py: 0.375,
-    my: '1px', // to not crop the outline on mobile, or on beam
-  },
-
-  chipIcon: {
-    fontSize: '1rem',
-    mr: 0.5,
-  },
-
+  chipIcon: undefined, // { fontSize: '1rem', },
   chipIconPending: {
-    fontSize: '1rem',
-    mr: 0.5,
+    // fontSize: '1rem',
     animation: `${animationSpinHalfPause} 2s ease-in-out infinite`,
   },
 
   chipExpanded: {
     mt: '1px', // need to copy the `chip` mt
-    px: 1.5,
-    py: 0.375,
     // borderRadius: 'sm',
     // transition: 'border-radius 0.2s ease-in-out',
   },
@@ -72,21 +69,12 @@ const _styles = {
     backgroundColor: `rgb(var(--joy-palette-${REASONING_COLOR}-lightChannel) / 15%)`, // similar to success.50
     // boxShadow: 'inset 1px 1px 3px -3px var(--joy-palette-neutral-solidBg)',
     mt: 1,
-    p: 1,
-
-    // plain text style
-    overflowWrap: 'anywhere',
-    whiteSpace: 'break-spaces',
+    py: 1,
+    // px: 0.5, // the blocks carry their own inline margin (text 1.5, code 0), as in messages
 
     // layout
     display: 'flex',
     flexDirection: 'column',
-  },
-
-  textUndoWhitespace: {
-    // for markdown content, we want to allow it to control the whitespace and line breaks, so we undo the plain text styles that break on whitespace
-    overflowWrap: 'normal',
-    whiteSpace: 'normal',
   },
 
   buttonInline: {
@@ -94,13 +82,12 @@ const _styles = {
     // borderRadius: 'sm',
     // fontSize: 'xs',
   },
-
 } as const;
 
 
 /** Detect if content is potentially markdown based on common markdown patterns */
-function _maybeMarkdownReasoning(trimmed: string): boolean {
-  // const trimmed = text.trimStart();
+function _maybeMarkdownReasoning(text: string): boolean {
+  const trimmed = text.trimStart();
   return trimmed.startsWith('**')
     || trimmed.startsWith('# ')
     // || trimmed.startsWith('* ')
@@ -109,16 +96,19 @@ function _maybeMarkdownReasoning(trimmed: string): boolean {
 }
 
 
-export function BlockPartModelAux(props: {
+export const BlockPartModelAuxMemo = React.memo(BlockPartModelAux);
+
+function BlockPartModelAux(props: {
   fragmentId: DMessageFragmentId,
   auxType: 'reasoning' | string,
   auxText: string,
   auxHasSignature: boolean,
   auxRedactedDataCount: number,
-  messagePendingIncomplete: boolean,
-  zenMode: boolean,
+  hideActions: boolean,
   contentScaling: ContentScaling,
-  isLastFragment: boolean,
+  fitScreen: boolean,
+  isMobile: boolean,
+  inFlux: boolean,
   onFragmentDelete?: (fragmentId: DMessageFragmentId) => void,
   onFragmentReplace?: (fragmentId: DMessageFragmentId, newFragment: DMessageContentFragment) => void,
 }) {
@@ -130,16 +120,45 @@ export function BlockPartModelAux(props: {
   // external state
   const { showPromisedOverlay } = useOverlayComponents();
 
+  // derived
+  const { inFlux } = props;
+  const contentScaling = adjustContentScaling(props.contentScaling, -1);
+  const typeText = props.auxType === 'reasoning' ? 'Reasoning' : 'Auxiliary';
+
+  // collapsed content stays mounted (the expander only animates its height): freeze its text so it does not re-render while hidden
+  const shownTextRef = React.useRef(props.auxText);
+  if (expanded) shownTextRef.current = props.auxText;
+  const shownText = shownTextRef.current;
+
   // memo
-  const scaledTypographySx = useScaledTypographySx(adjustContentScaling(props.contentScaling, -1), false, false);
-  const maybeMarkdown = React.useMemo(() => !ENABLE_MARKDOWN_DETECTION || neverExpanded ? false : _maybeMarkdownReasoning(props.auxText), [neverExpanded, props.auxText]);
+  const maybeMarkdown = React.useMemo(() => !ENABLE_MARKDOWN_DETECTION || neverExpanded ? false : _maybeMarkdownReasoning(shownText), [neverExpanded, shownText]);
+
+  // memo style
+  const chipSx: SxProps = React.useMemo(() => ({
+    ..._styles.chip,
+    ...(inFlux && _styles.chipActive),
+    ...(expanded && _styles.chipExpanded),
+    fontSize: themeScalingMap[contentScaling]?.blockFontSize ?? undefined,
+  }), [contentScaling, expanded, inFlux]);
+  const scaledTypographySx = useScaledTypographySx(contentScaling, false, false);
   const textSx = React.useMemo(() => ({
     ..._styles.text,
     ...scaledTypographySx,
-    ...(maybeMarkdown ? _styles.textUndoWhitespace : {}),
-  }), [maybeMarkdown, scaledTypographySx]);
+  }), [scaledTypographySx]);
 
-  let typeText = props.auxType === 'reasoning' ? 'Reasoning' : 'Auxiliary';
+  // same renderer as the message text: blocks, in-flux last block while streaming
+  const { fitScreen, isMobile } = props;
+  const renderedBlocks = React.useMemo(() => neverExpanded ? null : (
+    <AutoBlocksRenderer
+      text={shownText}
+      fromRole='assistant'
+      contentScaling={contentScaling}
+      fitScreen={fitScreen}
+      isMobile={isMobile}
+      textRenderVariant={maybeMarkdown ? 'markdown' : 'text'}
+      inFlux={inFlux}
+    />
+  ), [contentScaling, fitScreen, inFlux, isMobile, maybeMarkdown, neverExpanded, shownText]);
 
 
   // handlers
@@ -196,23 +215,24 @@ export function BlockPartModelAux(props: {
     {/* Chip to expand/collapse */}
     <Box data-agi-no-copy /* do not copy these buttons */ sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center', justifyContent: 'space-between' }}>
       <Chip
-        color={props.isLastFragment ? REASONING_COLOR : 'neutral'}
-        variant={expanded ? 'solid' : 'soft'}
         size='sm'
+        color={inFlux || expanded ? REASONING_COLOR : 'neutral'}
+        variant={expanded ? 'solid' : 'soft'}
         onClick={handleToggleExpanded}
-        sx={expanded ? _styles.chipExpanded : props.isLastFragment ? _styles.chip : _styles.chipDisabled}
+        sx={chipSx}
         startDecorator={
           <AllInclusiveIcon
-            sx={(props.messagePendingIncomplete && !expanded && props.isLastFragment) ? _styles.chipIconPending : _styles.chipIcon}
+            sx={!expanded && inFlux ? _styles.chipIconPending : _styles.chipIcon}
             /* sx={{ color: expanded ? undefined : REASONING_COLOR }} */
           />
         }
         // startDecorator='🧠'
       >
-        Show {typeText}
+        {/*Show {typeText}*/}
+        {inFlux && !expanded && typeText === 'Reasoning' ? `${typeText}...` : `Show ${typeText}`}
       </Chip>
 
-      {expanded && !props.messagePendingIncomplete && (showInline || showDelete) && !!props.auxText && (
+      {expanded && !props.hideActions && (showInline || showDelete) && !!props.auxText && (
         <Box sx={{ display: 'flex', gap: 1 }}>
 
           {/* Make inline */}
@@ -220,10 +240,10 @@ export function BlockPartModelAux(props: {
             color={REASONING_COLOR}
             variant='soft'
             size='sm'
-            disabled={!onFragmentReplace /* || props.messagePendingIncomplete */}
+            disabled={!onFragmentReplace}
             onClick={!onFragmentReplace ? undefined : handleInline}
             endDecorator={<TextFieldsIcon />}
-            sx={(!onFragmentReplace /* || props.messagePendingIncomplete */) ? _styles.chipDisabled : _styles.chip}
+            sx={_styles.chip}
           >
             Make Regular Text
           </Chip>}
@@ -233,10 +253,10 @@ export function BlockPartModelAux(props: {
             color={REASONING_COLOR}
             variant='soft'
             size='sm'
-            disabled={!onFragmentDelete /* || props.messagePendingIncomplete */}
+            disabled={!onFragmentDelete}
             onClick={!onFragmentDelete ? undefined : handleDelete}
             endDecorator={<DeleteOutlineIcon />}
-            sx={(!onFragmentDelete /* || props.messagePendingIncomplete */) ? _styles.chipDisabled : _styles.chip}
+            sx={_styles.chip}
           >
             Delete
           </Chip>}
@@ -246,22 +266,13 @@ export function BlockPartModelAux(props: {
     </Box>
 
     {/* Controlled Box */}
-    <ExpanderControlledBox expanded={expanded}>
+    <ExpanderControlledBox noContain={true /* Important, allow fixed positioning on the code blocks' OverlayButtons */} expanded={expanded}>
 
-      {!neverExpanded && (
-        (ENABLE_MARKDOWN_DETECTION && maybeMarkdown) ? (
-          <Box sx={textSx}>
-            <RenderMarkdown content={props.auxText} sx={{ ...scaledTypographySx, marginInline: '0!important' /* to override what's default in this component */ }} />
-            {!!props.auxRedactedDataCount && <Box component='span' sx={{ color: 'text.disabled' }}> {ANTHROPIC_REDACTED_EXPLAINER}{'.'.repeat(props.auxRedactedDataCount % 5)}</Box>}
-          </Box>
-        ) : (
-          <Typography sx={textSx}>
-            <span>
-              {props.auxText}
-              {!!props.auxRedactedDataCount && <Box component='span' sx={{ color: 'text.disabled' }}> {ANTHROPIC_REDACTED_EXPLAINER}{'.'.repeat(props.auxRedactedDataCount % 5)}</Box>}
-            </span>
-          </Typography>
-        )
+      {renderedBlocks && (
+        <Box sx={textSx}>
+          {renderedBlocks}
+          {!!props.auxRedactedDataCount && <Box component='span' sx={{ color: 'text.disabled', mx: 1.5 }}>{ANTHROPIC_REDACTED_EXPLAINER}{'.'.repeat(props.auxRedactedDataCount % 5)}</Box>}
+        </Box>
       )}
 
     </ExpanderControlledBox>

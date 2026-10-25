@@ -3,7 +3,7 @@ import createCache, { StylisElement, StylisPlugin } from '@emotion/cache';
 import { Inter, JetBrains_Mono } from 'next/font/google';
 import { extendTheme } from '@mui/joy';
 
-import { animationEnterBelow } from '~/common/util/animUtils';
+import { animationEnterBelow, animationOpacityFadeIn } from '~/common/util/animUtils';
 
 
 // Definitions
@@ -33,6 +33,13 @@ const jetBrainsMono = JetBrains_Mono({
 });
 export const themeCodeFontFamilyCss = jetBrainsMono.style.fontFamily;
 
+/**
+ * Hotter lime for 'New'/'Beta' badges - intentionally brighter than the 400 brand anchor
+ * so tiny chips pop; pairs with black text and bold weight. Mirrors the website's
+ * RankingsSection chipNew - keep the two in sync.
+ */
+export const brandLimeExtraBadge = '#d4ff3a';
+
 
 export const createAppTheme = (uiComplexityMinimal: boolean) => extendTheme({
   fontFamily: {
@@ -40,6 +47,8 @@ export const createAppTheme = (uiComplexityMinimal: boolean) => extendTheme({
     display: themeFontFamilyCss,
     code: themeCodeFontFamilyCss,
   },
+  // NOTE: the standalone /dev/inspect/*.html dev tools hand-mirror these neutral/background hex tokens
+  // (they intentionally have zero app imports). If you change the palette below, update those pages' CSS to match.
   colorSchemes: {
     light: {
       palette: {
@@ -61,6 +70,7 @@ export const createAppTheme = (uiComplexityMinimal: boolean) => extendTheme({
           level1: 'var(--joy-palette-neutral-100, #F0F4F8)',
           level2: 'var(--joy-palette-neutral-200, #DDE7EE)',
           body: 'var(--joy-palette-neutral-300, #CDD7E1)',
+          backdrop: 'rgba(var(--joy-palette-neutral-darkChannel, 11 13 14) / 0.3333)', // was: 0.25
           // Former
           // body: 'var(--joy-palette-neutral-400, #9FA6AD)',
         },
@@ -134,15 +144,26 @@ export const createAppTheme = (uiComplexityMinimal: boolean) => extendTheme({
 
     JoyModal: {
       styleOverrides: {
-        backdrop: !uiComplexityMinimal ? undefined : {
-          backdropFilter: 'none',
-          // backdropFilter: 'blur(2px)',
+        backdrop: uiComplexityMinimal ? {
+          backdropFilter: 'none', // always un-blur on minimal
+          // and no animation either, to keep it simple
+        } : {
+          animation: `${animationOpacityFadeIn} 0.16s ease-out`,
         },
-        root: uiComplexityMinimal ? undefined : {
-          '& .agi-animate-enter': {
-            animation: `${animationEnterBelow} 0.16s ease-out`,
+      },
+    },
+    JoyModalDialog: {
+      styleOverrides: {
+        root: ({ theme }) => ({
+          [theme.breakpoints.down('sm')]: {
+            '--Card-padding': '1rem',
           },
-        },
+          ...(!uiComplexityMinimal && {
+            '& .agi-animate-enter': {
+              animation: `${animationEnterBelow} 0.16s ease-out`,
+            },
+          }),
+        }),
       },
     },
 
@@ -169,6 +190,7 @@ export const themeBgApp = 'background.level1';
 export const themeBgAppDarker = 'background.level2';
 export const themeBgAppChatComposer = 'background.surface';
 
+export const themeMinWidthChatPane = '18rem'; // chat list + chat/beam wrapper floor (was the panel's minSize=20%); below it the message list overflows and the scroll box pans horizontally
 export const lineHeightChatTextMd = 1.75;
 export const lineHeightTextareaMd = 1.75;
 

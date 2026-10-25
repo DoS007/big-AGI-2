@@ -1,3 +1,4 @@
+import { isAbortErrorLike } from '~/common/util/abortUtils';
 import { maybeDebuggerBreak, serializeError } from '~/common/util/errorUtils';
 import { posthogCaptureException } from '~/common/components/3rdparty/PostHogAnalytics';
 
@@ -31,7 +32,8 @@ class LoggerImplementation implements ClientLogger {
     this.#log('critical', message, details, source, options);
 
 
-  async executeAction(logId: string, actionId?: string): Promise<void> {
+  // arrow property: the factory forwards this detached, so it must stay bound
+  executeAction = async (logId: string, actionId?: string): Promise<void> => {
 
     const entry = this._actions.getEntry(logId);
     if (!entry?.actions?.length)
@@ -101,7 +103,7 @@ class LoggerImplementation implements ClientLogger {
       maybeDebuggerBreak();
 
     // Send error/critical logs to PostHog for monitoring
-    if ((level === 'error' || level === 'critical') && !finalOptions.skipReporting)
+    if ((level === 'error' || level === 'critical') && !finalOptions.skipReporting && !isAbortErrorLike(originalDetails))
       this.#sendToPostHogIfError(level, message, originalDetails, finalSource);
 
     return this._actions._addEntry({

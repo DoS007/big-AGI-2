@@ -63,14 +63,14 @@ export function GeminiServiceSetup(props: { serviceId: DModelsServiceId }) {
       autoCompleteId='gemini-key' label='Gemini API Key'
       rightLabel={<>{needsUserKey
         ? !geminiKey && <Link level='body-sm' href={GEMINI_API_KEY_LINK} target='_blank'>request Key</Link>
-        : <AlreadySet />}
+        : <AlreadySet overridden={!!geminiKey} />}
       </>}
       value={geminiKey} onChange={value => updateSettings({ geminiKey: value.trim() })}
       required={needsUserKey} isError={showKeyError}
       placeholder='...'
     />
 
-    {showAdvanced && <FormControl orientation='horizontal' sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+    {(showAdvanced || minSafetyLevel !== 'HARM_BLOCK_THRESHOLD_UNSPECIFIED') && <FormControl orientation='horizontal' sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
       <FormLabelStart title='Safety Settings'
                       description='Threshold' />
       <Select
@@ -98,7 +98,7 @@ export function GeminiServiceSetup(props: { serviceId: DModelsServiceId }) {
       {/*of being unsafe.*/}
     </FormHelperText>}
 
-    {showAdvanced && <FormTextField
+    {(showAdvanced || !!geminiHost) && <FormTextField
       autoCompleteId='gemini-host'
       title='API Endpoint'
       placeholder={`https://generativelanguage.googleapis.com`}

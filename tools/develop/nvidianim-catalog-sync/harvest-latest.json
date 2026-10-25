@@ -1,0 +1,2326 @@
+{
+  "harvestedAt": "2026-10-21T20:54:20.273Z",
+  "counts": {
+    "total": 91,
+    "dead-entitlement": 47,
+    "no-chat-route": 11,
+    "alive": 14,
+    "slow-or-dead": 7,
+    "probe-error": 4,
+    "retired": 8,
+    "withCatalogCard": 75,
+    "withPubDate": 75,
+    "withDeprecation": 1,
+    "withCtxMeasured": 10,
+    "ngcUnmatched": 81
+  },
+  "models": [
+    {
+      "id": "01-ai/yi-large",
+      "alive": "dead-entitlement",
+      "label": "yi-large",
+      "description": "Powerful model trained on English and Chinese for diverse tasks including chatbot and creative writing.",
+      "publisher": "01-ai",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240617",
+      "catalogUpdated": "2025-07-20T16:36:18.102Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "adept/fuyu-8b",
+      "alive": "dead-entitlement",
+      "label": "fuyu-8b",
+      "description": "Multi-modal model for a wide range of tasks, including image understanding and language generation.",
+      "publisher": "adept",
+      "ctxMeasured": null,
+      "ctxAdvertised": 16384,
+      "capabilities": {
+        "tools": false,
+        "structuredOutput": false,
+        "reasoning": false
+      },
+      "modalitiesIn": [
+        "text",
+        "image"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20240315",
+      "catalogUpdated": "2024-08-26T16:47:11.225Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "ai21labs/jamba-1.5-large-instruct",
+      "alive": "dead-entitlement",
+      "label": "jamba-1.5-large-instruct",
+      "description": "Cutting-edge MOE based LLM designed to excel in a wide array of generative AI tasks.",
+      "publisher": "ai21labs",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240822",
+      "catalogUpdated": "2025-05-21T21:48:36.444Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "aisingapore/sea-lion-7b-instruct",
+      "alive": "dead-entitlement",
+      "label": "sea-lion-7b-instruct",
+      "description": "LLM to represent and serve the linguistic and cultural diversity of Southeast Asia",
+      "publisher": "aisingapore",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240506",
+      "catalogUpdated": "2025-01-17T20:19:18.239Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "bigcode/starcoder2-15b",
+      "alive": "no-chat-route",
+      "label": "starcoder2-15b",
+      "description": "Advanced programming model for code completion, summarization, and generation",
+      "publisher": "bigcode",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240627",
+      "catalogUpdated": "2025-07-20T16:36:21.523Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "plain-text 404 page not found (no chat route: embedding/rerank class)"
+      ]
+    },
+    {
+      "id": "databricks/dbrx-instruct",
+      "alive": "dead-entitlement",
+      "label": "dbrx-instruct",
+      "description": "A general-purpose LLM with state-of-the-art performance in language understanding, coding, and RAG.",
+      "publisher": "databricks",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240429",
+      "catalogUpdated": "2025-05-22T19:14:13.120Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "deepseek-ai/deepseek-coder-6.7b-instruct",
+      "alive": "dead-entitlement",
+      "label": "deepseek-coder-6.7b-instruct",
+      "description": "Powerful coding model offering advanced capabilities in code generation, completion, and infilling",
+      "publisher": "deepseek-ai",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240701",
+      "catalogUpdated": "2025-01-30T18:17:27.044Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "deepseek-ai/deepseek-v4-flash-0731",
+      "alive": "retired",
+      "label": "deepseek-v4-flash-0731",
+      "description": "284B MoE (13B active) model ideal for long-context workloads optimized for coding, chat, and agentic workflows",
+      "publisher": "deepseek-ai",
+      "ctxMeasured": null,
+      "ctxAdvertised": 1048576,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": true,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260819",
+      "catalogUpdated": "2026-08-19T01:03:08.022Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "NOT in /v1/models this run (unlisted carryover/extra probe)",
+        "no NGC endpoint matched",
+        "410 Gone, retired 2026-09-21"
+      ]
+    },
+    {
+      "id": "deepseek-ai/deepseek-v4-pro-0813",
+      "alive": "retired",
+      "label": "deepseek-v4-pro-0813",
+      "description": "DeepSeek V4 scales to 262K-token context windows with efficient MoE architecture for coding tasks.",
+      "publisher": "deepseek-ai",
+      "ctxMeasured": null,
+      "ctxAdvertised": 262144,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": true,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260826",
+      "catalogUpdated": "2026-08-26T22:41:56.191Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "NOT in /v1/models this run (unlisted carryover/extra probe)",
+        "no NGC endpoint matched",
+        "410 Gone, retired 2026-09-14"
+      ]
+    },
+    {
+      "id": "deepseek-ai/deepseek-v4.1-flash",
+      "alive": "alive",
+      "label": "deepseek-v4.1-flash",
+      "description": "552B MoE, 8B active params with native multimodal support and lower API cost using smaller KV cache",
+      "publisher": "deepseek-ai",
+      "ctxMeasured": null,
+      "ctxAdvertised": 1048576,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": null,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text",
+        "image"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260918",
+      "catalogUpdated": "2026-09-18T18:55:17.986Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "ctx probe HTTP 400, no limit in body: {\"message\":\"Bad Request\",\"type\":\"Bad Request\",\"code\":400}",
+        "ctxProbe: no-match"
+      ]
+    },
+    {
+      "id": "google/codegemma-1.1-7b",
+      "alive": "dead-entitlement",
+      "label": null,
+      "description": null,
+      "publisher": "google",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "google/codegemma-7b",
+      "alive": "dead-entitlement",
+      "label": "codegemma-7b",
+      "description": "Cutting-edge model built on Google's Gemma-7B specialized for code generation and code completion.",
+      "publisher": "google",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240409",
+      "catalogUpdated": "2025-05-21T21:00:24.309Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "google/deplot",
+      "alive": "dead-entitlement",
+      "label": null,
+      "description": null,
+      "publisher": "google",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "google/diffusiongemma-26b-a4b-it",
+      "alive": "slow-or-dead",
+      "label": "diffusiongemma-26b-a4b-it",
+      "description": "Diffusion-based 26B parameter LLM enabling parallel token generation for real-time text apps",
+      "publisher": "google",
+      "ctxMeasured": null,
+      "ctxAdvertised": 262144,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": false,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text",
+        "image",
+        "video"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260610",
+      "catalogUpdated": "2026-06-10T18:07:50.386Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": 4303686,
+      "notes": [
+        "timed out at 45s and again at 120s"
+      ]
+    },
+    {
+      "id": "google/gemma-2b",
+      "alive": "dead-entitlement",
+      "label": "gemma-2b",
+      "description": "Lightweight language model deployable on laptop, desktop or the cloud for summarization and reasoning.",
+      "publisher": "google",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240405",
+      "catalogUpdated": "2025-07-20T16:37:23.686Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "google/gemma-3-12b-it",
+      "alive": "dead-entitlement",
+      "label": null,
+      "description": null,
+      "publisher": "google",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "google/gemma-3-4b-it",
+      "alive": "dead-entitlement",
+      "label": null,
+      "description": null,
+      "publisher": "google",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "google/gemma-4-31b-it",
+      "alive": "slow-or-dead",
+      "label": "gemma-4-31b-it",
+      "description": "Dense 31B model delivering frontier reasoning for coding, agentic workflows, and fine-tuning.",
+      "publisher": "google",
+      "ctxMeasured": null,
+      "ctxAdvertised": 262144,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": false,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text",
+        "image",
+        "video"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260402",
+      "catalogUpdated": "2026-04-02T16:23:29.660Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": 5711134,
+      "notes": [
+        "timed out at 45s and again at 120s"
+      ]
+    },
+    {
+      "id": "google/recurrentgemma-2b",
+      "alive": "dead-entitlement",
+      "label": "recurrentgemma-2b",
+      "description": "Novel recurrent architecture based language model for faster inference when generating long sequences.",
+      "publisher": "google",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240409",
+      "catalogUpdated": "2025-07-20T16:38:16.577Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "ibm/granite-3.0-3b-a800m-instruct",
+      "alive": "dead-entitlement",
+      "label": "granite-3.0-3b-a800m-instruct",
+      "description": "Highly efficient Mixture of Experts model for RAG, summarization, entity extraction, and classification",
+      "publisher": "ibm",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20241021",
+      "catalogUpdated": "2025-07-20T16:36:26.845Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "ibm/granite-3.0-8b-instruct",
+      "alive": "dead-entitlement",
+      "label": "granite-3.0-8b-instruct",
+      "description": "Advanced Small Language Model supporting RAG, summarization, classification, code, and agentic AI",
+      "publisher": "ibm",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20241021",
+      "catalogUpdated": "2025-05-24T08:34:54.685Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "ibm/granite-34b-code-instruct",
+      "alive": "dead-entitlement",
+      "label": "granite-34b-code-instruct",
+      "description": "Software programming LLM for code generation, completion, explanation, and multi-turn conversion.",
+      "publisher": "ibm",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240528",
+      "catalogUpdated": "2025-07-20T16:37:31.210Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "ibm/granite-8b-code-instruct",
+      "alive": "dead-entitlement",
+      "label": "granite-8b-code-instruct",
+      "description": "Software programming LLM for code generation, completion, explanation, and multi-turn conversion.",
+      "publisher": "ibm",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240528",
+      "catalogUpdated": "2025-07-20T16:36:29.627Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "meta/codellama-70b",
+      "alive": "dead-entitlement",
+      "label": "codellama-70b",
+      "description": "LLM capable of generating code from natural language and vice versa.",
+      "publisher": "meta",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240315",
+      "catalogUpdated": "2025-03-31T19:29:19.449Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "meta/llama-3.2-11b-vision-instruct",
+      "alive": "slow-or-dead",
+      "label": "llama-3.2-11b-vision-instruct",
+      "description": "Cutting-edge vision-language model exceling in high-quality reasoning from images.",
+      "publisher": "meta",
+      "ctxMeasured": null,
+      "ctxAdvertised": 131072,
+      "capabilities": {
+        "tools": false,
+        "structuredOutput": false,
+        "reasoning": false
+      },
+      "modalitiesIn": [
+        "text",
+        "image"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20240925",
+      "catalogUpdated": "2025-05-30T20:06:54.722Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": 3334103,
+      "notes": [
+        "timed out at 45s and again at 120s"
+      ]
+    },
+    {
+      "id": "meta/llama-3.2-90b-vision-instruct",
+      "alive": "slow-or-dead",
+      "label": "llama-3.2-90b-vision-instruct",
+      "description": "Cutting-edge vision-Language model exceling in high-quality reasoning from images.",
+      "publisher": "meta",
+      "ctxMeasured": null,
+      "ctxAdvertised": 131072,
+      "capabilities": {
+        "tools": false,
+        "structuredOutput": false,
+        "reasoning": false
+      },
+      "modalitiesIn": [
+        "text",
+        "image"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20240925",
+      "catalogUpdated": "2025-05-30T20:09:09.139Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": 4343903,
+      "notes": [
+        "timed out at 45s and again at 120s"
+      ]
+    },
+    {
+      "id": "meta/llama-guard-4-12b",
+      "alive": "slow-or-dead",
+      "label": "llama-guard-4-12b",
+      "description": "Multi-modal model to classify safety for input prompts as well output responses.",
+      "publisher": "meta",
+      "ctxMeasured": null,
+      "ctxAdvertised": 163840,
+      "capabilities": {
+        "tools": false,
+        "structuredOutput": false,
+        "reasoning": false
+      },
+      "modalitiesIn": [
+        "text",
+        "image"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20250628",
+      "catalogUpdated": "2025-07-01T03:52:04.752Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": 357040,
+      "notes": [
+        "timed out at 45s and again at 120s"
+      ]
+    },
+    {
+      "id": "meta/llama2-70b",
+      "alive": "dead-entitlement",
+      "label": "llama2-70b",
+      "description": "Cutting-edge large language AI model capable of generating text and code in response to prompts.",
+      "publisher": "meta",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240315",
+      "catalogUpdated": "2025-01-17T20:29:36.364Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "meta/muse-glimmer-30b",
+      "alive": "alive",
+      "label": "muse-glimmer-30b",
+      "description": "Muse Glimmer 30B is a multimodal reasoning model accepting text and images, with native tool-calling and separate reasoning output.",
+      "publisher": "meta",
+      "ctxMeasured": null,
+      "ctxAdvertised": 131072,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": false,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text",
+        "image"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260810",
+      "catalogUpdated": "2026-08-10T12:58:58.470Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "ctx probe HTTP 500, no limit in body: {\"message\":\"Internal server error\",\"type\":\"Internal Server Error\",\"code\":500}",
+        "ctxProbe: no-match"
+      ]
+    },
+    {
+      "id": "microsoft/kosmos-2",
+      "alive": "dead-entitlement",
+      "label": null,
+      "description": null,
+      "publisher": "microsoft",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "microsoft/phi-3-vision-128k-instruct",
+      "alive": "dead-entitlement",
+      "label": "phi-3-vision-128k-instruct",
+      "description": "Cutting-edge open multimodal model exceling in high-quality reasoning from images.",
+      "publisher": "microsoft",
+      "ctxMeasured": null,
+      "ctxAdvertised": 131072,
+      "capabilities": {
+        "tools": false,
+        "structuredOutput": false,
+        "reasoning": false
+      },
+      "modalitiesIn": [
+        "text",
+        "image"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20240516",
+      "catalogUpdated": "2025-07-20T16:32:11.880Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "microsoft/phi-3.5-moe-instruct",
+      "alive": "dead-entitlement",
+      "label": null,
+      "description": null,
+      "publisher": "microsoft",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "minimaxai/minimax-m3",
+      "alive": "retired",
+      "label": "minimax-m3",
+      "description": "MiniMax M3 Preview is a multimodal MoE vision-language model with strong reasoning, coding, and tool-calling capabilities.",
+      "publisher": "minimaxai",
+      "ctxMeasured": null,
+      "ctxAdvertised": 1048576,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": true,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text",
+        "image",
+        "video"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260612",
+      "catalogUpdated": "2026-06-12T14:01:30.878Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "NOT in /v1/models this run (unlisted carryover/extra probe)",
+        "no NGC endpoint matched",
+        "410 Gone, retired 2026-09-09"
+      ]
+    },
+    {
+      "id": "mistralai/codestral-22b-instruct-v0.1",
+      "alive": "dead-entitlement",
+      "label": null,
+      "description": null,
+      "publisher": "mistralai",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "mistralai/mistral-7b-instruct-v0.3",
+      "alive": "dead-entitlement",
+      "label": null,
+      "description": null,
+      "publisher": "mistralai",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "mistralai/mistral-large",
+      "alive": "dead-entitlement",
+      "label": null,
+      "description": null,
+      "publisher": "mistralai",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "mistralai/mistral-large-2-instruct",
+      "alive": "dead-entitlement",
+      "label": null,
+      "description": null,
+      "publisher": "mistralai",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "mistralai/mistral-nemotron",
+      "alive": "retired",
+      "label": "mistral-nemotron",
+      "description": "Built for agentic workflows, this model excels in coding, instruction following, and function calling",
+      "publisher": "mistralai",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": false,
+        "reasoning": true
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20250611",
+      "catalogUpdated": "2025-06-12T03:42:45.008Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "NOT in /v1/models this run (unlisted carryover/extra probe)",
+        "no NGC endpoint matched",
+        "410 Gone, retired 2026-09-28"
+      ]
+    },
+    {
+      "id": "mistralai/mixtral-8x22b-v0.1",
+      "alive": "dead-entitlement",
+      "label": null,
+      "description": null,
+      "publisher": "mistralai",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "moonshotai/kimi-k2.6",
+      "alive": "dead-entitlement",
+      "label": null,
+      "description": null,
+      "publisher": "moonshotai",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "moonshotai/kimi-k3",
+      "alive": "retired",
+      "label": "kimi-k3",
+      "description": "~2.8T hybrid KDA+MLA multimodal MoE for long-horizon coding, agentic tool use, and image understanding.",
+      "publisher": "moonshotai",
+      "ctxMeasured": null,
+      "ctxAdvertised": 1048576,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": true,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text",
+        "image"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260827",
+      "catalogUpdated": "2026-08-27T20:40:37.796Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "NOT in /v1/models this run (unlisted carryover/extra probe)",
+        "no NGC endpoint matched",
+        "410 Gone, retired 2026-10-15"
+      ]
+    },
+    {
+      "id": "nv-mistralai/mistral-nemo-12b-instruct",
+      "alive": "dead-entitlement",
+      "label": "mistral-nemo-12b-instruct",
+      "description": "Most advanced language model for reasoning, code, multilingual tasks; runs on a single GPU.",
+      "publisher": "nv-mistralai",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240718",
+      "catalogUpdated": "2025-07-09T14:53:01.634Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "nvidia/ai-synthetic-video-detector",
+      "alive": "probe-error",
+      "label": null,
+      "description": null,
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "HTTP 500: {\"type\":\"urn:nvcf-worker-service:problem-details:internal-server-error\", \"title\":\"Internal Server Error\", \"status\":500, \"detail\":\"Internal error while"
+      ]
+    },
+    {
+      "id": "nvidia/cosmos-reason2-8b",
+      "alive": "dead-entitlement",
+      "label": null,
+      "description": null,
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "nvidia/embed-qa-4",
+      "alive": "no-chat-route",
+      "label": "embed-qa-4",
+      "description": "GPU-accelerated generation of text embeddings used for question-answering retrieval.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240317",
+      "catalogUpdated": "2025-06-30T20:36:49.023Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "plain-text 404 page not found (no chat route: embedding/rerank class)"
+      ]
+    },
+    {
+      "id": "nvidia/ising-calibration-1.5-31b",
+      "alive": "alive",
+      "label": "ising-calibration-1.5-31b",
+      "description": "NVIDIA-Ising-Calibration-1.5 is a dense multimodal vision-language model built on Gemma 4 31B. It analyzes quantum computing calibration experiment plots and generates structured technical text.",
+      "publisher": "nvidia",
+      "ctxMeasured": 131072,
+      "ctxAdvertised": 262144,
+      "capabilities": {
+        "tools": false,
+        "structuredOutput": false,
+        "reasoning": false
+      },
+      "modalitiesIn": [
+        "image",
+        "text"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260723",
+      "catalogUpdated": "2026-07-23T15:28:05.216Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": []
+    },
+    {
+      "id": "nvidia/llama-3.1-nemoguard-8b-content-safety",
+      "alive": "slow-or-dead",
+      "label": "llama-3.1-nemoguard-8b-content-safety",
+      "description": "Leading content safety model for enhancing the safety and moderation capabilities of LLMs",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": 131072,
+      "capabilities": {
+        "tools": false,
+        "structuredOutput": false,
+        "reasoning": false
+      },
+      "modalitiesIn": [
+        "text"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20250116",
+      "catalogUpdated": "2025-03-25T01:22:42.822Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": 341916,
+      "notes": [
+        "timed out at 45s and again at 120s"
+      ]
+    },
+    {
+      "id": "nvidia/llama-3.1-nemoguard-8b-topic-control",
+      "alive": "probe-error",
+      "label": "llama-3.1-nemoguard-8b-topic-control",
+      "description": "Topic control model to keep conversations focused on approved topics, avoiding inappropriate content.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": 131072,
+      "capabilities": {
+        "tools": false,
+        "structuredOutput": false,
+        "reasoning": false
+      },
+      "modalitiesIn": [
+        "text"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20250116",
+      "catalogUpdated": "2025-03-25T01:16:40.059Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": 490532,
+      "notes": [
+        "HTTP 500: {\"error\":\"Error during inference of request chat-4aea6701ea474e189b98fa42a9db479e -- Encountered an error in forwardAsync function: [TensorRT-LLM][ERR"
+      ]
+    },
+    {
+      "id": "nvidia/llama-3.1-nemotron-51b-instruct",
+      "alive": "dead-entitlement",
+      "label": "llama-3.1-nemotron-51b-instruct",
+      "description": "Unique language model that delivers an unmatched accuracy-efficiency performance.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240923",
+      "catalogUpdated": "2025-05-21T21:48:41.518Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "nvidia/llama-3.1-nemotron-70b-instruct",
+      "alive": "dead-entitlement",
+      "label": "llama-3.1-nemotron-70b-instruct",
+      "description": "Llama-3.1-Nemotron-70B-Instruct is a large language model customized by NVIDIA  in order to improve the helpfulness of LLM generated responses.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20241015",
+      "catalogUpdated": "2025-05-21T21:00:49.620Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
+      "alive": "alive",
+      "label": "llama-3.1-nemotron-safety-guard-8b-v3",
+      "description": "Leading multilingual content safety model for enhancing the safety and moderation capabilities of LLMs",
+      "publisher": "nvidia",
+      "ctxMeasured": 131072,
+      "ctxAdvertised": 8192,
+      "capabilities": {
+        "tools": false,
+        "structuredOutput": false,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20251028",
+      "catalogUpdated": "2025-10-28T17:54:39.054Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": 344220,
+      "notes": []
+    },
+    {
+      "id": "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+      "alive": "dead-entitlement",
+      "label": "llama-3.1-nemotron-ultra-253b-v1",
+      "description": "Superior inference efficiency with highest accuracy for scientific and complex math reasoning, coding, tool calling, and instruction following.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20250408",
+      "catalogUpdated": "2025-07-10T19:15:26.040Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "nvidia/llama-3.2-nemoretriever-1b-vlm-embed-v1",
+      "alive": "no-chat-route",
+      "label": "llama-3.2-nemoretriever-1b-vlm-embed-v1",
+      "description": "Multimodal question-answer retrieval representing user queries as text and documents as images.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20250611",
+      "catalogUpdated": "2025-06-25T14:17:57.052Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "plain-text 404 page not found (no chat route: embedding/rerank class)"
+      ]
+    },
+    {
+      "id": "nvidia/llama-3.2-nv-embedqa-1b-v1",
+      "alive": "no-chat-route",
+      "label": "llama-3.2-nv-embedqa-1b-v1",
+      "description": "World-class multilingual and cross-lingual question-answering retrieval.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20241024",
+      "catalogUpdated": "2025-01-17T20:00:46.421Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "plain-text 404 page not found (no chat route: embedding/rerank class)"
+      ]
+    },
+    {
+      "id": "nvidia/llama-nemotron-embed-vl-1b-v2",
+      "alive": "no-chat-route",
+      "label": "llama-nemotron-embed-vl-1b-v2",
+      "description": "Multimodal question-answer retrieval representing user queries as text and documents as images.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": 16384,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20260210",
+      "catalogUpdated": "2026-02-10T04:49:01.412Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": 16478487,
+      "notes": [
+        "plain-text 404 page not found (no chat route: embedding/rerank class)"
+      ]
+    },
+    {
+      "id": "nvidia/llama3-chatqa-1.5-70b",
+      "alive": "dead-entitlement",
+      "label": null,
+      "description": null,
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "nvidia/mistral-nemo-minitron-8b-8k-instruct",
+      "alive": "dead-entitlement",
+      "label": "mistral-nemo-minitron-8b-8k-instruct",
+      "description": "State-of-the-art small language model delivering superior accuracy for chatbot, virtual assistants, and content generation.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20241001",
+      "catalogUpdated": "2025-07-20T16:37:25.970Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "nvidia/nemotron-3-embed-1b",
+      "alive": "no-chat-route",
+      "label": "nemotron-3-embed-1b",
+      "description": "1B embedding model for semantic search, retrieval, and RAG applications.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": 32768,
+      "capabilities": {
+        "tools": false,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20260716",
+      "catalogUpdated": "2026-07-16T19:07:19.287Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "plain-text 404 page not found (no chat route: embedding/rerank class)"
+      ]
+    },
+    {
+      "id": "nvidia/nemotron-3-nano-30b-a3b",
+      "alive": "retired",
+      "label": "nemotron-3-nano-30b-a3b",
+      "description": "Open, efficient MoE model with 1M context, excelling in coding, reasoning, instruction following, tool calling, and more",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": 262144,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": false,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20251215",
+      "catalogUpdated": "2025-12-15T14:22:38.215Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "NOT in /v1/models this run (unlisted carryover/extra probe)",
+        "no NGC endpoint matched",
+        "410 Gone, retired 2026-09-01"
+      ]
+    },
+    {
+      "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+      "alive": "alive",
+      "label": "nemotron-3-nano-omni-30b-a3b-reasoning",
+      "description": "Nemotron 3 Nano Omni is an omni-modal reasoning model that understands images, video, speech, text.",
+      "publisher": "nvidia",
+      "ctxMeasured": 1000000,
+      "ctxAdvertised": 262144,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": false,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "video",
+        "audio",
+        "image",
+        "text"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260428",
+      "catalogUpdated": "2026-04-28T15:37:00.315Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": 8456415,
+      "notes": []
+    },
+    {
+      "id": "nvidia/nemotron-3-super-120b-a12b",
+      "alive": "dead-entitlement",
+      "label": "nemotron-3-super-120b-a12b",
+      "description": "Open, efficient hybrid Mamba-Transformer MoE with 1M context, excelling in agentic reasoning, coding, planning, tool calling, and more",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": 1048576,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": true,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260311",
+      "catalogUpdated": "2026-03-11T15:40:20.019Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "nvidia/nemotron-3-ultra-550b-a55b",
+      "alive": "alive",
+      "label": "nemotron-3-ultra-550b-a55b",
+      "description": "Open, efficient hybrid Mamba-Transformer MoE with 1M context, excelling in agentic reasoning, coding, planning, tool calling, and more",
+      "publisher": "nvidia",
+      "ctxMeasured": 1048576,
+      "ctxAdvertised": 1048576,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": false,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260604",
+      "catalogUpdated": "2026-06-04T11:22:41.002Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": 52410950,
+      "notes": []
+    },
+    {
+      "id": "nvidia/nemotron-3.5-content-safety",
+      "alive": "alive",
+      "label": "nemotron-3.5-content-safety",
+      "description": "Multilingual, multimodal model for detecting unsafe and toxic content.",
+      "publisher": "nvidia",
+      "ctxMeasured": 131072,
+      "ctxAdvertised": 131072,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": false,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text",
+        "image"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260602",
+      "catalogUpdated": "2026-06-02T16:37:26.248Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": 1882644,
+      "notes": []
+    },
+    {
+      "id": "nvidia/nemotron-3.5-embed-1b",
+      "alive": "no-chat-route",
+      "label": "nemotron-3.5-embed-1b",
+      "description": "1B multimodal embedding model for text and document-image retrieval in RAG applications.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": false,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20261020",
+      "catalogUpdated": "2026-10-20T23:06:34.068Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "plain-text 404 page not found (no chat route: embedding/rerank class)"
+      ]
+    },
+    {
+      "id": "nvidia/nemotron-3.5-embed-8b",
+      "alive": "no-chat-route",
+      "label": "nemotron-3.5-embed-8b",
+      "description": "8B multimodal embedding model for text and document-image retrieval in RAG applications.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": false,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20261020",
+      "catalogUpdated": "2026-10-20T23:06:32.594Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "plain-text 404 page not found (no chat route: embedding/rerank class)"
+      ]
+    },
+    {
+      "id": "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "alive": "alive",
+      "label": "nemotron-3.5-lightning-30b-a3b",
+      "description": "Fastest 30B A3B MoE model with leading domain accuracy for specialized agentic tasks",
+      "publisher": "nvidia",
+      "ctxMeasured": 1000000,
+      "ctxAdvertised": 1048576,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": true,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260811",
+      "catalogUpdated": "2026-08-11T12:16:36.092Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": []
+    },
+    {
+      "id": "nvidia/nemotron-3.5-super-vl-120b-a12b",
+      "alive": "alive",
+      "label": "nemotron-3.5-super-vl-120b-a12b",
+      "description": "Nemotron 3.5 Super early-access reasoning model for agentic, coding, tool-calling, and multimodal workloads",
+      "publisher": "nvidia",
+      "ctxMeasured": 1000000,
+      "ctxAdvertised": 262144,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": true,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text",
+        "image",
+        "video"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20261015",
+      "catalogUpdated": "2026-10-15T14:13:52.977Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": []
+    },
+    {
+      "id": "nvidia/nemotron-4-340b-instruct",
+      "alive": "dead-entitlement",
+      "label": "nemotron-4-340b-instruct",
+      "description": "Creates diverse synthetic data that mimics the characteristics of real-world data.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240617",
+      "catalogUpdated": "2025-05-07T22:53:34.373Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "nvidia/nemotron-4-340b-reward",
+      "alive": "dead-entitlement",
+      "label": "nemotron-4-340b-reward",
+      "description": "Grades responses on five attributes helpfulness, correctness, coherence, complexity and verbosity.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240618",
+      "catalogUpdated": "2025-05-07T22:55:30.695Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "nvidia/nemotron-nano-3-30b-a3b",
+      "alive": "dead-entitlement",
+      "label": null,
+      "description": null,
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": null,
+      "catalogUpdated": null,
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "no build.nvidia.com card (legacy or unlisted endpoint)",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "nvidia/nemotron-parse",
+      "alive": "probe-error",
+      "label": "nemotron-parse",
+      "description": "Cutting-edge vision-language model exceling in retrieving text and metadata from images.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": false,
+        "reasoning": true
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20251028",
+      "catalogUpdated": "2025-10-28T18:51:38.495Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": 1249231,
+      "notes": [
+        "HTTP 400: {\"object\":\"error\",\"message\":\"Content cannot be a plain string. The model does not support text input. Content cannot be a plain string. The model does"
+      ]
+    },
+    {
+      "id": "nvidia/nemotron-parse-2.0",
+      "alive": "probe-error",
+      "label": "nemotron-parse-2.0",
+      "description": "Cutting-edge vision-language model excelling in retrieving text and metadata from images.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": 9000,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": false,
+        "reasoning": true
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20260911",
+      "catalogUpdated": "2026-09-11T21:29:41.274Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "HTTP 502: <html> <head><title>502 Bad Gateway</title></head> <body> <center><h1>502 Bad Gateway</h1></center> <hr><center>nginx/1.31.2</center> </body> </"
+      ]
+    },
+    {
+      "id": "nvidia/neva-22b",
+      "alive": "dead-entitlement",
+      "label": "neva-22b",
+      "description": "Multi-modal vision-language model that understands text/images and generates informative responses",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": false,
+        "structuredOutput": false,
+        "reasoning": false
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240315",
+      "catalogUpdated": "2024-11-18T22:05:33.055Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "nvidia/nv-embedqa-mistral-7b-v2",
+      "alive": "no-chat-route",
+      "label": "nv-embedqa-mistral-7b-v2",
+      "description": "Multilingual text question-answering retrieval, transforming textual information into dense vector representations.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240717",
+      "catalogUpdated": "2025-03-11T16:27:06.248Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "plain-text 404 page not found (no chat route: embedding/rerank class)"
+      ]
+    },
+    {
+      "id": "nvidia/nvclip",
+      "alive": "no-chat-route",
+      "label": "nvclip",
+      "description": "NV-CLIP is a multimodal embeddings model for image and text.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240613",
+      "catalogUpdated": "2025-06-13T14:24:45.242Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "plain-text 404 page not found (no chat route: embedding/rerank class)"
+      ]
+    },
+    {
+      "id": "nvidia/riva-translate-4b-instruct",
+      "alive": "dead-entitlement",
+      "label": "riva-translate-4b-instruct",
+      "description": "Translation model in 12 languages with few-shots example prompts capability.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20250708",
+      "catalogUpdated": "2025-07-10T06:02:38.503Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "nvidia/riva-translate-4b-instruct-v1.1",
+      "alive": "retired",
+      "label": "riva-translate-4b-instruct-v1_1",
+      "description": "Translation model in 12 languages with few-shots example prompts capability.",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": false,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20251212",
+      "catalogUpdated": "2025-12-12T18:02:51.590Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "NOT in /v1/models this run (unlisted carryover/extra probe)",
+        "no NGC endpoint matched",
+        "410 Gone, retired 2026-10-05"
+      ]
+    },
+    {
+      "id": "nvidia/riva-translate-4b-instruct-v2",
+      "alive": "alive",
+      "label": "riva-translate-4b-instruct-v2",
+      "description": "Translation model in 37 languages with few-shots example prompts capability.",
+      "publisher": "nvidia",
+      "ctxMeasured": 8192,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": false,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20260727",
+      "catalogUpdated": "2026-07-27T17:35:59.075Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": []
+    },
+    {
+      "id": "nvidia/vila",
+      "alive": "dead-entitlement",
+      "label": "vila",
+      "description": "Multi-modal vision-language model that understands text/img/video and creates informative responses",
+      "publisher": "nvidia",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240909",
+      "catalogUpdated": "2025-04-25T18:45:34.460Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "openai/gpt-oss-120b",
+      "alive": "retired",
+      "label": "gpt-oss-120b",
+      "description": "Mixture of Experts (MoE) reasoning LLM (text-only) designed to fit within 80GB GPU.",
+      "publisher": "openai",
+      "ctxMeasured": null,
+      "ctxAdvertised": 131072,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": false,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20250805",
+      "catalogUpdated": "2025-08-05T16:46:08.985Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "NOT in /v1/models this run (unlisted carryover/extra probe)",
+        "no NGC endpoint matched",
+        "410 Gone, retired 2026-09-03"
+      ]
+    },
+    {
+      "id": "openai/gpt-oss-20b",
+      "alive": "slow-or-dead",
+      "label": "gpt-oss-20b",
+      "description": "Smaller Mixture of Experts (MoE) text-only LLM for efficient AI reasoning and math",
+      "publisher": "openai",
+      "ctxMeasured": null,
+      "ctxAdvertised": 131072,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": true,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20250805",
+      "catalogUpdated": "2025-08-05T16:46:10.339Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": 18938429,
+      "notes": [
+        "timed out at 45s and again at 120s"
+      ]
+    },
+    {
+      "id": "poolside/laguna-xs-2.1",
+      "alive": "alive",
+      "label": "laguna-xs-2.1",
+      "description": "Efficient 33B MoE for local, long-horizon agentic coding and terminal tasks",
+      "publisher": "poolside",
+      "ctxMeasured": 262144,
+      "ctxAdvertised": 262144,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": false,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260715",
+      "catalogUpdated": "2026-07-15T23:10:20.283Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": []
+    },
+    {
+      "id": "snowflake/arctic-embed-l",
+      "alive": "no-chat-route",
+      "label": "arctic-embed-l",
+      "description": "Optimized community model for text embedding.",
+      "publisher": "snowflake",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240424",
+      "catalogUpdated": "2025-03-21T13:13:13.363Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "plain-text 404 page not found (no chat route: embedding/rerank class)"
+      ]
+    },
+    {
+      "id": "stepfun-ai/step-5-preview",
+      "alive": "alive",
+      "label": "Step 5 Preview",
+      "description": "Preview of StepFun's Step 5: ~600B-total / 27B-active multimodal MoE (text and image in, text out) with 1M context, reasoning and tool calling, served in NVFP4.",
+      "publisher": "stepfun-ai",
+      "ctxMeasured": null,
+      "ctxAdvertised": 1048576,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": false,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text",
+        "image"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20261015",
+      "catalogUpdated": "2026-10-15T01:44:30.728Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "ctx probe HTTP 400, no limit in body: {\"message\":\"Bad Request\",\"type\":\"Bad Request\",\"code\":400}",
+        "ctxProbe: no-match"
+      ]
+    },
+    {
+      "id": "writer/palmyra-creative-122b",
+      "alive": "dead-entitlement",
+      "label": "palmyra-creative-122b",
+      "description": "Powerful LLM designed for creative thinking and writing.",
+      "publisher": "writer",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20241216",
+      "catalogUpdated": "2025-05-22T00:17:47.866Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "writer/palmyra-fin-70b-32k",
+      "alive": "dead-entitlement",
+      "label": "palmyra-fin-70b-32k",
+      "description": "Specialized LLM for financial analysis, reporting, and data processing",
+      "publisher": "writer",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240730",
+      "catalogUpdated": "2025-05-22T00:17:55.901Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "writer/palmyra-med-70b",
+      "alive": "dead-entitlement",
+      "label": "palmyra-med-70b",
+      "description": "Leading LLM for accurate, contextually relevant responses in the medical domain.",
+      "publisher": "writer",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240611",
+      "catalogUpdated": "2025-05-22T00:17:45.789Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "writer/palmyra-med-70b-32k",
+      "alive": "dead-entitlement",
+      "label": "palmyra-med-70b-32k",
+      "description": "Leading LLM for accurate, contextually relevant responses in the medical domain.",
+      "publisher": "writer",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20240611",
+      "catalogUpdated": "2025-05-22T00:17:47.409Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    },
+    {
+      "id": "z-ai/glm-5.3",
+      "alive": "alive",
+      "label": "glm-5-3",
+      "description": "753B-parameter text MoE with DeepSeek-style sparse attention, native FP8 weights, reasoning and tool calling.",
+      "publisher": "z-ai",
+      "ctxMeasured": null,
+      "ctxAdvertised": 1048576,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": true,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260915",
+      "catalogUpdated": "2026-09-15T19:47:58.961Z",
+      "deprecationDate": "10/27/2026",
+      "lastMonthInvocations": null,
+      "notes": [
+        "ctx probe HTTP 400, no limit in body: {\"message\":\"Invalid request\",\"type\":\"Bad Request\",\"code\":400,\"details\":{\"type\":\"context_length\",\"limit\":1048576,\"actual\":1200013}}",
+        "ctxProbe: no-match"
+      ]
+    },
+    {
+      "id": "z-ai/glm-5.3-flash",
+      "alive": "alive",
+      "label": "glm-5-3-flash",
+      "description": "Multimodal 320B-total / 18B-active MoE with hybrid KDA and sparse MLA attention, native FP8 weights, reasoning and tool calling.",
+      "publisher": "z-ai",
+      "ctxMeasured": 1048576,
+      "ctxAdvertised": 1048576,
+      "capabilities": {
+        "tools": true,
+        "structuredOutput": true,
+        "reasoning": true
+      },
+      "modalitiesIn": [
+        "text",
+        "image"
+      ],
+      "modalitiesOut": [
+        "text"
+      ],
+      "pubDate": "20260915",
+      "catalogUpdated": "2026-09-15T19:46:42.256Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": []
+    },
+    {
+      "id": "zyphra/zamba2-7b-instruct",
+      "alive": "dead-entitlement",
+      "label": "zamba2-7b-instruct",
+      "description": "Efficient hybrid state-space model designed for conversational and reasoning tasks.",
+      "publisher": "zyphra",
+      "ctxMeasured": null,
+      "ctxAdvertised": null,
+      "capabilities": {
+        "tools": null,
+        "structuredOutput": null,
+        "reasoning": null
+      },
+      "modalitiesIn": null,
+      "modalitiesOut": null,
+      "pubDate": "20241014",
+      "catalogUpdated": "2025-07-20T16:36:42.562Z",
+      "deprecationDate": null,
+      "lastMonthInvocations": null,
+      "notes": [
+        "no NGC endpoint matched",
+        "404 Not found for account (function removed)"
+      ]
+    }
+  ]
+}

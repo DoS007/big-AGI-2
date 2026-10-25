@@ -62,7 +62,7 @@ export function AlibabaServiceSetup(props: { serviceId: DModelsServiceId }) {
       autoCompleteId='alibaba-key' label='Alibaba Cloud API Key'
       rightLabel={needsUserKey
         ? alibabaOaiKey && <Link level='body-sm' href={ALIBABA_REG_LINK} target='_blank'>get API key</Link>
-        : <AlreadySet />
+        : <AlreadySet overridden={!!alibabaOaiKey} />
       }
       value={alibabaOaiKey}
       onChange={value => updateSettings({ alibabaOaiKey: value })}
@@ -75,7 +75,7 @@ export function AlibabaServiceSetup(props: { serviceId: DModelsServiceId }) {
     {/*  See the <ExternalLink href={ALIBABA_REG_LINK}>Alibaba Cloud Model Studio</ExternalLink> for more information.*/}
     {/*</Typography>*/}
 
-    {showAdvanced && <FormTextField
+    {(showAdvanced || !!alibabaOaiHost) && <FormTextField
       autoCompleteId='alibaba-host'
       title='API Endpoint'
       tooltip={`The API endpoint for the Alibaba Cloud OpenAI service, to be used instead of the default endpoint.`}

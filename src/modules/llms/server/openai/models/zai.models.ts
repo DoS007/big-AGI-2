@@ -1,92 +1,214 @@
-import { LLM_IF_HOTFIX_NoWebP, LLM_IF_HOTFIX_StripImages, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Reasoning, LLM_IF_OAI_Vision } from '~/common/stores/llms/llms.types';
+import { LLM_IF_HOTFIX_NoWebP, LLM_IF_HOTFIX_StripImages, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Reasoning, LLM_IF_OAI_Vision } from '~/common/stores/llms/llms.types';
 
-import type { ModelDescriptionSchema } from '../../llm.server.types';
+import type { DModelParameterId } from '~/common/stores/llms/llms.parameters';
 
-import { fromManualMapping, ManualMappings } from '../../models.mappings';
+import type { ModelDescriptionSchema, OrtVendorLookupResult } from '../../llm.server.types';
+
+import { KnownModel, llmsDefineModels, fromManualMapping } from '../../models.mappings';
+
+// --- Z.AI Model ID inference (auto-derived from _knownZAIModels) ---
+export type LlmsZAIModelId = typeof _knownZAIModels[number]['idPrefix'];
 
 
 // Interfaces for Z.ai models
-// - Thinking mode: supported by GLM-4.5 series and higher (GLM-4.5, 4.6, 4.7, 5)
+// - Thinking mode: supported by GLM-4.5 series and higher (GLM-4.5, 4.6, 4.7, 5, 5.1, 5.2, 5.3)
 // - Text-only models strip images (Z.ai API rejects image parts on non-vision models)
 // - Ref: https://docs.z.ai/guides/capabilities/thinking-mode
-const _IF_Chat = [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_HOTFIX_StripImages];
-const _IF_Reasoning = [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Reasoning, LLM_IF_HOTFIX_StripImages];
-const _IF_Vision_Reasoning = [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Vision, LLM_IF_OAI_Reasoning];
+const _IF_Chat = [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_HOTFIX_StripImages];
+const _IF_Reasoning = [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Reasoning, LLM_IF_HOTFIX_StripImages];
+const _IF_Vision_Reasoning = [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Vision, LLM_IF_OAI_Reasoning];
 
 // Parameter specs for Z.ai models
-// - Z.ai thinking maps from effort: 'none' → disabled, anything else → enabled
-// - Z.ai only supports binary enabled/disabled, so we expose 'none' and 'high'
+// - Z.ai thinking maps from effort: 'none' -> disabled, anything else -> enabled
+//   The zai adapter (openai.chatCompletions.ts) maps effort dialect-wide: 'none' -> thinking:disabled, else thinking:enabled + reasoning_effort passthrough
+// - reasoning_effort is GLM-5.2+ only (openapi.json); 5.1 and below are binary -> 'none'/'high', do not widen
+// - GLM-5.2 collapses the 7-value enum (none/minimal skip, low/medium -> high, xhigh -> max) -> 3 distinct tiers
+// - GLM-5.3, 5.3-Flash and 5.3-FlashX: thinking compulsory ('disabled' -> 400 code 1210), effort exactly low|high|max, default max
 const _PS_Reasoning: ModelDescriptionSchema['parameterSpecs'] = [
   { paramId: 'llmVndMiscEffort', enumValues: ['none', 'high'] },
+] as const;
+const _PS_Reasoning_Compulsory: ModelDescriptionSchema['parameterSpecs'] = [
+  { paramId: 'llmVndMiscEffort', enumValues: ['low', 'high', 'max'] },
 ] as const;
 
 
 // [Z.ai] Known Models - Manual Mappings
 // Also used for prefix-matching 0-day API-discovered models
-// Flash = free tier (1 concurrent request, throttled); FlashX = paid with higher concurrency & priority routing
-// Ref: https://docs.z.ai/api-reference/chat/completions (model enum), https://docs.z.ai/guides/overview/pricing
-const _knownZAIModels: ManualMappings = [
+// Flash = free tier (1 concurrent request, throttled); FlashX = paid with higher concurrency & priority routing; exception: GLM-5.3-Flash is paid
+// Ref: https://docs.z.ai/openapi.json (authoritative enums + per-model limits), https://docs.z.ai/guides/overview/pricing
+// pubDate is REQUIRED on every entry (same pattern as _AnthropicModelDef in anthropic.models.ts).
+// GET /models lists only 11 of these ids - this curated list stays authoritative. 204800 "200K" entries kept (weights say 202752).
+type _ZaiModelDef = KnownModel & { pubDate: string };
 
-  // GLM-5 Series - Flagship (Agentic Engineering)
+const _knownZAIModels = llmsDefineModels<_ZaiModelDef>()([
+
+  // GLM-5.3 - 1M context flagship (post-train of the GLM-5.2 base; coding, cyber, agentic)
+  // 1M context, 128K output (max_tokens ceiling live-verified 131072). Thinking compulsory, reasoning_effort low|high|max.
+  // Released 2026-08-14 on the GLM Coding Plan; standard API GA since (pay-as-you-go key live-verified 2026-08-27, rate card published).
+  // Weights: bespoke GLM-5.3 License, HF zai-org/GLM-5.3, 753B params (first weights commit 2026-08-27).
+  {
+    idPrefix: 'glm-5.3',
+    label: 'GLM-5.3 (1M)',
+    pubDate: '20260814',
+    description: 'Z.ai 1M-context flagship, post-trained on the GLM-5.2 base for coding, cybersecurity and agentic work. Thinking always on, with low/high/max effort. 1M context, 128K output.',
+    contextWindow: 1048576, // 1M
+    interfaces: _IF_Reasoning,
+    maxCompletionTokens: 131072, // 128K
+    parameterSpecs: _PS_Reasoning_Compulsory,
+    chatPrice: { input: 1.4, output: 4.4, cache: { read: 0.26 } },
+    initialTemperature: 1.0,
+    benchmark: { cbaElo: 1487 }, // lmarena: glm-5.3-max
+  },
+
+  // GLM-5.3-Flash - 1M context multimodal Flash (paid, unlike prior free Flash tiers)
+  // New base: 320B MoE (18B activated), hybrid sparse+linear attention, 30T-token multimodal corpus. Accepts image
+  // input (live-verified 2026-08-27; glm-5.3 rejects image parts). Thinking compulsory, reasoning_effort low|high|max,
+  // max_tokens ceiling 131072 - same ladder as glm-5.3. Weights: MIT, HF zai-org/GLM-5.3-Flash (2026-08-25).
+  {
+    idPrefix: 'glm-5.3-flash',
+    label: 'GLM-5.3 Flash (1M)',
+    pubDate: '20260825',
+    description: 'Multimodal Flash on a new 320B MoE base (18B activated, hybrid sparse+linear attention). Image inputs, thinking always on with low/high/max effort. 1M context, 128K output.',
+    contextWindow: 1048576, // 1M
+    interfaces: _IF_Vision_Reasoning,
+    maxCompletionTokens: 131072, // 128K
+    parameterSpecs: _PS_Reasoning_Compulsory,
+    chatPrice: { input: 0.15, output: 0.5, cache: { read: 0.03 } }, // list price (the 50% launch promo ended 2026-09-09)
+    initialTemperature: 1.0, // HF generation_config
+    // benchmark: not on lmarena as of 2026-08-27
+  },
+
+  // GLM-5.3-FlashX - latency-optimized serving tier of GLM-5.3-Flash (~200 tokens/s per the docs), not on the GLM Coding Plan
+  // Same ladder as glm-5.3-flash, live-probed: image input accepted, thinking compulsory ('disabled' -> 1210),
+  // reasoning_effort low|high|max, max_tokens ceiling 131072.
+  {
+    idPrefix: 'glm-5.3-flashx',
+    label: 'GLM-5.3 FlashX (1M)',
+    pubDate: '20260918', // OpenRouter listing date; absent from the docs release notes
+    description: 'Fast GLM-5.3 Flash variant served at ~200 tokens/s. Image inputs, thinking always on with low/high/max effort. 1M context, 128K output.',
+    contextWindow: 1048576, // 1M
+    interfaces: _IF_Vision_Reasoning,
+    maxCompletionTokens: 131072, // 128K
+    parameterSpecs: _PS_Reasoning_Compulsory,
+    chatPrice: { input: 0.37, output: 1.25, cache: { read: 0.075 } },
+    initialTemperature: 1.0,
+  },
+
+  // GLM-5.2 - 1M context flagship (Agentic Coding)
+  // 1M context, 128K output. Thinking default enabled. reasoning_effort supported (live-ablated 2026-08-16, n=9/arm:
+  // none/minimal = off, low/medium/high = one reduced tier, xhigh/max/default = the deep tier ~1.6x - matches the docs).
+  {
+    idPrefix: 'glm-5.2',
+    label: 'GLM-5.2 (1M)',
+    pubDate: '20260616', // docs release notes 2026-06-16 + HF zai-org/GLM-5.2
+    description: 'Z.ai 1M-context flagship (744B MoE, 40B activated). Agentic coding with reasoning_effort control (high/max). 1M context, 128K output.',
+    contextWindow: 1048576, // 1M
+    interfaces: _IF_Reasoning,
+    maxCompletionTokens: 131072, // 128K
+    parameterSpecs: [{ paramId: 'llmVndMiscEffort', enumValues: ['none', 'high', 'max'] }],
+    chatPrice: { input: 1.4, output: 4.4, cache: { read: 0.26 } },
+    initialTemperature: 1.0,
+    benchmark: { cbaElo: 1470 }, // lmarena: glm-5.2-max
+  },
+
+  // GLM-5.1 / GLM-5 Series - Flagship (Agentic Engineering)
   // 200K context, 128K output. Thinking compulsory when enabled (default: enabled).
+  {
+    idPrefix: 'glm-5.1',
+    label: 'GLM-5.1',
+    pubDate: '20260407',
+    description: 'Z.ai flagship (744B MoE, 40B activated). Post-training upgrade over GLM-5 with stronger coding and long-horizon task autonomy. 200K context, thinking mode.',
+    contextWindow: 204800, // 200K
+    interfaces: _IF_Reasoning,
+    maxCompletionTokens: 131072, // 128K
+    parameterSpecs: _PS_Reasoning,
+    chatPrice: { input: 1.4, output: 4.4, cache: { read: 0.26 } },
+    initialTemperature: 1.0,
+    benchmark: { cbaElo: 1468 }, // lmarena: glm-5.1
+  },
   {
     idPrefix: 'glm-5',
     label: 'GLM-5',
+    pubDate: '20260211',
     description: 'Z.ai flagship foundation model (744B MoE, 40B activated). Designed for Agentic Engineering with SOTA coding and agent capabilities. 200K context, thinking mode.',
     contextWindow: 204800, // 200K
     interfaces: _IF_Reasoning,
     maxCompletionTokens: 131072, // 128K
     parameterSpecs: _PS_Reasoning,
-    chatPrice: { input: 1, output: 3.2, cache: { cType: 'oai-ac', read: 0.2 } },
+    chatPrice: { input: 1, output: 3.2, cache: { read: 0.2 } },
     initialTemperature: 1.0, // Z.ai default for GLM-5
+    benchmark: { cbaElo: 1457 }, // lmarena: glm-5
   },
+  // undocumented but live; price from the OpenRouter card
   {
-    idPrefix: 'glm-5-code',
-    label: 'GLM-5 Code',
-    description: 'GLM-5 optimized for coding tasks. Uses the dedicated Coding endpoint. 200K context, thinking mode.',
+    idPrefix: 'glm-5-turbo',
+    label: 'GLM-5 Turbo',
+    pubDate: '20260315',
+    description: 'Speed-optimized GLM-5 variant for agent workflows. Enhanced tool invocation and long-chain execution. 200K context, thinking mode.',
     contextWindow: 204800, // 200K
     interfaces: _IF_Reasoning,
     maxCompletionTokens: 131072, // 128K
     parameterSpecs: _PS_Reasoning,
-    chatPrice: { input: 1.2, output: 5, cache: { cType: 'oai-ac', read: 0.3 } },
+    chatPrice: { input: 1.2, output: 4, cache: { read: 0.24 } },
     initialTemperature: 1.0,
-    // hidden: true,
   },
 
   // GLM-4.7 Series
-  // 128K context, 128K output. Thinking compulsory when enabled (default: enabled).
+  // 200K context, 128K output. Thinking compulsory when enabled (default: enabled).
   {
     idPrefix: 'glm-4.7',
     label: 'GLM-4.7',
-    description: 'Latest-gen GLM model with 128K context. Thinking mode activated by default.',
-    contextWindow: 131072, // 128K
+    pubDate: '20251222',
+    description: 'Latest-gen GLM model with 200K context. Thinking mode activated by default.',
+    contextWindow: 204800, // 200K
     interfaces: _IF_Reasoning,
     maxCompletionTokens: 131072,
     parameterSpecs: _PS_Reasoning,
-    chatPrice: { input: 0.6, output: 2.2, cache: { cType: 'oai-ac', read: 0.11 } },
+    chatPrice: { input: 0.6, output: 2.2, cache: { read: 0.11 } },
     initialTemperature: 1.0,
+    benchmark: { cbaElo: 1442 }, // lmarena: glm-4.7
   },
   {
     idPrefix: 'glm-4.7-flashx',
     label: 'GLM-4.7 FlashX', // fast, low cost
+    pubDate: '20260119',
     description: 'Fast GLM-4.7 variant with priority routing and higher concurrency. Same model as Flash, better infrastructure.',
-    contextWindow: 131072,
+    contextWindow: 204800, // 200K
     interfaces: _IF_Reasoning,
     maxCompletionTokens: 131072,
     parameterSpecs: _PS_Reasoning,
-    chatPrice: { input: 0.07, output: 0.4, cache: { cType: 'oai-ac', read: 0.01 } },
+    chatPrice: { input: 0.07, output: 0.4, cache: { read: 0.01 } },
     initialTemperature: 1.0,
   },
   {
     idPrefix: 'glm-4.7-flash',
     label: 'GLM-4.7 Flash (Free)',
+    pubDate: '20260119',
     description: 'Free GLM-4.7 variant. Same model as FlashX but with limited concurrency (1 concurrent request) and lower priority.',
-    contextWindow: 131072,
+    contextWindow: 204800, // 200K
     interfaces: _IF_Reasoning,
     maxCompletionTokens: 131072,
     parameterSpecs: _PS_Reasoning,
     chatPrice: { input: 'free', output: 'free' },
     initialTemperature: 1.0,
+    benchmark: { cbaElo: 1367 }, // lmarena: glm-4.7-flash
+  },
+
+  // GLM-5V-Turbo (Vision + Reasoning)
+  // 200K context, 128K output. Multimodal coding model: images, video, files.
+  // undocumented and not in GET /models, but answering (2026-08-28) - do not prune off the docs alone
+  {
+    idPrefix: 'glm-5v-turbo',
+    label: 'GLM-5V Turbo',
+    pubDate: '20260401',
+    description: 'First multimodal GLM-5 model. Vision-based coding agent with image/video/file inputs. 200K context, 128K output, thinking mode.',
+    contextWindow: 204800, // 200K
+    interfaces: _IF_Vision_Reasoning,
+    maxCompletionTokens: 131072, // 128K
+    parameterSpecs: _PS_Reasoning,
+    chatPrice: { input: 1.2, output: 4, cache: { read: 0.24 } },
+    initialTemperature: 0.8, // Z.ai default for vision models
+    benchmark: { cbaElo: 1433 }, // lmarena: glm-5v-turbo
   },
 
   // GLM-4.6V Series (Vision + Reasoning)
@@ -94,18 +216,20 @@ const _knownZAIModels: ManualMappings = [
   {
     idPrefix: 'glm-4.6v-flashx',
     label: 'GLM-4.6 V FlashX',
+    pubDate: '20251208',
     description: 'Fast vision GLM-4.6 with priority routing and higher concurrency. Image/video/file inputs, 32K output.',
     contextWindow: 131072,
     interfaces: _IF_Vision_Reasoning,
     maxCompletionTokens: 32768,
     parameterSpecs: _PS_Reasoning,
-    chatPrice: { input: 0.04, output: 0.4, cache: { cType: 'oai-ac', read: 0.004 } },
+    chatPrice: { input: 0.04, output: 0.4, cache: { read: 0.004 } },
     initialTemperature: 0.8, // Z.ai default for vision models
     hidden: true,
   },
   {
     idPrefix: 'glm-4.6v-flash',
     label: 'GLM-4.6 V Flash (Free)',
+    pubDate: '20251208',
     description: 'Free vision GLM-4.6. Same model as FlashX but with limited concurrency (1 concurrent request). Image/video/file inputs, 32K output.',
     contextWindow: 131072,
     interfaces: _IF_Vision_Reasoning,
@@ -117,33 +241,38 @@ const _knownZAIModels: ManualMappings = [
   {
     idPrefix: 'glm-4.6v',
     label: 'GLM-4.6 V',
+    pubDate: '20251208',
     description: 'Vision-enabled GLM-4.6 model. Supports image/video/file inputs, 32K output, hybrid thinking.',
     contextWindow: 131072,
     interfaces: _IF_Vision_Reasoning,
     maxCompletionTokens: 32768,
     parameterSpecs: _PS_Reasoning,
-    chatPrice: { input: 0.3, output: 0.9, cache: { cType: 'oai-ac', read: 0.05 } },
+    chatPrice: { input: 0.3, output: 0.9, cache: { read: 0.05 } },
     initialTemperature: 0.8,
+    benchmark: { cbaElo: 1377 }, // lmarena: glm-4.6v
   },
 
   // GLM-4.6 Text
-  // 128K context, 128K output. Hybrid thinking (auto-determines whether to think).
+  // 200K context, 128K output. Hybrid thinking (auto-determines whether to think).
   {
     idPrefix: 'glm-4.6',
     label: 'GLM-4.6',
-    description: 'GLM-4.6 model with 128K context/output. Hybrid thinking: auto-determines whether to engage deep reasoning.',
-    contextWindow: 131072,
+    pubDate: '20250930',
+    description: 'GLM-4.6 model with 200K context, 128K output. Hybrid thinking: auto-determines whether to engage deep reasoning.',
+    contextWindow: 204800, // 200K
     interfaces: _IF_Reasoning,
     maxCompletionTokens: 131072,
     parameterSpecs: _PS_Reasoning,
-    chatPrice: { input: 0.6, output: 2.2, cache: { cType: 'oai-ac', read: 0.11 } },
+    chatPrice: { input: 0.6, output: 2.2, cache: { read: 0.11 } },
     initialTemperature: 1.0,
+    benchmark: { cbaElo: 1424 }, // lmarena: glm-4.6
   },
 
   // GLM-OCR (Vision, no reasoning)
   {
     idPrefix: 'glm-ocr',
     label: 'GLM-OCR (Vision, OCR)',
+    pubDate: '20260203',
     description: 'Specialized OCR model for text extraction from images and documents.',
     contextWindow: 131072,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_HOTFIX_NoWebP],
@@ -153,28 +282,46 @@ const _knownZAIModels: ManualMappings = [
     // hidden: true,
   },
 
+  // AutoGLM Phone (Vision, mobile automation, no reasoning)
+  {
+    idPrefix: 'autoglm-phone-multilingual',
+    label: 'AutoGLM Phone',
+    pubDate: '20251211', // open-sourced + API launch announced 2025-12-11
+    description: 'Mobile phone automation agent. Understands phone screens via multimodal perception and executes automated operations.',
+    contextWindow: 131072,
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Vision],
+    maxCompletionTokens: 4096, // 4K
+    chatPrice: { input: 'free', output: 'free' }, // launched free for limited time
+    initialTemperature: 0.0, // Z.ai default for autoglm
+    hidden: true,
+  },
+
   // GLM-4.5V (Vision + Reasoning)
-  // 96K context, 16K output. Supports interleaved thinking.
+  // 64K context, 16K output. Supports interleaved thinking.
   {
     idPrefix: 'glm-4.5v',
     label: 'GLM-4.5 V',
-    description: 'Vision-enabled GLM-4.5 model. 96K context, 16K output, interleaved thinking.',
-    contextWindow: 98304, // 96K
+    pubDate: '20250811',
+    description: 'Vision-enabled GLM-4.5 model. 64K context, 16K output, interleaved thinking.',
+    // 64K per Z.AI's own declarations (OR endpoint, HF text_config); 98304 was the 4.5-text output cap miscopied
+    contextWindow: 65536, // 64K
     interfaces: _IF_Vision_Reasoning,
     maxCompletionTokens: 16384,
     parameterSpecs: _PS_Reasoning,
-    chatPrice: { input: 0.6, output: 1.8, cache: { cType: 'oai-ac', read: 0.11 } },
+    chatPrice: { input: 0.6, output: 1.8, cache: { read: 0.11 } },
     initialTemperature: 0.8,
+    benchmark: { cbaElo: 1353 }, // lmarena: glm-4.5v
     hidden: true,
   },
 
   // GLM-4.5 Text Series
-  // 96K context, 96K output. Supports interleaved thinking.
+  // 128K context, 96K output (Z.AI's OR endpoint + HF agree, needle-verified at 129K; 98304 was the output cap miscopied)
   {
     idPrefix: 'glm-4.5-flash',
     label: 'GLM-4.5 Flash (Free)',
+    pubDate: '20250728',
     description: 'Free GLM-4.5 variant with limited concurrency. Prior-gen, superseded by GLM-4.7 Flash.',
-    contextWindow: 98304,
+    contextWindow: 131072,
     interfaces: _IF_Reasoning,
     maxCompletionTokens: 98304,
     parameterSpecs: _PS_Reasoning,
@@ -185,55 +332,62 @@ const _knownZAIModels: ManualMappings = [
   {
     idPrefix: 'glm-4.5-airx',
     label: 'GLM-4.5 AirX',
+    pubDate: '20250728',
     description: 'Extended lightweight GLM-4.5 variant. Interleaved thinking.',
-    contextWindow: 98304,
+    contextWindow: 131072,
     interfaces: _IF_Reasoning,
     maxCompletionTokens: 98304,
     parameterSpecs: _PS_Reasoning,
-    chatPrice: { input: 1.1, output: 4.5, cache: { cType: 'oai-ac', read: 0.22 } },
+    chatPrice: { input: 1.1, output: 4.5, cache: { read: 0.22 } },
     initialTemperature: 0.6,
     hidden: true,
   },
   {
     idPrefix: 'glm-4.5-air',
     label: 'GLM-4.5 Air',
+    pubDate: '20250728',
     description: 'Lightweight GLM-4.5 variant. Interleaved thinking.',
-    contextWindow: 98304,
+    contextWindow: 131072,
     interfaces: _IF_Reasoning,
     maxCompletionTokens: 98304,
     parameterSpecs: _PS_Reasoning,
-    chatPrice: { input: 0.2, output: 1.1, cache: { cType: 'oai-ac', read: 0.03 } },
+    chatPrice: { input: 0.2, output: 1.1, cache: { read: 0.03 } },
     initialTemperature: 0.6,
+    benchmark: { cbaElo: 1373 }, // lmarena: glm-4.5-air
     hidden: true,
   },
   {
     idPrefix: 'glm-4.5-x',
     label: 'GLM-4.5 X',
+    pubDate: '20250728',
     description: 'Extended GLM-4.5 model. Interleaved thinking.',
-    contextWindow: 98304,
+    contextWindow: 131072,
     interfaces: _IF_Reasoning,
     maxCompletionTokens: 98304,
     parameterSpecs: _PS_Reasoning,
-    chatPrice: { input: 2.2, output: 8.9, cache: { cType: 'oai-ac', read: 0.45 } },
+    chatPrice: { input: 2.2, output: 8.9, cache: { read: 0.45 } },
     initialTemperature: 0.6,
     hidden: true,
   },
   {
     idPrefix: 'glm-4.5',
     label: 'GLM-4.5',
-    description: 'Prior-gen GLM-4.5 model with 96K context/output. Interleaved thinking.',
-    contextWindow: 98304,
+    pubDate: '20250728',
+    description: 'Prior-gen GLM-4.5 model with 128K context, 96K output. Interleaved thinking.',
+    contextWindow: 131072,
     interfaces: _IF_Reasoning,
     maxCompletionTokens: 98304,
     parameterSpecs: _PS_Reasoning,
-    chatPrice: { input: 0.6, output: 2.2, cache: { cType: 'oai-ac', read: 0.11 } },
+    chatPrice: { input: 0.6, output: 2.2, cache: { read: 0.11 } },
     initialTemperature: 0.6,
+    benchmark: { cbaElo: 1411 }, // lmarena: glm-4.5
   },
 
   // GLM-4 Special Models (no thinking support)
   {
     idPrefix: 'glm-4-32b-0414-128k',
     label: 'GLM-4 32B (0414) 128K',
+    pubDate: '20250414',
     description: 'GLM-4 32B model with 128K context, 16K output.',
     contextWindow: 131072,
     interfaces: _IF_Chat,
@@ -243,27 +397,36 @@ const _knownZAIModels: ManualMappings = [
     hidden: true,
   },
 
-];
+]);
 
 
 /// Curated model IDs - authoritative list of Z.ai models
 /// This is the primary source; the list API is unreliable.
 const _zaiCuratedModelIds: string[] = [
-  // Text: GLM-5 series
-  'glm-5', 'glm-5-code',
+  // GLM-5.3 (+ multimodal Flash/FlashX) / GLM-5.2
+  'glm-5.3', 'glm-5.3-flash', 'glm-5.3-flashx', 'glm-5.2',
+  // Text: GLM-5.1 / GLM-5 series
+  'glm-5.1', 'glm-5', 'glm-5-turbo',
   // Text: GLM-4.7 series
   'glm-4.7', 'glm-4.7-flash', 'glm-4.7-flashx',
+  // Vision: GLM-5V-Turbo
+  'glm-5v-turbo',
   // Vision: GLM-4.6V series
   'glm-4.6v', 'glm-4.6v-flash', 'glm-4.6v-flashx',
   // Text: GLM-4.6
   'glm-4.6',
-  // Vision: GLM-OCR, GLM-4.5V
-  'glm-ocr', 'glm-4.5v',
+  // Vision: GLM-OCR, AutoGLM, GLM-4.5V
+  'glm-ocr', 'autoglm-phone-multilingual', 'glm-4.5v',
   // Text: GLM-4.5 series
   'glm-4.5', 'glm-4.5-air', 'glm-4.5-x', 'glm-4.5-airx', 'glm-4.5-flash',
   // Text: GLM-4 special
   'glm-4-32b-0414-128k',
 ];
+
+
+/// Denylist: never surface these, even if the Z.ai API returns them.
+/// - glm-5-code: entitlement-gated, 1220 'no permission' on a pay-as-you-go key (2026-06-16, re-probed 2026-08-28)
+const _zaiDeniedModelIdPrefixes: string[] = ['glm-5-code'];
 
 
 /**
@@ -281,7 +444,7 @@ export function zaiCuratedModelDescriptions(): ModelDescriptionSchema[] {
 export function zaiDiscoverModels(apiModelIds: string[]): ModelDescriptionSchema[] {
   const curatedSet = new Set(_zaiCuratedModelIds);
   return apiModelIds
-    .filter(id => !curatedSet.has(id))
+    .filter(id => !curatedSet.has(id) && !_zaiDeniedModelIdPrefixes.some(prefix => id.startsWith(prefix)))
     .map(id => _zaiModelToDescription(id));
 }
 
@@ -295,6 +458,40 @@ export function zaiModelSort(a: ModelDescriptionSchema, b: ModelDescriptionSchem
   if (aIndex !== -1) return -1;
   if (bIndex !== -1) return 1;
   return a.id.localeCompare(b.id);
+}
+
+
+// --- OpenRouter inheritance ---
+
+const _ORT_ZAI_IF_ALLOWLIST: ReadonlySet<string> = new Set([
+  LLM_IF_OAI_Chat, LLM_IF_OAI_Vision, LLM_IF_OAI_Fn, LLM_IF_OAI_Reasoning,
+] as const);
+
+// only the thinking spec travels (StripImages/NoWebP are native-endpoint quirks)
+const _ORT_ZAI_PARAM_ALLOWLIST: ReadonlySet<string> = new Set([
+  'llmVndMiscEffort',
+] as const satisfies DModelParameterId[]);
+
+/**
+ * Lookup for OpenRouter: match an OR Z.ai model ID to a known hardcoded GLM model.
+ * OR's `reasoning.supported_efforts` is wrong for GLM (reports [xhigh, high] where the ladder is none/high/max), so
+ * the native spec travels as-is; the OR parser subtracts 'none' on mandatory-reasoning models.
+ * @param orModelName - The model name after stripping 'z-ai/' and the ':free' suffix (e.g. 'glm-5.2')
+ */
+export function llmOrtZaiLookup(orModelName: string): OrtVendorLookupResult | undefined {
+
+  // no ref map: every z-ai/ slug on OR is an exact native idPrefix
+  const entry = _knownZAIModels.find(m => m.idPrefix === orModelName);
+  if (!entry?.interfaces) return undefined;
+
+  const interfaces = entry.interfaces.filter(i => _ORT_ZAI_IF_ALLOWLIST.has(i));
+
+  const parameterSpecs = entry.parameterSpecs
+    ?.filter(spec => _ORT_ZAI_PARAM_ALLOWLIST.has(spec.paramId))
+    .map(spec => ({ ...spec }));
+
+  // initialTemperature: Z.ai's per-model default beats the global 0.5 fallback
+  return { pubDate: entry.pubDate, interfaces, parameterSpecs, initialTemperature: entry.initialTemperature ?? undefined };
 }
 
 

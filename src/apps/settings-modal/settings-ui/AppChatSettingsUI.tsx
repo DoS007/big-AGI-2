@@ -1,10 +1,12 @@
 import * as React from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
-import { Button, FormControl, Switch } from '@mui/joy';
+import { Box, Button, FormControl, Switch } from '@mui/joy';
 import BuildCircleIcon from '@mui/icons-material/BuildCircle';
 import WidthNormalIcon from '@mui/icons-material/WidthNormal';
 import WidthWideIcon from '@mui/icons-material/WidthWide';
+
+import { ModelsRefreshAlert, ModelsRefreshIconButton } from '~/modules/llms/components/ModelsRefreshAlert';
 
 import { FormLabelStart } from '~/common/components/forms/FormLabelStart';
 import { FormRadioControl } from '~/common/components/forms/FormRadioControl';
@@ -17,6 +19,7 @@ import { useModelsZeroState } from '~/common/stores/llms/hooks/useModelsZeroStat
 import { SettingUIComplexity } from './SettingUIComplexity';
 import { SettingUIComposerQuickButton } from './SettingUIComposerQuickButton';
 import { SettingUIContentScaling } from './SettingUIContentScaling';
+import { SettingUIMessageTimestamps } from './SettingUIMessageTimestamps';
 
 
 // configuration
@@ -31,7 +34,7 @@ const OptionsPageSize = [
 ] as const;
 
 
-function ModelsSetupButton(props: { isMissingModels?: boolean }) {
+export function ModelsSetupButton(props: { isMissingModels?: boolean }) {
   return <Button
     // variant='soft' color='success'
     color={props.isMissingModels ? 'danger' : undefined}
@@ -39,8 +42,8 @@ function ModelsSetupButton(props: { isMissingModels?: boolean }) {
     startDecorator={<BuildCircleIcon />}
     sx={{
       '--Icon-fontSize': 'var(--joy-fontSize-xl2)',
-      minWidth: 150,
-      boxShadow: props.isMissingModels ? 'lg' : undefined,
+      // minWidth: 150,
+      boxShadow: props.isMissingModels ? 'lg' : 'md',
     }}
   >
     {/*Admin Models*/}
@@ -81,8 +84,14 @@ export function AppChatSettingsUI() {
     <FormControl orientation='horizontal' sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
       <FormLabelStart title='AI Models'
                       description='Configure' />
-      <ModelsSetupButton isMissingModels={isMissingModels} />
+      <Box sx={{ display: 'flex', gap: 1 }}>
+        {!isMissingModels && <ModelsRefreshIconButton sx={{ boxShadow: 'xs' }} />}
+        <ModelsSetupButton isMissingModels={isMissingModels} />
+      </Box>
+
     </FormControl>
+    {/* refresh session status, while it runs and after: opens the Updates screen */}
+    <ModelsRefreshAlert />
 
     <FormControl orientation='horizontal' sx={{ justifyContent: 'space-between' }}>
       <FormLabelStart title='Enter sends ⏎'
@@ -123,11 +132,13 @@ export function AppChatSettingsUI() {
     {!isPwa() && !isMobile && (
       <FormRadioControl
         title='Page Size'
-        description={centerMode === 'full' ? 'Full screen chat' : centerMode === 'narrow' ? 'Narrow chat' : 'Wide'}
+        description={centerMode === 'full' ? 'Default' : centerMode === 'narrow' ? 'Narrow chat' : 'Wide'}
         options={OptionsPageSize}
         value={centerMode} onChange={setCenterMode}
       />
     )}
+
+    <SettingUIMessageTimestamps />
 
     <SettingUIComplexity />
 

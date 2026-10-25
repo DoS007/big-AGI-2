@@ -20,7 +20,7 @@ const blocksTextStyleSx = {
  * This style is reused by all the Fragments (BlocksRenderer being the Text one),
  * contained within a singe Grid (1fr) in the Message component.
  */
-export const BlocksContainer = styled(Box)({
+export const BlocksContainer = styled(Box, { name: 'BlocksContainer' })({
   // the parent is a Grid, and this takes up to the Grid's width
   // - maxWidth: '100%' makes sure we don't x-scroll the whole chat window
   // - width: '100%' would also maximize the fragment width to the containing grid even if smaller
@@ -28,7 +28,9 @@ export const BlocksContainer = styled(Box)({
   // however see `ContentPartTextEdit` where we set the width to 100% as we need a large editor
   // NOTE 2: after seeing html/code fragments smaller than the text fragments before them, we're back
   // to using width: 100% to make sure the fragments are all the same width (we lose the alignment unfortunately)
-  width: '100%',
+  // NOTE 3: the body is one grid now and blocks hug one by one (`justify-items`), so back to maxWidth: a block
+  // stretches when the grid stretches, and hugs its own content otherwise
+  maxWidth: '100%',
 
   // enables children's x-scrollbars (clips to the Fragment, so sub-parts will stay within this)
   overflowX: 'auto',
@@ -40,7 +42,7 @@ export const BlocksContainer = styled(Box)({
 /**
  * Use this TextArea for block-like looks while editing.
  */
-export const BlocksTextarea = styled(Textarea)({
+export const BlocksTextarea = styled(Textarea, { name: 'BlocksTextarea' })({
   // very important: back to a 100% width - the parent is a Grid - see why we need this in BlocksContainer
   width: '100%',
 

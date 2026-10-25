@@ -13,6 +13,91 @@ const hotFixAntShipNoEmptyTextBlocks = true; // Replace empty text blocks with a
  *
  * ## Updates
  *
+ * ### 2026-10-07 - API Sync: Claude Haiku 5.5 (launch-verified live)
+ * - Models: claude-haiku-5-5 - Opus 5's thinking shape: adaptive on by default, 'disabled' at effort <= 'high' only (xhigh/max 400);
+ *   'enabled' (budget_tokens) and 'between_tools' 400; 'block_binding' 400 alongside 'disabled'. Forced tool_choice works (200, no
+ *   thinking block), unlike Sonnet/Opus 5.5. temperature != 1 / top_p != 0.99 / top_k / prefill / speed 400, computer_20250124 400.
+ *   Same tokenizer as Sonnet 5.5 (count_tokens equal). No wire changes.
+ * - Preserved thinking (docs): Haiku 5.5 blocks are account-bound, readable by Sonnet 5.5 and Opus 5.5; Opus 5.5 now also reads
+ *   Sonnet 5.5 blocks (Claude API and Google Cloud). The API drops what a model can't read; AIX keeps no replay table.
+ * - Models API: `line` (2026-10-01), `capabilities.thinking.types.disabled` (2026-10-05), `capabilities.server_tools` (2026-10-06) -
+ *   parsed in llms anthropic.models.ts.
+ *
+ * ### 2026-09-28 - API Sync: Claude Sonnet 5.5 (launch-verified live)
+ * - Request.thinking: added `{ type: 'between_tools' }` - Sonnet 5.5's thinking-off ('disabled' and 'enabled' 400). Legal at effort
+ *   <= 'high' (xhigh/max 400 'not supported when thinking is disabled'); 'display' and 'block_binding' 400 alongside it.
+ * - Models: claude-sonnet-5-5 - forced tool_choice 400 (Fable 5.1 wording; both adapters' downgrades now cover it), temperature != 1 /
+ *   top_p / prefill / speed 400. Same tokenizer as Sonnet 5 (count_tokens within 0.2%).
+ * - Preserved thinking (docs): Sonnet 5.5 reads Sonnet 5 / Opus 4.8 / Haiku 4.5 and older blocks, not Opus 5.x / Fable / Mythos; no
+ *   other model reads Sonnet 5.5 blocks, and they are bound to the producing account (dropped elsewhere, request succeeds).
+ *
+ * ### 2026-09-22 - API Sync: Claude Opus 5.5 (launch-verified live)
+ * - Models: claude-opus-5-5 - Fable 5.1's surface at $4/$20: thinking.disabled/enabled 400 (at every effort, unlike Opus 5), forced
+ *   tool_choice 400 (same wording as Fable 5.1; both adapters' downgrades now cover it), computer_20251124 400 (toolset only).
+ *   No wire changes: usage.output_tokens_details, input_transformations (incl. 'thinking_mismatch_allowed', same fields) already parsed.
+ * - Preserved thinking (probed): Opus 5.5 blocks replay on Opus 5.5 and Fable 5.1, dropped with 'model_binding_mismatch' elsewhere.
+ * - NOT adopted (beta): tools defined inside mid-conversation system messages (inline-tools-2026-09-15, mcp-client-2026-09-15).
+ *
+ * ### 2026-09-21 - Doc sync: refusal category rename, prefix-mismatch attribution fix
+ * - StopDetails.category: 'military_weapons' (2026-06-30 sync) replaced by 'general_harms' in current docs - comment-only,
+ *   the `.or(z.string())` fallback already accepted any value.
+ * - Preserved thinking (`preserved-thinking` doc, read in full): confirmed the vendor's `reason: 'prefix_binding_mismatch'`
+ *   fires identically for an edited/deleted message, a changed tool list, or a changed system prompt - live-verified with
+ *   isolated probes (tool toggle alone, and a system-prompt-only change, both with zero message edits, both produced the
+ *   same reason). The parser's client-facing copy previously asserted 'History edited' unconditionally; renamed the cause
+ *   to 'prefix-changed' and reworded the notice to not claim a specific cause the vendor doesn't actually report.
+ *
+ * ### 2026-09-01 - API Sync: Claude Fable 5.1 / Mythos 5.1 (launch-verified live)
+ * - Request.thinking: added `block_binding.prefix_mismatch_behavior` ('error'|'drop_block'; beta thinking-binding-controls-2026-08-01).
+ *   Preserved thinking: Fable 5.1 blocks replay only on Fable/Mythos 5.1+ (older models drop them, unbilled) and, for accounts
+ *   created >= 2026-08-31, only against an unchanged system/tools/history prefix (400 otherwise). The adapter sends 'drop_block' on
+ *   every thinking request and relays the drops to the client as 'vnt' void-notice particles (one per reason).
+ * - Response: added `input_transformations` ([{ type: 'thinking_dropped', path, reason }], header-gated; on message_start when streaming)
+ * - Models: claude-fable-5-1 / claude-mythos-5-1 - Fable 5's surface; forced tool_choice still 400 (reworded), the adapter's downgrade covers '-5-1'
+ * - Request.thinking.display: added 'updates' (beta thinking-display-updates-2026-08-18) - progress lines only; not sent, 'summarized' includes them
+ * - NOT adopted (beta): per-message effort (mid-conversation-output-config-2026-07-01), turn-scoped system messages (mid-conversation-system-clear-at-2026-08-21)
+ *
+ * ### 2026-06-30 - API Sync: new tool versions, refusal categories, Sonnet 5 verified
+ * - Tools: Added web_search_20260318 / web_fetch_20260318 (GA, 2026-06-11) - adds `response_inclusion` ('full'|'excluded')
+ *   to drop the nested search/fetch call+result pair from the response once consumed by a completed code-execution call
+ *   (dynamic filtering). Wired as the new default for the dynamic-filtering path (replacing _20260209); `response_inclusion`
+ *   left unset (defaults to 'full') - this is purely the version bump, no behavior change.
+ * - StopDetails.category: added 'frontier_llm', 'military_weapons' (current docs list these alongside 'cyber'/'bio'/'reasoning_extraction')
+ * - Verified empirically against the live API: Claude Sonnet 5 (launched 2026-06-29) breaking changes (temperature/top_p/top_k
+ *   rejected, manual thinking budget rejected, but thinking.disabled and forced tool_choice both OK unlike Fable/Mythos 5) -
+ *   existing adapter logic already handles all of these correctly via LLM_IF_HOTFIX_NoTemperature + per-model thinking-budget plumbing.
+ * - NOT adopted (tracked in anthropic.parser.ts top comment): mid-conversation system messages (role: 'system', Opus 4.8
+ *   only, GA 2026-05-28) - appends operator-priority instructions mid-`messages` without invalidating the cached prefix.
+ *
+ * ### 2026-06-09 - API Sync: Claude Fable 5 / Mythos 5, forward-compatible parsing
+ * - StopDetails.category: added 'reasoning_extraction' (Fable 5 ToS classifier for reverse engineering / output duplication)
+ * - StopDetails: added `recommended_model` (suggested retry model when a server-side fallback could not run)
+ * - StopReason: tolerant parsing - future values (e.g. 'compaction' from the compact-2026-01-12 beta) must not kill the stream
+ * - ContentBlockOutput: resilient parsing of unknown/future block types ('fallback', 'compaction', 'advisor_tool_result', 'connector_text' - all beta-gated as of today)
+ * - event_ContentBlockDelta: resilient parsing of unknown delta types (e.g. 'compaction_delta')
+ * - WebFetchToolResultError: added 'url_not_in_prior_context' error code
+ * - Models: claude-fable-5 / claude-mythos-5 are adaptive-thinking-only ('enabled'/'disabled' return 400, no prefill, display defaults 'omitted') - coerced in the adapter
+ * - Fable/Mythos 5 tool calling (empirical, 14-case matrix): auto/parallel/disable_parallel/chaining/error-retry/streaming all OK; forced
+ *   tool_choice ('any'/'tool') returns 400 at the model level - the adapter downgrades to 'auto' + a system hint (empirically equivalent);
+ *   'none' with tools returns 200 with EMPTY content (big-AGI never sends 'none'); thinking blocks may be replayed verbatim OR stripped
+ *   (no signature enforcement on replay - we keep replaying them per the documented contract)
+ * - NOT adopted (beta): `fallbacks` param (server-side-fallback-2026-06-01), advisor tool, compaction, cache diagnostics, task budgets, mid-conversation system messages (role: 'system')
+ *
+ * ### 2026-05-28 - API Sync: reasoning token breakdown
+ * - Response.usage + event_MessageDelta.usage: added `output_tokens_details` ({ thinking_tokens }) - subset of output_tokens, surfaced as the TOutR metric (like OpenAI/Gemini)
+ *
+ * ### 2026-04-24 - API Sync: stop_details for structured refusals
+ * - Response: added `stop_details` ({ type: 'refusal', category: 'cyber'|'bio'|null, explanation: string|null })
+ * - event_MessageDelta.delta: added `stop_details` (arrives alongside stop_reason in streaming)
+ *
+ * ### 2026-03-21 - API Sync: GA tool versions, thinking display, caller updates, cache_control
+ * - Tools: Added web_search_20260209 (GA), web_fetch_20260209/20260309 (GA), code_execution_20260120 (GA REPL)
+ * - Request: Added top-level `cache_control` for automatic caching (Feb 2026)
+ * - Request.thinking: Added `display` field ("summarized"|"omitted") for adaptive/enabled thinking (Mar 2026)
+ * - ToolUseBlock/ServerToolUseBlock.caller: Added `code_execution_20260120` caller type
+ * - ServerToolUseBlock: Added `caller` field (same shape as ToolUseBlock.caller)
+ * - event_MessageDelta.delta: Added `container` field for container state updates
+ *
  * ### 2026-02-06 - API Sync: output_config.format, inference_geo, eager_input_streaming
  * - Request: deprecated top-level `output_format`, moved to `output_config.format` (GA: 2026-01-29)
  * - Request: added `inference_geo` for region-of-availability inference routing
@@ -130,22 +215,29 @@ export namespace AnthropicWire_Blocks {
     data: z.string(),
   });
 
+  /**
+   * [Anthropic, 2025-11-24] Programmatic Tool Calling
+   * Indicates how a tool was invoked - direct by model, or programmatically from code execution.
+   */
+  const _ToolUseCaller_schema = z.discriminatedUnion('type', [
+    z.object({ type: z.literal('direct') }),
+    z.object({
+      type: z.enum(['code_execution_20250825', 'code_execution_20260120']),
+      tool_id: z.string(), // ref the server_tool_use (code_execution) that made this call
+    }),
+  ]);
+
   export const ToolUseBlock_schema = _CommonBlock_schema.extend({
     type: z.literal('tool_use'),
     id: z.string(),
     name: z.string(), // length: 1-64
-    input: z.any(), // Formally an 'object', but relaxed for robust parsing, and code-enforced
     /**
-     * [Anthropic, 2025-11-24] Programmatic Tool Calling - indicates how this tool was invoked.
-     * Requires the advanced-tool-use-2025-11-20 beta feature.
+     * Formally an 'object', but relaxed for robust parsing, and code-enforced.
+     * 2026-03-23: Anthropic seems to actually want a dictionary here, in case by mistake we pass strings.
+     *             We first found this while implementing the Anthropic Continuation logic (see chatGenerate.continuation.ts)
      */
-    caller: z.discriminatedUnion('type', [
-      z.object({ type: z.literal('direct') }), // model called tool directly
-      z.object({
-        type: z.literal('code_execution_20250825'), // tool called programmatically from within code execution
-        tool_id: z.string(), // ref the server_tool_use (code_execution) that made this call
-      }),
-    ]).optional(),
+    input: z.any(),
+    caller: _ToolUseCaller_schema.optional(),
   });
 
 
@@ -256,7 +348,16 @@ export namespace AnthropicWire_Blocks {
       ]),
       z.string(), // forward-compatibility parsing
     ]),
-    input: z.any(),
+    input: z.union([
+      z.object({ query: z.string() }), // web_search
+      z.object({ url: z.string(), use_cache: z.boolean().optional() }), // web_fetch (use_cache: the model's per-call cache bypass, seen 2026-09-24 on the _20260318 tool)
+      z.object({ code: z.string() }), // code_execution
+      z.object({ command: z.string() }), // bash_code_execution
+      z.object({ command: z.string(), path: z.string() }), // text_editor_code_execution (+ file_text, old_str, new_str, view_range, etc.)
+      z.object({ pattern: z.string() }), // tool_search_tool_regex
+      z.object({ query: z.string() }), // tool_search_tool_bm25
+    ]).or(z.any()), // see the comment on ToolUseBlock_schema.input
+    caller: _ToolUseCaller_schema.optional(),
   });
 
   export const WebSearchToolResultBlock_schema = _CommonBlock_schema.extend({
@@ -278,6 +379,7 @@ export namespace AnthropicWire_Blocks {
         ]),
       }),
     ]),
+    caller: _ToolUseCaller_schema.optional(),
   });
 
   export const WebFetchToolResultBlock_schema = _CommonBlock_schema.extend({
@@ -292,12 +394,11 @@ export namespace AnthropicWire_Blocks {
       }),
       z.object({
         type: z.literal('web_fetch_tool_result_error'),
-        error_code: z.union([
-          z.enum(['invalid_tool_input', 'url_too_long', 'url_not_allowed', 'url_not_accessible', 'unsupported_content_type', 'too_many_requests', 'max_uses_exceeded', 'unavailable']),
-          z.string(), // forward-compatibility
-        ]),
+        error_code: z.enum(['invalid_tool_input', 'url_too_long', 'url_not_allowed', 'url_not_in_prior_context', 'url_not_accessible', 'unsupported_content_type', 'too_many_requests', 'max_uses_exceeded', 'unavailable'])
+          .or(z.string()), // forward-compatibility
       }),
     ]),
+    caller: _ToolUseCaller_schema.optional(),
   });
 
   const _CodeExecutionOutputBlock_schema = z.object({
@@ -315,6 +416,16 @@ export namespace AnthropicWire_Blocks {
         stderr: z.string(),
         return_code: z.number(),
         content: z.array(_CodeExecutionOutputBlock_schema),
+        // abort_reason: z.string().nullish(), // seen as null in responses, but undocumented - revisit if non-null values appear
+      }),
+      // Encrypted variant - used when code execution is combined with programmatic tool calling + web_search
+      z.object({
+        type: z.literal('encrypted_code_execution_result'),
+        encrypted_stdout: z.string(),
+        stderr: z.string(),
+        return_code: z.number(),
+        content: z.array(_CodeExecutionOutputBlock_schema),
+        // abort_reason: z.string().nullish(), // seen as null in responses, but undocumented - revisit if non-null values appear
       }),
       z.object({
         type: z.literal('code_execution_tool_result_error'),
@@ -398,23 +509,24 @@ export namespace AnthropicWire_Blocks {
     file_id: z.string(),
   });
 
-  /**
-   * [Anthropic, 2025-11-24] Tool Search Tool - Result of tool search operation
-   * Contains either an array of tool references or an error.
-   */
+  /** [Anthropic, 2025-11-24] Tool Search Tool - Result of tool search operation. */
   export const ToolSearchToolResultBlock_schema = _CommonBlock_schema.extend({
-    type: z.literal('tool_result'),
+    type: z.literal('tool_search_tool_result'),
     tool_use_id: z.string(),
     content: z.union([
-      // success - array of tool references
-      z.array(z.object({
-        type: z.literal('tool_reference'),
-        tool_name: z.string(),
-      })),
+      // success
+      z.object({
+        type: z.literal('tool_search_tool_search_result'),
+        tool_references: z.array(z.object({
+          type: z.literal('tool_reference'),
+          tool_name: z.string(),
+        })),
+      }),
       // error
       z.object({
         type: z.literal('tool_search_tool_result_error'),
-        error_code: z.union([z.enum(['too_many_requests', 'invalid_pattern', 'pattern_too_long', 'unavailable']), z.string() /* forward-compatibility */]),
+        error_code: z.union([z.enum(['invalid_tool_input', 'unavailable', 'too_many_requests', 'execution_time_exceeded']), z.string()]),
+        error_message: z.string().nullish(),
       }),
     ]),
   });
@@ -494,10 +606,14 @@ export namespace AnthropicWire_Messages {
     AnthropicWire_Blocks.MCPToolUseBlock_schema,
     AnthropicWire_Blocks.MCPToolResultBlock_schema,
     AnthropicWire_Blocks.ContainerUploadBlock_schema,
+    AnthropicWire_Blocks.ToolSearchToolResultBlock_schema,
   ]);
 
   export const MessageInput_schema = z.object({
-    role: z.enum(['user', 'assistant']),
+    role: z.enum([
+      'user', 'assistant',
+      // 'system', // [2026-06-09] we don't want to support this role for now, for uniformity with other ai providers; however we may want to specialize some high-level AIX parts to these in the future
+    ]),
     content: z.array(_ContentBlockInput_schema), // NOTE: could be a string (see below), but we force it to be an array
     // content: z.union([z.string(), z.array(_ContentBlockInput_schema)]),
   });
@@ -532,6 +648,28 @@ export namespace AnthropicWire_Messages {
     AnthropicWire_Blocks.ContainerUploadBlock_schema,
     AnthropicWire_Blocks.ToolSearchToolResultBlock_schema, // [Anthropic, 2025-11-24] Tool Search Tool
   ]);
+
+  /// Forward-compatibility (2026-06-09): unknown/future output block types must not kill the stream
+
+  /** Runtime set of the known output block types - derived from ContentBlockOutput_schema. */
+  const _contentBlockOutputKnownTypes: ReadonlySet<string> = new Set<string>(
+    ContentBlockOutput_schema.options.map(option => option.shape.type.value),
+  );
+
+  /**
+   * Loose-parses output blocks with unknown types (e.g. 'fallback', 'compaction', 'advisor_tool_result', 'connector_text' - all beta-gated as of 2026-06-09).
+   * Known types are excluded, so malformed known blocks still fail validation instead of degrading silently.
+   */
+  const _ContentBlockOutputUnknown_schema = z.looseObject({
+    type: z.string().refine(type => !_contentBlockOutputKnownTypes.has(type)),
+  });
+
+  /** ContentBlockOutput with a loose fallback for unknown/future block types - parsers must gate on isKnownContentBlockOutput() before processing. */
+  export const ContentBlockOutputResilient_schema = z.union([ContentBlockOutput_schema, _ContentBlockOutputUnknown_schema]);
+
+  export function isKnownContentBlockOutput(block: z.infer<typeof ContentBlockOutputResilient_schema>): block is z.infer<typeof ContentBlockOutput_schema> {
+    return _contentBlockOutputKnownTypes.has(block.type);
+  }
 }
 
 export namespace AnthropicWire_Skills {
@@ -573,6 +711,18 @@ export namespace AnthropicWire_Tools {
 
     /** 2024-10-22: cache-control can be set on the Tools block as well. We could make use of this instead of the System Instruction blocks for prompts with longer tools. */
     cache_control: AnthropicWire_Blocks._CacheControl_schema.nullish(),
+
+    /** When true, tool is not loaded into context initially - discovered via tool_search when needed. */
+    defer_loading: z.boolean().optional(),
+
+    /** Specifies which contexts can invoke this tool. */
+    allowed_callers: z.array(z.enum([
+      'direct', // (default) direct by model
+      'code_execution_20250825', 'code_execution_20260120', // allow programmatically from code execution
+    ])).optional(),
+
+    /** Structured Outputs - guarantees tool names and inputs match schema exactly. */
+    strict: z.boolean().optional(),
   });
 
   const _CustomToolDefinition_schema = _ToolDefinitionBase_schema.extend({
@@ -601,30 +751,13 @@ export namespace AnthropicWire_Tools {
       required: z.array(z.string()).optional(), // 2025-02-24: seems to be removed; we may still have this, but it may also be within the 'properties' object
     }),
 
-    /**
-     * [Anthropic, 2025-11-13] Structured Outputs - guarantees tool inputs to match `input_schema` exactly.
-     */
-    strict: z.boolean().optional(),
-
-    /**
-     * [Anthropic, 2025-06-11] Eager Input Streaming - enables fine-grained streaming of tool input parameters.
-     * When true, tool inputs are streamed earlier during generation for lower latency.
-     */
+    /** Eager Input Streaming - tool inputs streamed earlier during generation for lower latency. */
     eager_input_streaming: z.boolean().optional(),
 
-    /**
-     * [Anthropic, 2025-11-24] Tool Search Tool - when true, this tool is not loaded into context initially and can be discovered via the tool search tool when needed.
-     */
-    defer_loading: z.boolean().optional(),
-
-    /**
-     * [Anthropic, 2025-11-24] Programmatic Tool Calling - 2 new fields:
-     * - specifies which contexts can invoke this tool
-     * - concrete usage examples to improve accuracy - can increase accuracy (e.g. 72% -> 90% in examples)
-     */
-    allowed_callers: z.array(z.enum(['direct', 'code_execution_20250825'])).optional(), // can be both ['direct', 'code_execution_20250825']
+    /** Provide sample tool calls */
     input_examples: z.array(z.record(z.string(), z.any())).optional(),
   });
+
 
   // Latest Tool Versions (sorted alphabetically by tool name)
   // Deprecated versions (removed):
@@ -633,14 +766,16 @@ export namespace AnthropicWire_Tools {
   // - computer_20241022 -> computer_20250124
   // - text_editor_20241022, text_editor_20250124, text_editor_20250429 -> text_editor_20250728
 
+  /** BETA (standalone): requires "computer-use-*" beta header. GA as sub-tool of code_execution. */
   const _BashTool_20250124_schema = _ToolDefinitionBase_schema.extend({
     type: z.literal('bash_20250124'),
     name: z.literal('bash'),
   });
 
+  // -- Code Execution Tools --
+
   /**
-   * Current (No support for the legacy code_execution_20250522): Supports Bash commands, file operations, and multiple languages. Requires beta header: "code-execution-2025-08-25"
-   *
+   * Supports Bash commands, file operations, and multiple languages.
    * When this tool is provided, Claude automatically gains access to two sub-tools:
    * - 'bash_code_execution': Run shell commands
    * - 'text_editor_code_execution': View, create, and edit files, including writing code
@@ -651,9 +786,17 @@ export namespace AnthropicWire_Tools {
   });
 
   /**
-   * Requires beta header: "computer-use-2025-01-24"
-   * NOTE: newer version available - computer_20251124 (beta header: "computer-use-2025-11-24") adds `enable_zoom: boolean`
+   * [Anthropic, Jan 2026 BETA] Code execution REPL-based code execution with persistent state across calls (daemon mode + gVisor checkpoint).
+   * BETA: As of 2026-03-21, this is not the default - all models still support code_execution_20250825
    */
+  const _CodeExecutionTool_20260120_schema = _ToolDefinitionBase_schema.extend({
+    type: z.literal('code_execution_20260120'),
+    name: z.literal('code_execution'),
+  });
+
+  // -- Computer Use Tools (BETA: requires computer-use-* beta header) --
+
+  /** BETA: requires "computer-use-2025-01-24" beta header. */
   const _ComputerUseTool_20250124_schema = _ToolDefinitionBase_schema.extend({
     type: z.literal('computer_20250124'),
     name: z.literal('computer'),
@@ -662,11 +805,18 @@ export namespace AnthropicWire_Tools {
     display_number: z.number().nullish(),
   });
 
+  /** BETA: requires "computer-use-2025-11-24" beta header. Adds enable_zoom. */
+  const _ComputerUseTool_20251124_schema = _ComputerUseTool_20250124_schema.extend({
+    type: z.literal('computer_20251124'),
+    enable_zoom: z.boolean().optional(),
+  });
+
   const _MemoryTool_20250818_schema = _ToolDefinitionBase_schema.extend({
     type: z.literal('memory_20250818'),
     name: z.literal('memory'),
   });
 
+  /** BETA (standalone): requires "computer-use-*" beta header. GA as sub-tool of code_execution. */
   const _TextEditor_20250728_schema = _ToolDefinitionBase_schema.extend({
     type: z.literal('text_editor_20250728'),
     name: z.literal('str_replace_based_edit_tool'),
@@ -685,6 +835,8 @@ export namespace AnthropicWire_Tools {
     name: z.literal('tool_search_tool_bm25'),
   });
 
+  // -- Web Fetch Tools --
+
   const _WebFetchTool_20250910_schema = _ToolDefinitionBase_schema.extend({
     type: z.literal('web_fetch_20250910'),
     name: z.literal('web_fetch'),
@@ -695,6 +847,31 @@ export namespace AnthropicWire_Tools {
     max_uses: z.number().nullish(),
   });
 
+  /** [Anthropic, Feb 2026 GA] */
+  const _WebFetchTool_20260209_schema = _WebFetchTool_20250910_schema.extend({
+    type: z.literal('web_fetch_20260209'),
+  });
+
+  /** [Anthropic, Mar 2026] Adds `use_cache` - only in SDK types, not yet in public docs. */
+  const _WebFetchTool_20260309_schema = _WebFetchTool_20260209_schema.extend({
+    type: z.literal('web_fetch_20260309'),
+    use_cache: z.boolean().optional(), // default true; set false to bypass cache and fetch fresh content
+  });
+
+  /**
+   * [Anthropic, 2026-06-11 GA] Latest - adds `response_inclusion`.
+   * When the fetch was called programmatically from a completed code-execution call (dynamic filtering), 'excluded'
+   * drops the nested server_tool_use(web_fetch) + web_fetch_tool_result pair from the response entirely (verified
+   * empirically: ~98% response size reduction on a full page fetch). Default 'full' (unchanged from prior versions).
+   * Direct calls, or code-execution calls that paused before completing, are always returned in full regardless.
+   */
+  const _WebFetchTool_20260318_schema = _WebFetchTool_20260309_schema.extend({
+    type: z.literal('web_fetch_20260318'),
+    response_inclusion: z.enum(['full', 'excluded']).optional(), // default: 'full'
+  });
+
+  // -- Web Search Tools --
+
   const _WebSearchTool_20250305_schema = _ToolDefinitionBase_schema.extend({
     type: z.literal('web_search_20250305'),
     name: z.literal('web_search'),
@@ -704,19 +881,38 @@ export namespace AnthropicWire_Tools {
     user_location: z.any().nullish(), // UserLocation schema
   });
 
+  /** [Anthropic, Feb 2026 GA] Web search v2. */
+  const _WebSearchTool_20260209_schema = _WebSearchTool_20250305_schema.extend({
+    type: z.literal('web_search_20260209'),
+  });
+
+  /** [Anthropic, 2026-06-11 GA] Latest - adds `response_inclusion`, see _WebFetchTool_20260318_schema for semantics. */
+  const _WebSearchTool_20260318_schema = _WebSearchTool_20260209_schema.extend({
+    type: z.literal('web_search_20260318'),
+    response_inclusion: z.enum(['full', 'excluded']).optional(), // default: 'full'
+  });
+
+
   export const ToolDefinition_schema = z.discriminatedUnion('type', [
     // Client-side tools
     _CustomToolDefinition_schema,
     // Hosted tool definitions & Hosted Tools
     _BashTool_20250124_schema,
     _CodeExecutionTool_20250825_schema,
-    _ComputerUseTool_20250124_schema,
+    _CodeExecutionTool_20260120_schema,
+    _ComputerUseTool_20250124_schema, // BETA
+    _ComputerUseTool_20251124_schema, // BETA
     _MemoryTool_20250818_schema,
     _TextEditor_20250728_schema,
     _ToolSearchToolBM25_20251119_schema, // [Anthropic, 2025-11-24] Tool Search Tool - BM25 variant
     _ToolSearchToolRegex_20251119_schema, // [Anthropic, 2025-11-24] Tool Search Tool - Regex variant
     _WebFetchTool_20250910_schema,
+    _WebFetchTool_20260209_schema,
+    _WebFetchTool_20260309_schema,
+    _WebFetchTool_20260318_schema,
     _WebSearchTool_20250305_schema,
+    _WebSearchTool_20260209_schema,
+    _WebSearchTool_20260318_schema,
   ]);
 
 }
@@ -738,6 +934,9 @@ export namespace AnthropicWire_API_Message_Create {
    * - 'pause_turn': paused for server tools (e.g. web search)
    * - 'refusal': Claude refused due to safety concerns
    * - 'model_context_window_exceeded': hit the model's context window limit
+   *
+   * Tolerant parsing: unknown values (e.g. 'compaction' from the compact-2026-01-12 beta) must
+   * not kill the stream - the parser routes them through aixResilientUnknownValue.
    */
   const StopReason_schema = z.enum([
     'end_turn',
@@ -747,11 +946,34 @@ export namespace AnthropicWire_API_Message_Create {
     'pause_turn',
     'refusal',
     'model_context_window_exceeded',
-  ]);
+  ]).or(z.string());
+
+  /**
+   * Structured stop details, paired with stop_reason. Currently only populated when stop_reason === 'refusal'.
+   * Both `type` and `category` are loosely typed for forward-compat - parser warns on unknown `type`.
+   */
+  const StopDetails_schema = z.object({
+    type: z.enum(['refusal']).or(z.string()),
+    // [2026-09-21] Docs now list 'general_harms' where 'military_weapons' stood on 2026-06-30 - renamed/replaced upstream, not additive.
+    // No functional impact (the `.or(z.string())` fallback already covers any category verbatim), comment-only sync.
+    category: z.enum(['cyber', 'bio', 'reasoning_extraction', 'frontier_llm', 'general_harms']).or(z.string()).nullish(),
+    explanation: z.string().nullish(),
+    /** [Anthropic, 2026-06-09] Model suggested for a direct retry when a server-side fallback could not run (e.g. fallback model rate-limited). Hint only, may be null. */
+    recommended_model: z.string().nullish(),
+  });
 
   /// Request
 
   export type Request = z.infer<typeof Request_schema>;
+  /**
+   * [Anthropic, 2026-09-01] Preserved-thinking controls (beta `thinking-binding-controls-2026-08-01`): what to do with a replayed
+   * thinking block whose conversation prefix changed (Fable 5.1+) - 'error' (default) 400s, 'drop_block' drops it and every later
+   * thinking block, reported in the response `input_transformations`. Requires the header; Bedrock rejects the field.
+   */
+  const ThinkingBlockBinding_schema = z.object({
+    prefix_mismatch_behavior: z.enum(['error', 'drop_block']),
+  });
+
   export const Request_schema = z.object({
     /**
      * (required) The maximum number of tokens to generate before stopping.
@@ -837,6 +1059,12 @@ export namespace AnthropicWire_API_Message_Create {
     tools: z.array(AnthropicWire_Tools.ToolDefinition_schema).optional(),
 
     /**
+     * [Anthropic, Feb 2026] Top-level cache control for automatic caching.
+     * When set, automatically caches the last cacheable block in the request.
+     */
+    cache_control: AnthropicWire_Blocks._CacheControl_schema.optional(),
+
+    /**
      * (optional) Metadata to include with the request.
      * user_id: This should be a uuid, hash value, or other opaque identifier.
      */
@@ -856,14 +1084,30 @@ export namespace AnthropicWire_API_Message_Create {
 
     /**
      * When enabled, responses include thinking content blocks showing Claude's thinking process before the final answer.
+     *
+     * - display: 'omitted': empty thinking field, preserves signature for multi-turn, faster streaming
+     * - block_binding: [2026-09-01] preserved-thinking controls, see ThinkingBlockBinding_schema
      */
     thinking: z.union([
       // [Anthropic, 4.6+] Adaptive thinking - Claude decides when and how much to think
-      z.object({ type: z.literal('adaptive') }),
+      z.object({
+        type: z.literal('adaptive'),
+        // 'updates' (beta thinking-display-updates-2026-08-18): progress lines between tool calls only - 400 without the header
+        display: z.enum(['summarized' /* default */, 'omitted', 'updates']).optional(),
+        block_binding: ThinkingBlockBinding_schema.optional(),
+      }),
       // Requires a minimum budget of 1,024 tokens and counts towards your max_tokens limit.
-      z.object({ type: z.literal('enabled'), budget_tokens: z.number() }),
+      z.object({
+        type: z.literal('enabled'),
+        budget_tokens: z.number(),
+        display: z.enum(['summarized' /* default */, 'omitted']).optional(),
+        block_binding: ThinkingBlockBinding_schema.optional(),
+      }),
       // having this for completeness, but seems like it's not needed / can be omitted
       z.object({ type: z.literal('disabled') }),
+      // [Anthropic, 2026-09-28] Sonnet 5.5's lowest setting ('disabled' 400s): no up-front thinking, progress updates between
+      // tool calls still come back as thinking blocks with text. Effort <= 'high' only; no other field ('display'/'block_binding' 400)
+      z.object({ type: z.literal('between_tools') }),
     ]).optional(),
 
     /**
@@ -872,7 +1116,7 @@ export namespace AnthropicWire_API_Message_Create {
      * - format: [Anthropic, 2026-01-29 GA] JSON schema constraint on output. Replaces deprecated top-level `output_format`.
      */
     output_config: z.object({
-      effort: z.enum(['low', 'medium', 'high', 'max']).optional(),
+      effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(), // 'xhigh' added for Opus 4.7 (2026-04-16)
       format: z.object({
         type: z.literal('json_schema'),
         schema: z.any(), // JSON Schema object - validated by Anthropic
@@ -897,8 +1141,10 @@ export namespace AnthropicWire_API_Message_Create {
     top_p: z.number().optional(),
 
     /**
-     * [Anthropic, fast-mode-2026-02-01] Accelerated inference mode.
-     * Preview/waitlist. Only supported on Claude Opus 4.6.
+     * [Anthropic, fast-mode-2026-02-01] Accelerated inference mode (research preview, waitlist; up to 2.5x OTPS at 2x price).
+     * Only supported on Claude Opus 5 and Opus 4.8 (2026-07-24: Opus 4.7 returns 400; Opus 4.6 silently runs standard,
+     * see `usage.speed`). Not available on Fable 5 / Sonnet 5, Batch API, Priority Tier, or partner clouds.
+     * Note: switching speeds invalidates the prompt cache - requests at different speeds do not share cached prefixes.
      */
     speed: z.enum(['fast']).optional(),
 
@@ -927,9 +1173,10 @@ export namespace AnthropicWire_API_Message_Create {
 
     /**
      * OUTPUT Content generated by the model.
-     * This is an array of content blocks, each of which has a type that determines its shape. Currently, the only type in responses is "text".
+     * This is an array of content blocks, each of which has a type that determines its shape.
+     * Resilient: unknown/future block types parse loosely - parsers gate on isKnownContentBlockOutput().
      */
-    content: z.array(AnthropicWire_Messages.ContentBlockOutput_schema),
+    content: z.array(AnthropicWire_Messages.ContentBlockOutputResilient_schema),
 
     /**
      * The reason why Claude stopped generating.
@@ -940,12 +1187,33 @@ export namespace AnthropicWire_API_Message_Create {
     stop_sequence: z.string().nullable(),
 
     /**
+     * Structured stop details. Present when stop_reason === 'refusal' (carries category + explanation).
+     * In streaming, stop_details is null at message_start and appears on message_delta alongside stop_reason.
+     */
+    stop_details: StopDetails_schema.nullish(),
+
+    /**
+     * [Anthropic, 2026-09-01] Thinking blocks dropped from the request, only with the `thinking-binding-controls-2026-08-01` header.
+     * reason: 'model_binding_mismatch' (an older model can't read a newer block) | 'prefix_binding_mismatch' (history edited, with
+     * block_binding 'drop_block'). Streaming: on the message_start message. Loosely typed for forward-compat.
+     */
+    input_transformations: z.array(z.object({
+      type: z.string(), // 'thinking_dropped'
+      path: z.string(), // 'messages.1.content.0'
+      reason: z.string(),
+    })).nullish(),
+
+    /**
      * Billing and rate-limit usage.
      * Token counts represent the underlying cost to Anthropic's systems.
      */
     usage: z.object({
       input_tokens: z.number(),
       output_tokens: z.number(),
+      // [Anthropic, 2026-05-28] reasoning token breakdown - thinking_tokens is a subset of output_tokens (already counted in it)
+      output_tokens_details: z.object({
+        thinking_tokens: z.number(),
+      }).nullish(),
       cache_creation_input_tokens: z.number().nullish(),
       cache_read_input_tokens: z.number().nullish(),
       cache_creation: z.object({
@@ -958,6 +1226,9 @@ export namespace AnthropicWire_API_Message_Create {
         tool_search_requests: z.number().optional(), // [Anthropic, 2025-11-24] Tool Search Tool usage
       }).nullish(),
       service_tier: z.enum(['standard', 'priority', 'batch']).nullish(),
+      // [Anthropic, fast-mode-2026-02-01] actual speed used - present ONLY when the request included `speed`
+      // (probe-verified 2026-07-24: absent on standard requests; Opus 4.6 reports 'standard' on its silent fast->standard fallback)
+      speed: z.enum(['fast', 'standard']).nullish(),
       inference_geo: z.string().nullish(),
     }),
 
@@ -997,6 +1268,15 @@ export namespace AnthropicWire_API_Message_Create {
     delta: z.object({
       stop_reason: StopReason_schema.nullable(),
       stop_sequence: z.string().nullable(),
+      /**
+       * Structured stop details - present alongside stop_reason === 'refusal' (category + explanation).
+       */
+      stop_details: StopDetails_schema.nullish(),
+      /**
+       * Container state updates - present when Skills/code_execution tools are used.
+       * Provides container id/expiry that may differ from message_start if the container was created mid-stream.
+       */
+      container: AnthropicWire_Skills.Container_schema.nullish(),
     }),
     // MessageDeltaUsage - extended to include cache and server tool metrics
     usage: z.object({
@@ -1004,6 +1284,10 @@ export namespace AnthropicWire_API_Message_Create {
       cache_read_input_tokens: z.number().nullish(),
       input_tokens: z.number().nullish(),
       output_tokens: z.number(),
+      // [Anthropic, 2026-05-28] reasoning token breakdown - cumulative thinking_tokens (subset of output_tokens)
+      output_tokens_details: z.object({
+        thinking_tokens: z.number(),
+      }).nullish(),
       server_tool_use: z.object({
         web_fetch_requests: z.number().optional(),
         web_search_requests: z.number().optional(),
@@ -1015,7 +1299,7 @@ export namespace AnthropicWire_API_Message_Create {
   export const event_ContentBlockStart_schema = z.object({
     type: z.literal('content_block_start'),
     index: z.number(),
-    content_block: AnthropicWire_Messages.ContentBlockOutput_schema,
+    content_block: AnthropicWire_Messages.ContentBlockOutputResilient_schema,
   });
 
   export const event_ContentBlockStop_schema = z.object({
@@ -1023,32 +1307,51 @@ export namespace AnthropicWire_API_Message_Create {
     index: z.number(),
   });
 
+  const _ContentBlockDeltaKnown_schema = z.union([
+    z.object({
+      type: z.literal('text_delta'),
+      text: z.string(),
+    }),
+    z.object({
+      type: z.literal('input_json_delta'),
+      partial_json: z.string(),
+    }),
+    z.object({
+      type: z.literal('thinking_delta'),
+      thinking: z.string(),
+    }),
+    z.object({
+      type: z.literal('signature_delta'),
+      signature: z.string(),
+    }),
+    z.object({
+      // created by the hosted web_search tool, at least, in which case the citation is: Extract<typeof _TextBlockCitations_schema, { type: 'web_search_result_location' }>
+      type: z.literal('citations_delta'),
+      citation: AnthropicWire_Blocks._TextBlockCitations_schema,
+    }),
+  ]);
+
+  /** Runtime set of the known delta types - derived from _ContentBlockDeltaKnown_schema. */
+  const _contentBlockDeltaKnownTypes: ReadonlySet<string> = new Set<string>(
+    _ContentBlockDeltaKnown_schema.options.map(option => option.shape.type.value),
+  );
+
+  /**
+   * Forward-compatibility (2026-06-09): unknown delta types (e.g. 'compaction_delta' from the compact beta)
+   * parse loosely instead of failing the stream. Known types are excluded, so malformed known deltas still fail validation.
+   */
+  const _ContentBlockDeltaUnknown_schema = z.looseObject({
+    type: z.string().refine(type => !_contentBlockDeltaKnownTypes.has(type)),
+  });
+
   export const event_ContentBlockDelta_schema = z.object({
     type: z.literal('content_block_delta'),
     index: z.number(),
-    delta: z.union([
-      z.object({
-        type: z.literal('text_delta'),
-        text: z.string(),
-      }),
-      z.object({
-        type: z.literal('input_json_delta'),
-        partial_json: z.string(),
-      }),
-      z.object({
-        type: z.literal('thinking_delta'),
-        thinking: z.string(),
-      }),
-      z.object({
-        type: z.literal('signature_delta'),
-        signature: z.string(),
-      }),
-      z.object({
-        // created by the hosted web_search tool, at least, in which case the citation is: Extract<typeof _TextBlockCitations_schema, { type: 'web_search_result_location' }>
-        type: z.literal('citations_delta'),
-        citation: AnthropicWire_Blocks._TextBlockCitations_schema,
-      }),
-    ]),
+    delta: z.union([_ContentBlockDeltaKnown_schema, _ContentBlockDeltaUnknown_schema]),
   });
+
+  export function isKnownContentBlockDelta(delta: z.infer<typeof event_ContentBlockDelta_schema>['delta']): delta is z.infer<typeof _ContentBlockDeltaKnown_schema> {
+    return _contentBlockDeltaKnownTypes.has(delta.type);
+  }
 
 }

@@ -16,16 +16,21 @@ Reference files (for context only, do not modify):
 2. Models & IDs: https://platform.claude.com/docs/en/about-claude/models/overview.md
 3. Pricing (base, cache, batch, long context): https://platform.claude.com/docs/en/about-claude/pricing.md
 4. Deprecations & retirement dates: https://platform.claude.com/docs/en/about-claude/model-deprecations.md
+   - Its "tentative retirement date" for an active model is exactly launch + 1 year, so it
+     cross-checks `pubDate`. Prefer it and the release-note heading over the `/v1/models`
+     `created_at`, which can predate the announcement by a few days.
 
 **Discovering feature docs:** The release notes and models overview markdown
 contain inline links to feature-specific pages (thinking modes, effort,
 context windows, what's-new pages, etc.). When a new capability is
 referenced, follow those links - append `.md` to get markdown. Examples of
 pages you might discover this way:
-- `about-claude/models/whats-new-claude-*` - per-generation changes
-- `build-with-claude/extended-thinking` - thinking budget configuration
-- `build-with-claude/effort` - effort parameter levels
-- `build-with-claude/adaptive-thinking` - adaptive thinking mode
+- `about-claude/models/whats-new-*` - per-generation changes (e.g. `whats-new-opus-5`)
+- `build-with-claude/extended-thinking` - manual thinking budget configuration
+- `build-with-claude/effort` - effort levels + per-model availability
+- `build-with-claude/thinking`, `build-with-claude/thinking-steering-and-cost` - adaptive thinking
+- `build-with-claude/thinking-troubleshooting#supported-models` - per-model thinking/effort matrix
+- `agents-and-tools/tool-use/tool-reference` - per-tool model support and tool versions
 
 **Fallback web pages** (crawl if `.md` paths break or structure changes):
 - https://platform.claude.com/docs/en/about-claude/models/overview
@@ -36,6 +41,8 @@ pages you might discover this way:
 **Fallbacks if blocked:** Check the Anthropic TypeScript SDK at
 https://github.com/anthropics/anthropic-sdk-typescript, or web-search
 for "anthropic models latest pricing" / "anthropic latest models".
+
+**Live endpoint (extra signal):** If `.env.api-keys` has `ANTHROPIC_API_KEY`, scan the served model list as ground-truth for what's new/available and cross-check the docs above: `curl https://api.anthropic.com/v1/models -H "x-api-key: $ANTHROPIC_API_KEY" -H 'anthropic-version: 2023-06-01'`. Never commit or echo the key.
 
 **Important:**
 - Review the full model list for additions, removals, and price changes

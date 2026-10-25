@@ -23,7 +23,10 @@ export function parseBlocksFromText(text: string): RenderBlockInputs {
     // This is way more promising, but will either not perform a partial match (no match at all) or match a single line
     // codeBlock: /^( {0,3})`{3,}([^\n`]*)\n([\s\S]*?)(?:\n^\1`{3,}[^\S\n]*(?=\n|$))?/gm,
     // codeBlock: /`{3,}([^\n`]*)\n([\s\S]*?)(`{3,}(?=[ ]*(?:\n|$))|$)/g, // #983
-    codeBlock: /`{3,}([^\n`]*)\n([\s\S]*?)(`{3,}(?=[ *\n]|$)|$)/g,
+    // codeBlock: /`{3,}([^\n`]*)\n([\s\S]*?)(`{3,}(?=[ *\n]|$)|$)/g, // length-agnostic close: broke nested fences (any >=3 close)
+    // capture the opening fence (g1) and require the close to be at least as long (\1`*), per CommonMark.
+    // no-op for 3-backtick fences (the norm); only activates to keep nested fences (````md ... ``` ... ````) together.
+    codeBlock: /(`{3,})([^\n`]*)\n([\s\S]*?)(\1`*(?=[ *\n]|$)|$)/g,
     htmlCodeBlock: /<!DOCTYPE html>([\s\S]*?)<\/html>/gi,
     svgBlock: /<svg (xmlns|width|viewBox)=([\s\S]*?)<\/svg>/g,
   };
@@ -58,20 +61,21 @@ export function parseBlocksFromText(text: string): RenderBlockInputs {
     // add the block
     switch (matchType) {
       case 'codeBlock':
-        const blockTitle: string = (match[1] || '').trim();
+        // groups: [1]=opening fence, [2]=title/info, [3]=code, [4]=closing fence (or '' when unterminated)
+        const blockTitle: string = (match[2] || '').trim();
         // note: we don't trim blockCode to preserve leading spaces, however if the last line is only made of spaces or tabs, we trim that
-        const blockCode: string = match[2].replace(/[\t ]+$/, '');
-        const blockEnd: string = match[3];
-        blocks.push({ bkt: 'code-bk', title: blockTitle, code: blockCode, lines: countLines(blockCode), isPartial: !blockEnd.startsWith('```') });
+        const blockCode: string = match[3].replace(/[\t ]+$/, '');
+        const blockEnd: string = match[4];
+        blocks.push({ bkt: 'code-bk', sourceStart: match.index, sourceEnd: match.index + match[0].length, title: blockTitle, code: blockCode, lines: countLines(blockCode), isPartial: !blockEnd.startsWith('```') });
         break;
 
       case 'htmlCodeBlock':
         const preMatchHtml: string = `<!DOCTYPE html>${match[1]}</html>`;
-        blocks.push({ bkt: 'code-bk', title: 'html', code: preMatchHtml, lines: countLines(preMatchHtml), isPartial: false });
+        blocks.push({ bkt: 'code-bk', sourceStart: match.index, sourceEnd: match.index + match[0].length, title: 'html', code: preMatchHtml, lines: countLines(preMatchHtml), isPartial: false });
         break;
 
       case 'svgBlock':
-        blocks.push({ bkt: 'code-bk', title: 'svg', code: match[0], lines: countLines(match[0]), isPartial: false });
+        blocks.push({ bkt: 'code-bk', sourceStart: match.index, sourceEnd: match.index + match[0].length, title: 'svg', code: match[0], lines: countLines(match[0]), isPartial: false });
         break;
     }
 
@@ -84,4 +88,20 @@ export function parseBlocksFromText(text: string): RenderBlockInputs {
     blocks.push({ bkt: 'md-bk', content: text.slice(lastIndex) });
 
   return blocks;
+}
+
+
+/** Remove only the selected, complete parsed block. Keep all surrounding source unchanged. */
+export function removeCodeBlockFromText(fullText: string, block: Extract<RenderBlockInputs[number], { bkt: 'code-bk' }>): string | null {
+  const { sourceStart, sourceEnd } = block;
+  if (block.isPartial || sourceStart === undefined || sourceEnd === undefined)
+    return null;
+
+  // Revalidate against current text: stale positions or edited code must never delete a different span.
+  const current = parseBlocksFromText(fullText).find(candidate => candidate.bkt === 'code-bk'
+    && candidate.sourceStart === sourceStart && candidate.sourceEnd === sourceEnd);
+  if (!current || current.bkt !== 'code-bk' || current.isPartial || current.code !== block.code || current.title !== block.title)
+    return null;
+
+  return fullText.slice(0, sourceStart) + fullText.slice(sourceEnd);
 }

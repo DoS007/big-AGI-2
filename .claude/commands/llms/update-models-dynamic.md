@@ -1,5 +1,5 @@
 ---
-description: Update/validate dynamic vendor model parsers (OpenRouter, TogetherAI, Alibaba, Azure, Novita, ChutesAI, FireworksAI, TLUS, LM Studio, LocalAI, FastAPI)
+description: Update/validate dynamic vendor model parsers (OpenRouter, TogetherAI, Azure, Baseten, Novita, ChutesAI, FireworksAI, LM Studio, LocalAI, FastAPI)
 ---
 
 Validate that the dynamic (API-fetched) vendor model parsers are up to date and not silently broken.
@@ -12,11 +12,15 @@ These vendors do NOT have hardcoded model lists - they fetch models from APIs at
 
 **OpenRouter** - `src/modules/llms/server/openai/models/openrouter.models.ts`
 - Most complex parser. Vendor-specific parameter inheritance (Anthropic thinking variants, Gemini thinking/image, OpenAI reasoning effort, xAI/DeepSeek reasoning).
-- Hardcoded family ordering list (lines ~24-37) - check if new leading vendors are missing.
-- Hardcoded old/deprecated model hiding list (lines ~39-49) - check if stale.
+- `orModelFamilyOrder` doubles as the visibility allow-list - check if new leading vendors are missing (they'd be hidden, not just mis-sorted).
+- `orOldModelIDs` hiding list - check if stale.
+- Ids: `~vendor/model-latest` must be resolved through `alias_target.slug` (dropping the '~' leaves an unlookupable ref like 'claude-opus-latest') and `vendor/model-fast` are resold priority tiers - both must match their base family/vendor definition, not fall through to the generic branch.
+- `reasoning.mandatory` models reject effort 'none' - never offer it, in any vendor branch.
+- OR outlives vendor shutdowns: Azure serves `openai/*` codex ids that are dead on OpenAI direct. Vendor-side defs must stay (hidden + deny-listed natively) for the `llmOrt*Lookup` inheritance to keep working - flag any OR id whose vendor lookup went dead.
 - Cache pricing detection (Anthropic-style vs OpenAI-style) - verify format still valid.
+- `pricing.overrides` = long-context surcharge tiers (ascending `min_prompt_tokens`, roughly one in seven models) - must fold into our `{ upTo, price }[]` arrays, else long prompts are costed at the cheapest tier.
 - Variant injection for Anthropic thinking/non-thinking - verify still correct.
-- Reference: https://openrouter.ai/docs/models
+- Reference: https://openrouter.ai/docs/models ; live list: `GET https://openrouter.ai/api/v1/models`
 
 ### Medium Risk
 
@@ -25,28 +29,27 @@ These vendors do NOT have hardcoded model lists - they fetch models from APIs at
 - Pricing unit conversion (hundredths of cent per million → dollars per 1K).
 - Hostname heuristic: `novita.ai`.
 
+**Baseten** - `src/modules/llms/server/openai/models/baseten.models.ts`
+- Model APIs: small curated slate (12 ids, 2026-10-11), rich listing (names, per-token pricing, cache read, features, modalities) - listing is authoritative for all of that.
+- `_basetenCurated` map carries what the listing lacks: `reasoning_effort` ladders (docs + live-ablated, per-model llmVndOaiEffort/llmVndMiscEffort) and pubDates - check for stale/missing ids when the slate changes.
+- Effort ladder source: https://docs.baseten.co/inference/model-apis/reasoning - but verify live, the docs both under- and over-claim (GLM-5.3 'none' accepted-and-ignored; gpt-oss only honors low|medium|high).
+- Hostname heuristic: `inference.baseten.co` (deliberately excludes model-*.api.baseten.co dedicated deployments).
+
 **ChutesAI** - `src/modules/llms/server/openai/models/chutesai.models.ts`
 - Custom `max_model_len` field for context window.
 - Assumes all models support Vision + Functions (aggressive).
 - Hostname heuristic: `.chutes.ai`.
 
 **FireworksAI** - `src/modules/llms/server/openai/models/fireworksai.models.ts`
-- Relies on provider capability flags: `supports_chat`, `supports_image_input`, `supports_tools`.
+- Relies on provider capability flags: `supports_chat`, `supports_image_input`, `supports_tools`; `kind` also gates (embedding/reranker models are listed with `supports_chat: true`).
+- Two id shapes: `accounts/fireworks/models/*` and `accounts/fireworks/routers/*` (the Fast/Turbo serving tiers, which need their own editorial price: 1.5x-2.1x Standard, no fixed multiplier); slugs use 'p' as decimal point.
+- `/inference/v1/models` is unpaginated (20 serverless models today) and has no name/description/price: labels+descriptions from `GET /v1/accounts/fireworks/models/{id}` (control plane, same key), prices from https://docs.fireworks.ai/serverless/pricing (NOT fireworks.ai/pricing, which is training-only).
 - Hostname heuristic: `fireworks.ai/`.
 
 **TogetherAI** - `src/modules/llms/server/openai/models/together.models.ts`
-- Type allow-list (`type: 'chat'`), vision detection by string match.
+- Type allow-list (`type: 'chat'`; 'language' = base LMs, correctly excluded), vision detection by id pattern - the API exposes no modality field, so cross-check families against OpenRouter/Fireworks. `config.chat_template` is not a substitute: GLM-5.2's template handles images but Together serves it text-only.
+- `created` is endpoint churn (0 for the newest arrivals) - pubDate comes only from `_togetherEditorialPubDates`.
 - Custom wire schema with pricing conversion.
-
-**TLUS** - `src/modules/llms/server/openai/models/tlusapi.models.ts`
-- Detected by response structure (`total_models`, `free_models`, `pro_models` fields).
-- Capability enum mapping (`text`, `vision`, `audio`, `tool-calling`, `reasoning`, `websearch`).
-- Tier-based pricing (`free` vs paid).
-
-**Alibaba** - `src/modules/llms/server/openai/models/alibaba.models.ts`
-- Model list was cleared (dynamic-only). Exclusion patterns for non-chat models.
-- Assumes 128K context and Vision+Functions for all models (overly permissive).
-- Check if hardcoded data should be restored now that naming has stabilized.
 
 ### Low Risk (local/generic - validate only if issues reported)
 
@@ -57,7 +60,7 @@ These vendors do NOT have hardcoded model lists - they fetch models from APIs at
 - Local service, native API (`/api/v1/models`). GGUF metadata parsing, capability flags.
 
 **LocalAI** - `src/modules/llms/server/openai/models/localai.models.ts`
-- Local service. String-based hide list, vision/reasoning detection by name pattern.
+- Local service. Substring hide list for the non-chat gallery models it also serves (image/TTS/STT/embedding/reranker/VAD), vision/reasoning detection by name pattern.
 
 **FastAPI** - `src/modules/llms/server/openai/models/fastapi.models.ts`
 - Generic passthrough. Detected by `owned_by === 'fastchat'`. Minimal parsing.
@@ -84,6 +87,8 @@ For each vendor (prioritize High > Medium > Low):
 4. **Fix issues found** - update parsers, filters, deny lists as needed.
 
 5. Run `tsc --noEmit` after changes.
+
+**Live endpoint (extra signal):** If `.env.api-keys` has a key for one of these vendors (e.g. `FIREWORKSAI_API_KEY`, `TOGETHERAI_API_KEY`), hit its live models endpoint (authenticating with the key; path varies - e.g. Together `/v1/models`, Fireworks `/inference/v1/models`) to get the real, current response shape - the fastest way to catch parser drift, new capability fields, or changed field names. Never commit or echo the key.
 
 **Important:**
 - Do NOT convert dynamic vendors to hardcoded lists - the dynamic approach is intentional

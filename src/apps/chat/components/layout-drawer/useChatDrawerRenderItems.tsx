@@ -6,7 +6,7 @@ import type { DFolder } from '~/common/stores/folders/store-chat-folders';
 import { DMessage, DMessageUserFlag, MESSAGE_FLAG_STARRED, messageFragmentsReduceText, messageHasUserFlag, messageUserFlagToEmoji } from '~/common/stores/chat/chat.message';
 import { conversationTitle, DConversationId } from '~/common/stores/chat/chat.conversation';
 import { createTimeBucketClassifierEn } from '~/common/util/timeUtils';
-import { isAttachmentFragment, isContentOrAttachmentFragment, isDocPart, isImageRefPart, isZyncAssetImageReferencePart } from '~/common/stores/chat/chat.fragments';
+import { isAttachmentFragment, isContentOrAttachmentFragment, isDocPart, isImagePart } from '~/common/stores/chat/chat.fragments';
 import { shallowEquals } from '~/common/util/hooks/useShallowObject';
 import { useChatStore } from '~/common/stores/chat/store-chats';
 
@@ -49,7 +49,7 @@ function messageHasDocAttachmentFragments(message: DMessage): boolean {
 
 function messageHasImageFragments(message: DMessage): boolean {
   return message.fragments.some(fragment => isContentOrAttachmentFragment(fragment) && (
-    isZyncAssetImageReferencePart(fragment.part) || isImageRefPart(fragment.part)
+    isImagePart(fragment.part)
   ));
 }
 
@@ -86,14 +86,17 @@ export function useChatDrawerRenderItems(
   filterByQuery: string,
   activeFolder: DFolder | null,
   allFolders: DFolder[],
+  filterHasBeamOpen: boolean,
   filterHasStars: boolean,
   filterHasImageAssets: boolean,
   filterHasDocFragments: boolean,
   filterIsArchived: boolean,
+  filterOlderThanDays: number | null,
   grouping: ChatNavGrouping,
   searchSorting: ChatSearchSorting,
   showRelativeSize: boolean,
   searchDepth: ChatSearchDepth,
+  queryIncludeArchived: boolean,
 ): ChatDrawerRenderItems {
 
   // state
@@ -114,19 +117,25 @@ export function useChatDrawerRenderItems(
 
   return useChatStore(({ conversations: convPreFilter }) => {
 
+      const { isSearching, lcTextQuery } = isDrawerSearching(filterByQuery);
+
       // filter 0: archival status
-      const conversations = filterIsArchived ? convPreFilter.filter(c => !!c.isArchived)
-        : convPreFilter.filter(c => !c.isArchived);
+      const conversations =
+        isSearching && queryIncludeArchived ? convPreFilter
+          : filterIsArchived ? convPreFilter.filter(c => !!c.isArchived)
+            : convPreFilter.filter(c => !c.isArchived);
 
       // filter 1: select all conversations or just the ones in the active folder
       const conversationsInFolder = !activeFolder ? conversations
         : conversations.filter(_c => activeFolder.conversationIds.includes(_c.id));
 
-      // filter 2: preparation: lowercase the query
-      const { isSearching, lcTextQuery } = isDrawerSearching(filterByQuery);
+      // filter 1.5: last-activity older than the selected cutoff
+      const ageCutoffMs = filterOlderThanDays === null ? null : Date.now() - filterOlderThanDays * 24 * 60 * 60 * 1000;
+      const conversationsInAge = ageCutoffMs === null ? conversationsInFolder
+        : conversationsInFolder.filter(_c => (_c.updated || _c.created || 0) < ageCutoffMs);
 
       // transform (the conversations into ChatNavigationItemData) + filter2 (if searching)
-      const chatNavItems = conversationsInFolder
+      const chatNavItems = conversationsInAge
         .map((_c): ChatNavigationItemData | null => {
 
           // optimized reduction to find stars/images/docs/and lowercased text for search
@@ -146,7 +155,8 @@ export function useChatDrawerRenderItems(
           }
 
           // filter for required attributes
-          if ((filterHasStars && !hasStars) || (filterHasImageAssets && !hasImages) || (filterHasDocFragments && !hasDocs))
+          const hasBeamOpen = openBeamConversationIds[_c.id];
+          if ((filterHasBeamOpen && !hasBeamOpen) || (filterHasStars && !hasStars) || (filterHasImageAssets && !hasImages) || (filterHasDocFragments && !hasDocs))
             return null;
 
           // rich properties
@@ -186,7 +196,7 @@ export function useChatDrawerRenderItems(
                 ? allFolders.find(folder => folder.conversationIds.includes(_c.id)) ?? null
                 : null,
             updatedAt: _c.updated || _c.created || 0,
-            hasBeamOpen: !!openBeamConversationIds?.[_c.id],
+            hasBeamOpen,
             messageCount,
             beingGenerated: !!_c._abortController, // FIXME: when the AbortController is moved at the message level, derive the state in the conv
             systemPurposeId: _c.systemPurposeId,
@@ -287,23 +297,27 @@ export function useChatDrawerRenderItems(
         renderNavItems.push({
           type: 'nav-item-info-message',
           message: (filterHasStars && (filterHasImageAssets || filterHasDocFragments)) ? 'No results'
-            : filterHasDocFragments ? 'No attachment results'
-              : filterHasImageAssets ? 'No image results'
-                : filterHasStars ? 'No starred results'
-                  : filterIsArchived ? 'No archived conversations'
-                    : isSearching ? 'Text not found'
-                      : 'No conversations in folder',
+            : filterHasBeamOpen ? 'No beam conversations'
+              : filterHasDocFragments ? 'No attachment results'
+                : filterHasImageAssets ? 'No image results'
+                  : filterHasStars ? 'No starred results'
+                    : filterIsArchived ? 'No archived conversations'
+                      : filterOlderThanDays !== null ? 'No older conversations'
+                        : isSearching ? 'Text not found'
+                          : 'No conversations in folder',
         });
       } else {
         // filtering reminder (will be rendered with a clear button too)
-        if (filterHasStars || filterHasImageAssets || filterHasDocFragments || filterIsArchived) {
+        if (filterHasBeamOpen || filterHasStars || filterHasImageAssets || filterHasDocFragments || filterIsArchived || filterOlderThanDays !== null) {
           renderNavItems.unshift({
             type: 'nav-item-info-message',
             message: `${filterIsArchived ? 'Showing' : 'Filtering by'} ${[
+              filterHasBeamOpen && 'beam',
               filterHasStars && 'stars',
               filterHasImageAssets && 'images',
               filterHasDocFragments && 'attachments',
               filterIsArchived && 'archived',
+              filterOlderThanDays !== null && 'age',
             ].filter(Boolean).join(', ')}`,
           });
         }

@@ -1,15 +1,17 @@
 import type { Immutable } from '~/common/types/immutable.types';
+import { findLastUserPromptFragment } from '~/common/stores/chat/chat.fragment-order';
 import { getImageAsset } from '~/common/stores/blob/dblobs-portability';
 
-import { DLLM, LLM_IF_HOTFIX_NoStream, LLM_IF_HOTFIX_NoWebP, LLM_IF_HOTFIX_StripImages, LLM_IF_HOTFIX_StripSys0, LLM_IF_HOTFIX_Sys0ToUsr0 } from '~/common/stores/llms/llms.types';
+import { DLLM, LLM_IF_ANT_PromptCaching, LLM_IF_HOTFIX_NoStream, LLM_IF_HOTFIX_NoWebP, LLM_IF_HOTFIX_StripImages, LLM_IF_HOTFIX_StripSys0, LLM_IF_HOTFIX_Sys0ToUsr0 } from '~/common/stores/llms/llms.types';
 import { DMessage, DMessageRole, DMetaReferenceItem, MESSAGE_FLAG_AIX_SKIP, MESSAGE_FLAG_VND_ANT_CACHE_AUTO, MESSAGE_FLAG_VND_ANT_CACHE_USER, messageHasUserFlag } from '~/common/stores/chat/chat.message';
-import { DMessageFragment, DMessageImageRefPart, DMessageZyncAssetReferencePart, isContentOrAttachmentFragment, isToolResponseFunctionCallPart, isVoidThinkingFragment } from '~/common/stores/chat/chat.fragments';
+import { DMessageFragment, DMessageImageRefPart, DMessageZyncAssetReferencePart, hostedResourceMutedText, isContentOrAttachmentFragment, isToolResponseFunctionCallPart, isUnstampedFragment, isVoidThinkingFragment } from '~/common/stores/chat/chat.fragments';
 import { Is } from '~/common/util/pwaUtils';
 import { convert_Base64WithMimeType_To_Blob, convert_Blob_To_Base64 } from '~/common/util/blobUtils';
 import { imageBlobConvertType, imageBlobResizeIfNeeded, LLMImageResizeMode } from '~/common/util/imageUtils';
 
 // NOTE: pay particular attention to the "import type", as this is importing from the server-side Zod definitions
-import type { AixAPIChatGenerate_Request, AixMessages_ModelMessage, AixMessages_ToolMessage, AixMessages_UserMessage, AixParts_InlineImagePart, AixParts_MetaCacheControl, AixParts_MetaInReferenceToPart, AixParts_ModelAuxPart } from '../server/api/aix.wiretypes';
+import type { AixAPIChatGenerate_Request, AixMessages_ModelMessage, AixMessages_UserMessage, AixParts_InlineImagePart, AixParts_MetaCacheControl, AixParts_MetaInReferenceToPart, AixParts_ModelAuxPart } from '../server/api/aix.wiretypes';
+import { AixWire_Vendors } from '../server/api/aix.wiretypes';
 
 // TODO: remove console messages to zero, or replace with throws or something
 
@@ -17,6 +19,7 @@ import type { AixAPIChatGenerate_Request, AixMessages_ModelMessage, AixMessages_
 // configuration
 const MODEL_IMAGE_RESCALE_MIMETYPE = !Is.Browser.Safari ? 'image/webp' : 'image/jpeg';
 const MODEL_IMAGE_RESCALE_QUALITY = 0.90;
+const AIX_WIRE_IMAGE_MIMETYPES: string[] = ['image/jpeg', 'image/png', 'image/webp']; // keep in sync with InlineImagePart_schema (aix.wiretypes.ts)
 const IGNORE_CGR_NO_IMAGE_DEREFERENCE = true; // set to false to raise an exception, otherwise the CGR will continue skipping the part
 const AUTO_SYSTEM_IMAGES_INDEX = true; // set to false to disable the small index of images (in system instruction)
 
@@ -68,7 +71,7 @@ function aixCGRTextPart(text: string) {
 
 
 export async function aixCGR_SystemMessage_FromDMessageOrThrow(
-  systemInstruction: null | Pick<DMessage, 'fragments' | 'metadata' | 'userFlags'>,
+  systemInstruction: null | Pick<Immutable<DMessage>, 'fragments' | 'metadata' | 'userFlags'>,
 ): Promise<AixAPIChatGenerate_Request['systemMessage']> {
 
   // quick bypass for no message
@@ -102,6 +105,7 @@ export async function aixCGR_SystemMessage_FromDMessageOrThrow(
           case 'image_ref':
           case 'tool_invocation':
           case 'tool_response':
+          case 'hosted_resource':
           case 'error':
           case '_pt_sentinel':
             console.warn('[DEV] aixCGR_systemMessageFromInstruction: unexpected System Content fragment', { sFragment });
@@ -130,7 +134,7 @@ export async function aixCGR_SystemMessage_FromDMessageOrThrow(
                     switch (at) {
                       case 'audio':
                         // dereference the Zync Audio Asset, converting it to an inline buffer
-                        throw '[DEV] audio assets from the user are not supported yet';
+                        throw new Error('[DEV] audio assets from the user are not supported yet');
 
                       case 'image':
                         // dereference the Zync Image Asset, converting it to an inline image
@@ -260,7 +264,7 @@ export async function aixCGR_SystemMessage_FromDMessageOrThrow(
 
 
 export async function aixCGR_ChatSequence_FromDMessagesOrThrow(
-  messageSequenceWithoutSystem: Readonly<Pick<DMessage, 'role' | 'fragments' | 'metadata' | 'userFlags'>[]>, // Note: adding the "Pick" to show the low requirement from the DMessage type, as we'll move to simpler APIs soon
+  messageSequenceWithoutSystem: Readonly<Pick<Immutable<DMessage>, 'role' | 'fragments' | 'metadata' | 'userFlags'>[]>, // Note: adding the "Pick" to show the low requirement from the DMessage type, as we'll move to simpler APIs soon
   // _assemblyMode: 'complete' = 'complete',
 ): Promise<AixAPIChatGenerate_Request['chatSequence']> {
 
@@ -284,6 +288,8 @@ export async function aixCGR_ChatSequence_FromDMessagesOrThrow(
     if (dMessageRole === 'user') {
 
       const dMessageUserFragments = m.fragments;
+      let inReferenceToInsertIndex = 0;
+      const lastPromptFragmentId = findLastUserPromptFragment(dMessageUserFragments)?.fId;
       const aixChatMessageUser = await dMessageUserFragments.reduce(async (uMsgPromise, uFragment: DMessageFragment) => {
 
         const uMsg = await uMsgPromise;
@@ -293,6 +299,9 @@ export async function aixCGR_ChatSequence_FromDMessagesOrThrow(
         switch (uFragment.part.pt) {
           case 'text':
             uMsg.parts.push(uFragment.part);
+            // In-reference-to goes after the authored text; without any, after the leading stamped text (e.g. persona prefix) - inside the outer prefix/suffix either way.
+            if (uFragment.fId === lastPromptFragmentId || (!lastPromptFragmentId && !isUnstampedFragment(uFragment) && inReferenceToInsertIndex === uMsg.parts.length - 1))
+              inReferenceToInsertIndex = uMsg.parts.length;
             break;
 
           case 'reference':
@@ -320,7 +329,7 @@ export async function aixCGR_ChatSequence_FromDMessagesOrThrow(
 
                       case 'audio':
                         // dereference the Zync Audio Asset, converting it to an inline buffer
-                        throw '[DEV] audio assets from the user are not supported yet';
+                        throw new Error('[DEV] audio assets from the user are not supported yet');
 
                       default:
                         const _exhaustiveCheck: never = at;
@@ -358,6 +367,20 @@ export async function aixCGR_ChatSequence_FromDMessagesOrThrow(
             uMsg.parts.push(uFragment.part);
             break;
 
+          case 'hosted_resource':
+            // URL-referenced media (user-added video): lower to a media_url wire part - pure JSON, no dereference
+            // NOTE: 'url' comes from the user, is the first one we make come from them - however the others are usually only in assistant messages, we haven't tried roundtripping them
+            if (uFragment.part.resource.via === 'url') {
+              if (uFragment.part.muted)
+                uMsg.parts.push({ pt: 'text', text: hostedResourceMutedText(uFragment.part.resource) }); // muted: the referent stays, the media tokens don't
+              else {
+                const { url, mediaKind, mimeType } = uFragment.part.resource;
+                uMsg.parts.push({ pt: 'media_url', mediaKind, url, ...(mimeType ? { mimeType } : {}) });
+              }
+            } else
+              console.warn('aixCGR_FromDMessages: unexpected Non-User hosted resource via', uFragment.part.resource.via);
+            break;
+
           // skipped (non-user)
           case 'error':
           case 'tool_invocation':
@@ -372,12 +395,9 @@ export async function aixCGR_ChatSequence_FromDMessagesOrThrow(
         return uMsg;
       }, Promise.resolve({ role: 'user', parts: [] } as AixMessages_UserMessage));
 
-      // handle in-reference-to metadata, adding a part right after the user text (or at the beginning)
+      // handle in-reference-to metadata (the quoted text the user replies to): after the authored prompt, independent of attachment order and muted media
       if (m.metadata?.inReferenceTo?.length) {
-        // find the index of the last text part
-        const lastTextPartIndex = aixChatMessageUser.parts.findLastIndex(p => p.pt === 'text');
-        // insert the meta part after the last text part (and before the first attachment)
-        aixChatMessageUser.parts.splice(lastTextPartIndex + 1, 0, _clientCreateAixMetaInReferenceToPart(m.metadata.inReferenceTo));
+        aixChatMessageUser.parts.splice(inReferenceToInsertIndex, 0, _clientCreateAixMetaInReferenceToPart(m.metadata.inReferenceTo));
       }
 
       // (on User messages) handle the ant-cache-prompt user/auto flags
@@ -388,10 +408,7 @@ export async function aixCGR_ChatSequence_FromDMessagesOrThrow(
 
     } else if (dMessageRole === 'assistant') {
 
-      // Note: even tool invocations and responses were interleaved, we will bucket them in 1 model message and 1 tool message
-      // FIXME: assumption that this is the right way of handling it, rather than interleaving many messages
       const modelMessage: AixMessages_ModelMessage = { role: 'model', parts: [] };
-      const toolMessage: AixMessages_ToolMessage = { role: 'tool', parts: [] };
 
       for (const aFragment of m.fragments) {
 
@@ -410,14 +427,22 @@ export async function aixCGR_ChatSequence_FromDMessagesOrThrow(
             break;
 
           case 'ma':
-            // https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#why-thinking-blocks-must-be-preserved
-            // [Anthropic] special case: despite being Void, we send the DVoidModelAuxPart which has signed Thinking blocks and Redacted data,
-            //             which may be instrumental for the model to execute tools-result follow-up actions/text.
-            const isAntModelAux = aPart.textSignature || aPart.redactedData?.length;
-            if (isAntModelAux) {
+            // Preserve reasoning continuity across turns. Three channels, any one is sufficient:
+            // - Anthropic: part.textSignature / part.redactedData (bespoke fields, see Anthropic extended thinking docs)
+            // - Responses vendors (AixWire_Vendors.RSP_VENDORS) / Gemini: _vnd sidecar (reasoningItem.* / thoughtSignature, opaque continuity handle)
+            // - DeepSeek V4 (OpenAI chat-completions): plain reasoning text in aText is the payload itself
+            const rspReasoning = _vnd && AixWire_Vendors.RSP_VENDORS.map(d => _vnd[d]?.reasoningItem).find(r => !!r); // any namespace: the adapter replays only its own; Muse Spark often returns an empty summary, so the handle is the only signal
+            const hasReasoningHandle =
+              (aPart.textSignature || aPart.redactedData?.length)
+              || (rspReasoning?.encryptedContent || rspReasoning?.id)
+              || (aPart.aText && aPart.aType === 'reasoning'); // DeepSeek V4 reasoning in plain text - NOTE: will send LOTS of 'ma' parts (e.g. to Gemini, which doesn't even need them)
+            if (hasReasoningHandle) {
               const aModelAuxPart = aPart as AixParts_ModelAuxPart; // NOTE: this is a forced cast from readonly string[] to string[], but not a big deal here
-              // modelMessage.parts.push(_vnd ? { ...aModelAuxPart, _vnd } : aModelAuxPart);
-              modelMessage.parts.push(aModelAuxPart);
+              modelMessage.parts.push(_vnd ? { ...aModelAuxPart, _vnd } : aModelAuxPart);
+            } else {
+              // If none are present (e.g. summary-only reasoning from a vendor with no signed handle), drop the ma part silently;
+              // - passing a bare reasoning reference errors out on some providers (e.g. OpenAI stateless returns "Item with id rs_... not found. ... remove this item from your input.")
+              // console.log('[DEV] aixCGR_FromDMessages: dropping ma part from Assistant message as it has no reasoning handle', { aPart });
             }
             break;
 
@@ -462,7 +487,7 @@ export async function aixCGR_ChatSequence_FromDMessagesOrThrow(
 
                       case 'audio':
                         // dereference the Zync Audio Asset, converting it to an inline buffer
-                        throw '[DEV] audio assets from the assistant are not supported yet';
+                        throw new Error('[DEV] audio assets from the assistant are not supported yet');
 
                       default:
                         const _exhaustiveCheck: never = at;
@@ -522,7 +547,19 @@ export async function aixCGR_ChatSequence_FromDMessagesOrThrow(
               if (Array.isArray(resultObject))
                 throw new Error('[AIX validation for Gemini] expecting `tool_response` to not be an array');
             }
-            toolMessage.parts.push(_vnd ? { ...aPart, _vnd } : aPart);
+            modelMessage.parts.push(_vnd ? { ...aPart, _vnd } : aPart);
+            break;
+
+          case 'hosted_resource':
+            // Hosted resources are download-only artifacts - emit a text placeholder for model context
+            // NOTE: disabled for now - we don't know how usefult this hinting it, and we're clashing with proprietary Anthropic prompts
+            // modelMessage.parts.push({
+            //   pt: 'text',
+            //   text: `[Output file: ${aPart.resource.via === 'anthropic' ? aPart.resource.fileId : 'unknown'}]`,
+            //   // ...(aPart.resource.via === 'anthropic' && {
+            //   //   _vnd: { anthropic: { containerUpload: { fileId: aPart.resource.fileId, ...(aPart.resource.containerId && { containerId: aPart.resource.containerId }) } } },
+            //   // }),
+            // });
             break;
 
           default:
@@ -532,18 +569,14 @@ export async function aixCGR_ChatSequence_FromDMessagesOrThrow(
         }
       }
 
-      const assistantMessages: (AixMessages_ModelMessage | AixMessages_ToolMessage)[] = [];
-      if (modelMessage.parts.length > 0)
-        assistantMessages.push(modelMessage);
-      if (toolMessage.parts.length > 0)
-        assistantMessages.push(toolMessage);
+      if (modelMessage.parts.length > 0) {
 
-      // (on Assistant messages) handle the ant-cache-prompt user/auto flags, on the very last message
-      if (mHasAntCacheFlag && assistantMessages.length > 0)
-        assistantMessages[assistantMessages.length - 1].parts.push(_clientCreateAixMetaCacheControlPart('anthropic-ephemeral'));
+        // (on Assistant messages) handle the ant-cache-prompt user/auto flags, on the very last message
+        if (mHasAntCacheFlag)
+          modelMessage.parts.push(_clientCreateAixMetaCacheControlPart('anthropic-ephemeral'));
 
-      // Add the assistant messages to the chatSequence
-      acc.chatSequence.push(...assistantMessages);
+        acc.chatSequence.push(modelMessage);
+      }
 
     } else {
 
@@ -585,7 +618,7 @@ export async function aixConvertZyncImageAssetRefToInlineImageOrThrow(assetRefPa
   throw new Error(`Asset reference ${assetRefPart.zUuid} - Asset system not yet implemented or legacy fallback missing`);
 }
 
-export async function aixConvertImageRefToInlineImageOrThrow(imageRefPart: DMessageImageRefPart, resizeMode: LLMImageResizeMode | false): Promise<AixParts_InlineImagePart> {
+export async function aixConvertImageRefToInlineImageOrThrow(imageRefPart: Immutable<DMessageImageRefPart>, resizeMode: LLMImageResizeMode | false): Promise<AixParts_InlineImagePart> {
 
   // validate
   const { dataRef } = imageRefPart;
@@ -622,7 +655,21 @@ export async function aixConvertImageRefToInlineImageOrThrow(imageRefPart: DMess
     }
   }
 
-  return _clientCreateAixInlineImagePart(base64Data, mimeType || dataRef.mimeType);
+  // resolve the effective mime type (stored value, falling back to the data reference's)
+  mimeType = mimeType || dataRef.mimeType as any;
+
+  // wire-compat gate: the AIX schema only accepts jpeg/png/webp, but stored assets can carry
+  // other types (e.g. a small gif that never needed resizing) - transcode those here, which
+  // also heals legacy blobs; on undecodable images this throws, and callers drop just this
+  // image instead of the whole request failing server-side validation
+  if (!AIX_WIRE_IMAGE_MIMETYPES.includes(mimeType)) {
+    const imageBlob = await convert_Base64WithMimeType_To_Blob(base64Data, mimeType, 'aixConvertImageRefToInlineImage.wireGate');
+    const convertedOp = await imageBlobConvertType(imageBlob, MODEL_IMAGE_RESCALE_MIMETYPE, MODEL_IMAGE_RESCALE_QUALITY);
+    base64Data = await convert_Blob_To_Base64(convertedOp.blob, 'aixConvertImageRefToInlineImage.wireGate');
+    mimeType = convertedOp.blob.type as any;
+  }
+
+  return _clientCreateAixInlineImagePart(base64Data, mimeType);
 }
 
 function _clientCreateAixInlineImagePart(base64: string, mimeType: string): AixParts_InlineImagePart {
@@ -633,8 +680,8 @@ function _clientCreateAixMetaCacheControlPart(control: AixParts_MetaCacheControl
   return { pt: 'meta_cache_control', control: control };
 }
 
-function _clientCreateAixMetaInReferenceToPart(items: DMetaReferenceItem[]): AixParts_MetaInReferenceToPart {
-  return { pt: 'meta_in_reference_to', referTo: items };
+function _clientCreateAixMetaInReferenceToPart(items: Immutable<DMetaReferenceItem[]>): AixParts_MetaInReferenceToPart {
+  return { pt: 'meta_in_reference_to', referTo: items.map(refItem => ({ ...refItem })) };
 }
 
 
@@ -642,11 +689,18 @@ function _clientCreateAixMetaInReferenceToPart(items: DMetaReferenceItem[]): Aix
 
 
 export async function clientHotFixGenerateRequest_ApplyAll(llmInterfaces: DLLM['interfaces'], aixChatGenerate: AixAPIChatGenerate_Request, modelName: string): Promise<{
-  shallDisableStreaming: boolean;
+  hotfixNoStream: boolean;
   workaroundsCount: number;
 }> {
 
   let workaroundsCount = 0;
+
+  // Strip cache-breakpoint hints for models without explicit prompt-caching support. The auto-breakpoint
+  // policy flags messages regardless of the active model (and flags persist when switching models), so
+  // acting adapters (Anthropic, OpenRouter) must only see hints when the model advertises the capability.
+  // Silent: this is the normal path for most models, not a workaround.
+  if (!llmInterfaces.includes(LLM_IF_ANT_PromptCaching))
+    clientHotFixGenerateRequest_StripCacheHints(aixChatGenerate);
 
   // Apply the remove-sys0 hot fix - at the time of doing it, Gemini Image Generation does not use the system instructions
   if (llmInterfaces.includes(LLM_IF_HOTFIX_StripSys0))
@@ -665,15 +719,27 @@ export async function clientHotFixGenerateRequest_ApplyAll(llmInterfaces: DLLM['
     workaroundsCount += await clientHotFixGenerateRequest_ConvertWebP(aixChatGenerate, 'image/jpeg');
 
   // Disable streaming for select chat models that don't support it (e.g. o1-preview (old) and o1-2024-12-17)
-  const shallDisableStreaming = llmInterfaces.includes(LLM_IF_HOTFIX_NoStream);
+  const hotfixNoStream = llmInterfaces.includes(LLM_IF_HOTFIX_NoStream);
 
   if (workaroundsCount > 0)
     console.warn(`[DEV] Working around '${modelName}' model limitations: client-side applied ${workaroundsCount} workarounds`);
 
-  return { shallDisableStreaming, workaroundsCount };
+  return { hotfixNoStream, workaroundsCount };
 
 }
 
+
+/** Remove meta_cache_control parts in-place - for models without explicit prompt-caching support. */
+function clientHotFixGenerateRequest_StripCacheHints(aixChatGenerate: AixAPIChatGenerate_Request): void {
+  const stripParts = (parts: { pt: string }[]) => {
+    for (let i = parts.length - 1; i >= 0; i--)
+      if (parts[i].pt === 'meta_cache_control')
+        parts.splice(i, 1);
+  };
+  if (aixChatGenerate.systemMessage)
+    stripParts(aixChatGenerate.systemMessage.parts);
+  aixChatGenerate.chatSequence.forEach(message => stripParts(message.parts));
+}
 
 /**
  * Hot fix for models that don't support vision input and we need to perform the fix ahead of AIX send.

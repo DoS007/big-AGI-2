@@ -5,10 +5,6 @@ import { Box, Button, ColorPaletteProp } from '@mui/joy';
 
 import type { AgiAttachmentPromptsData } from '~/modules/aifn/agiattachmentprompts/useAgiAttachmentPrompts';
 
-import type { DMetaReferenceItem } from '~/common/stores/chat/chat.message';
-
-import { InReferenceToBubble } from '../../message/in-reference-to/InReferenceToBubble';
-
 
 // configuration
 export const AGI_SUGGESTIONS_COLOR: ColorPaletteProp = 'success';
@@ -18,8 +14,10 @@ export const AGI_SUGGESTIONS_COLOR: ColorPaletteProp = 'success';
 export const composerTextAreaSx: SxProps = {
   flex: 1,
 
-  // layout
+  // layout - NOTE: minmax(0, 1fr) caps the single column at the container width; an 'auto' track
+  // would grow to the items' max-content and let long chips overflow instead of ellipsizing
   display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr)',
   justifyItems: 'start',
   gap: 0.5,
   mb: 0.625,
@@ -62,30 +60,26 @@ const promptButtonSx: SxProps = {
 };
 
 
+/**
+ * Textarea end-decorator actions: the pre-send items row (passed as children, e.g. UserInputItemsRow)
+ * and the AI-suggested attachment prompts. Knows nothing about the items themselves.
+ */
 export function ComposerTextAreaActions(props: {
   agiAttachmentPrompts: AgiAttachmentPromptsData,
-  inReferenceTo?: DMetaReferenceItem[] | null
   onAppendAndSend: (appendText: string) => Promise<void>,
-  onRemoveReferenceTo: (item: DMetaReferenceItem) => void,
+  children?: React.ReactNode,
 }) {
 
   // skip the component if there's nothing to show
   const { agiAttachmentPrompts } = props;
-  if (!props.inReferenceTo?.length && !agiAttachmentPrompts.prompts?.length /*&& !props.agiAttachmentPrompts.isVisible*/)
+  if (!props.children && !agiAttachmentPrompts.prompts?.length /*&& !props.agiAttachmentPrompts.isVisible*/)
     return null;
 
   return (
     <Box sx={composerTextAreaSx}>
 
-      {/* In-Reference-To bubbles */}
-      {props.inReferenceTo?.map((item, index) => (
-        <InReferenceToBubble
-          key={index}
-          item={item}
-          onRemove={props.onRemoveReferenceTo}
-          className='within-composer-focus'
-        />
-      ))}
+      {/* Pre-send items row (recipient, reply-to, pending parts) */}
+      {props.children}
 
       {/* Auto-Prompts from attachments */}
       {agiAttachmentPrompts.prompts.map((candidate, index) =>

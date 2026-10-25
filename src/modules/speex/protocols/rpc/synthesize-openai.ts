@@ -3,11 +3,14 @@
  */
 
 import { OPENAI_API_PATHS } from '~/modules/llms/server/openai/openai.access'; // server-side import
+import { env } from '~/server/env.server';
 import { fetchJsonOrTRPCThrow, fetchResponseOrTRPCThrow } from '~/server/trpc/trpc.router.fetchers';
+
+import { modelPickOrAuto } from '~/common/util/modelPickUtils';
 
 import type { SpeexWire_Access_OpenAI, SpeexWire_ListVoices_Output } from './rpc.wiretypes';
 import type { SynthesizeBackendFn } from './synthesize.core';
-import { SPEEX_DEBUG, SPEEX_DEFAULTS } from '../../speex.config';
+import { SPEEX_DEBUG, SPEEX_DEFAULTS, SPEEX_MODELS } from '../../speex.config';
 import { returnAudioWholeOrThrow, streamAudioChunksOrThrow } from './rpc.streaming';
 
 
@@ -82,7 +85,7 @@ export const synthesizeOpenAIProtocol: SynthesizeBackendFn<SpeexWire_Access_Open
       if (voice.dialect !== 'openai') throw new Error('Voice dialect mismatch for OpenAI access');
       body = {
         input: text,
-        model: voice.ttsModel || SPEEX_DEFAULTS.OPENAI_MODEL,
+        model: modelPickOrAuto(voice.ttsModel, SPEEX_MODELS.openai) ?? SPEEX_DEFAULTS.OPENAI_MODEL,
         voice: voice.ttsVoiceId || SPEEX_DEFAULTS.OPENAI_VOICE,
         ...(voice.ttsSpeed !== undefined ? { speed: voice.ttsSpeed } : {}),
         ...(voice.ttsInstruction ? { instructions: voice.ttsInstruction } : {}),
@@ -207,5 +210,8 @@ function _resolveAccess(access: Readonly<SpeexWire_Access_OpenAI>): { host: stri
   if (host.endsWith('/'))
     host = host.slice(0, -1);
 
-  return { host, apiKey: access.apiKey || '' };
+  // OpenAI on the default endpoint: fall back to the server-side env key (as chat/T2I do); never forwarded to a client-set host
+  const apiKey = access.apiKey || ((isOpenAI && !access.apiHost) ? env.OPENAI_API_KEY : '') || '';
+
+  return { host, apiKey };
 }

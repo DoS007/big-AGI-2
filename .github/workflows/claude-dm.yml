@@ -33,13 +33,15 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0 # 1 -> 0: full history helps with git blame, etc.
 
       - name: Run Claude Code DM Response
         id: claude
         uses: anthropics/claude-code-action@v1
+        env:
+          CLAUDE_CODE_SUBAGENT_MODEL: claude-opus-5-5 # brains on Fable (--model below), delegated subagents on the latest Opus
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
@@ -54,6 +56,6 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://docs.claude.com/en/docs/claude-code/cli-reference for available options
           claude_args: |
-            --model claude-opus-4-6
-            --max-turns 100
-            --allowedTools "Edit,Read,Write,WebFetch,WebSearch,Bash(cat:*),Bash(cp:*),Bash(find:*),Bash(git branch:*),Bash(grep:*),Bash(ls:*),Bash(mkdir:*),Bash(npm run:*),Bash(gh issue:*),Bash(gh search:*),Bash(gh label:*),Bash(gh pr:*),SlashCommand"
+            --model claude-fable-5-1
+            --max-turns 300
+            --allowedTools "Edit,Read,Grep,Glob,Write,WebFetch,WebSearch,Skill,Agent,LSP,Bash(cat:*),Bash(cp:*),Bash(find:*),Bash(git branch:*),Bash(grep:*),Bash(ls:*),Bash(mkdir:*),Bash(npm run:*),Bash(gh issue:*),Bash(gh search:*),Bash(gh label:*),Bash(gh pr:*)"

@@ -1,17 +1,20 @@
 import * as React from 'react';
-import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
-import { closestCenter, DndContext, DragEndEvent, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
-import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers';
+
+import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { closestCenter, DndContext, DragEndEvent } from '@dnd-kit/core';
+import { dndModifiersParentVertical } from '~/common/components/dnd/dnd.config';
+import { useDndDefaultSensors } from '~/common/components/dnd/useDndDefaultSensors';
 
 import type { SxProps } from '@mui/joy/styles/types';
-import { Box, List, ListItem, ListItemButton, ListItemDecorator, Typography } from '@mui/joy';
+import { Box, List, ListItem, ListItemButton, ListItemDecorator } from '@mui/joy';
+import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
 import FolderOpenOutlinedIcon from '@mui/icons-material/FolderOpenOutlined';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 
 import { ContentScaling, themeScalingMap } from '~/common/app.theme';
-import { DFolder, useFolderStore } from '~/common/stores/folders/store-chat-folders';
+import { FoldersAddButton } from '~/common/components/folders/FoldersAddButton';
+import { chatFoldersActions, DFolder } from '~/common/stores/folders/store-chat-folders';
 
-import { AddFolderButton } from './AddFolderButton';
 import { FolderListItem } from './FolderListItem';
 
 
@@ -47,12 +50,18 @@ const _styles = {
   allItem: {
     border: 0,
   } as const,
-} as const;
 
-const _dndModifiers = [restrictToVerticalAxis, restrictToParentElement];
+  zeroStateButton: {
+    flexDirection: 'column',
+    textAlign: 'center',
+    px: 2,
+    py: 3,
+  } as const,
+} as const;
 
 
 export function ChatFolderList(props: {
+  isMobile: boolean;
   folders: DFolder[];
   folderChatCounts?: Record<DFolder['id'], number>;
   contentScaling: ContentScaling;
@@ -62,17 +71,13 @@ export function ChatFolderList(props: {
 }) {
 
   // derived props
-  const { folders, folderChatCounts, onFolderSelect, activeFolderId } = props;
+  const { isMobile, folders, folderChatCounts, onFolderSelect, activeFolderId } = props;
+
+  // state
+  const [isAddingFolder, setIsAddingFolder] = React.useState(false);
 
   // DnD Kit
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 8 },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    }),
-  );
+  const sensors = useDndDefaultSensors();
 
 
   // memos
@@ -87,16 +92,18 @@ export function ChatFolderList(props: {
   }), [props.contentScaling]);
 
 
-  // handlers
+  // DnD
 
-  const handleDragEnd = React.useCallback((event: DragEndEvent) => {
-    const { active, over } = event;
+  const handleDragEnd = React.useCallback(({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
     const oldIndex = folderIds.findIndex(fId => fId === active.id);
     const newIndex = folderIds.findIndex(fId => fId === over.id);
     if (oldIndex !== -1 && newIndex !== -1)
-      useFolderStore.getState().moveFolder(oldIndex, newIndex);
+      chatFoldersActions().moveFolder(oldIndex, newIndex);
   }, [folderIds]);
+
+
+  const displayZeroState = !folders.length && !isAddingFolder;
 
 
   return (
@@ -108,12 +115,12 @@ export function ChatFolderList(props: {
       >
 
         {/* Zero State message */}
-        {!folders.length && (
-          <ListItem sx={{ flexDirection: 'column', textAlign: 'center', px: 2, py: 3 }}>
-            <FolderOutlinedIcon sx={{ fontSize: 'xl2' }} />
-            <Typography level='body-sm'>
-              Create folders to organize your chats
-            </Typography>
+        {displayZeroState && (
+          <ListItem>
+            <ListItemButton variant='plain' sx={_styles.zeroStateButton} onClick={() => setIsAddingFolder(true)}>
+              <CreateNewFolderOutlinedIcon />
+              Create folders to organize chats
+            </ListItemButton>
           </ListItem>
         )}
 
@@ -129,7 +136,7 @@ export function ChatFolderList(props: {
               sx={_styles.allItem}
             >
               <ListItemDecorator>{!activeFolderId ? <FolderOpenOutlinedIcon /> : <FolderOutlinedIcon />}</ListItemDecorator>
-              <Box sx={{ flex: 1 }}>All Chats</Box>
+              <Box sx={{ flex: 1 }}>All chats</Box>
             </ListItemButton>
           </ListItem>
         )}
@@ -139,7 +146,7 @@ export function ChatFolderList(props: {
           sensors={sensors}
           collisionDetection={closestCenter}
           onDragEnd={handleDragEnd}
-          modifiers={_dndModifiers}
+          modifiers={dndModifiersParentVertical}
         >
           <SortableContext
             items={folderIds}
@@ -161,9 +168,10 @@ export function ChatFolderList(props: {
         </DndContext>
 
         {/* 'Add Folder' Button */}
-        <AddFolderButton />
+        {(!isMobile || !displayZeroState) && <FoldersAddButton isAddingFolder={isAddingFolder} setIsAddingFolder={setIsAddingFolder} />}
 
       </List>
+
     </Box>
   );
 }

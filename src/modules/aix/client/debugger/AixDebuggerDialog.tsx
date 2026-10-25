@@ -36,7 +36,7 @@ const _styles = {
   frameViewer: {
     overflow: 'auto', // scroll this part of the dialog, i.e. the full debugging frame
 
-    // backgroundColor: 'background.level1',
+    backgroundColor: 'background.level1',
     borderBottom: '1px solid',
     borderBottomColor: 'divider',
 
@@ -96,6 +96,9 @@ function useDebouncedAixDebuggerStore() {
 }
 
 
+// auto-enable inspection the first time the dialog is opened (per app session); afterwards it follows the on/off toggle
+let inspectorAutoArmed = false;
+
 export function AixDebuggerDialog(props: {
   onClose: () => void;
 }) {
@@ -114,6 +117,18 @@ export function AixDebuggerDialog(props: {
   // derived state
   const activeFrame = frames.find(f => f.id === activeFrameId) ?? null;
   const willInjectJson = hasInspector && hasInjectorJson;
+
+
+  // [effect] auto-enable inspection shortly after the very first open (then follow the on/off toggle)
+  React.useEffect(() => {
+    if (inspectorAutoArmed) return;
+    inspectorAutoArmed = true;
+    const timeoutId = setTimeout(() => {
+      if (!useUIPreferencesStore.getState().aixInspector)
+        useUIPreferencesStore.getState().toggleAixInspector();
+    }, 160);
+    return () => clearTimeout(timeoutId);
+  }, []);
 
 
   // handlers
@@ -267,6 +282,9 @@ export function AixDebuggerDialog(props: {
                   </Link> to see the exact requests to AI models.
                 </>}
             </Typography>
+            {/*<Typography level='body-sm' sx={{ mt: 1 }}>*/}
+            {/*  <ExternalDocsLink level='body-sm' docPage='feature-ai-inspector'>What the inspector shows</ExternalDocsLink>*/}
+            {/*</Typography>*/}
           </>}
           {!activeFrame && !!frames.length && (
             <Typography level='body-sm'>

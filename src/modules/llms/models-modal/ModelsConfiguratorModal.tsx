@@ -3,24 +3,27 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { Box, Button, Checkbox, CircularProgress, Divider, Dropdown, IconButton, ListDivider, ListItemDecorator, Menu, MenuButton, MenuItem, Typography } from '@mui/joy';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
+import HistoryIcon from '@mui/icons-material/History';
+import LaunchIcon from '@mui/icons-material/Launch';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import RestoreIcon from '@mui/icons-material/Restore';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 
-import { CloseablePopup, joyKeepPopup } from '~/common/components/CloseablePopup';
+import { joyKeepPopup } from '~/common/components/CloseablePopup';
 
 import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/llms.service.types';
 import { AppBreadcrumbs } from '~/common/components/AppBreadcrumbs';
+import { BaseProduct } from '~/common/app.release';
 import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
 import { GoodModal } from '~/common/components/modals/GoodModal';
 import { PhGift } from '~/common/components/icons/phosphor/PhGift';
+import { SubMenuHost, SubMenuItem, useSubMenuHost } from '~/common/components/SubMenu';
 import { isLLMChatFree_cached } from '~/common/stores/llms/llms.pricing';
-import { llmsStoreActions, llmsStoreState } from '~/common/stores/llms/store-llms';
+import { isLLMCustomUserParameters } from '~/common/stores/llms/llms.types';
+import { llmsStoreActions, llmsStoreState, useModelsStore } from '~/common/stores/llms/store-llms';
 import { optimaActions } from '~/common/layout/optima/useOptima';
-import { themeZIndexOverMobileDrawer } from '~/common/app.theme';
 import { useAllServicesDCStatus } from '~/common/stores/llms/hooks/useModelServiceClientSideFetch';
 import { useHasFreeLLMs, useHasLLMs } from '~/common/stores/llms/llms.hooks';
 import { useIsMobile } from '~/common/components/useMatchMedia';
@@ -28,10 +31,12 @@ import { useModelsZeroState } from '~/common/stores/llms/hooks/useModelsZeroStat
 import { useOverlayComponents } from '~/common/layout/overlays/useOverlayComponents';
 import { useUICounter, useUIPreferencesStore } from '~/common/stores/store-ui';
 
-import { LLMVendorSetup } from '../components/LLMVendorSetup';
+import { ALL_SERVICES_OPTION_ID, ModelsServiceSelector } from './ModelsServiceSelector';
+import { LLMVendorSetup, VENDOR_DOCS } from '../components/LLMVendorSetup';
+import { ModelsChangelogPanel } from './ModelsChangelogPanel';
 import { ModelsList } from './ModelsList';
-import { ModelsServiceSelector } from './ModelsServiceSelector';
 import { ModelsWizard } from './ModelsWizard';
+import { llmsRefreshAllServices, useModelsRefreshBatchStore } from '../llm.client.refresh';
 import { useLlmUpdateModels } from '../llm.client.hooks';
 
 
@@ -39,7 +44,7 @@ import { useLlmUpdateModels } from '../llm.client.hooks';
 const MODELS_WIZARD_ENABLE_INITIALLY = true;
 
 
-type TabValue = 'wizard' | 'setup' | 'defaults';
+type TabValue = 'wizard' | 'setup' | 'changelog';
 
 /**
  * Note: the reason for this component separation from the parent state, is delayed state initialization.
@@ -48,6 +53,7 @@ export function ModelsConfiguratorModal(props: {
   modelsServices: DModelsService[],
   confServiceId: string | null,
   setConfServiceId: (serviceId: string | null) => void,
+  initialTab?: 'changelog', // open on the Updates screen (e.g. from a refresh status elsewhere in the app)
   // allowAutoTrigger: boolean,
 }) {
 
@@ -55,20 +61,21 @@ export function ModelsConfiguratorModal(props: {
 
   // state
   // const [showAllServices, setShowAllServices] = React.useState<boolean>(false);
-  const [tab, setTab] = React.useState<TabValue>(MODELS_WIZARD_ENABLE_INITIALLY && !modelsServices.length ? 'wizard' : 'setup');
+  const [tab, setTab] = React.useState<TabValue>(MODELS_WIZARD_ENABLE_INITIALLY && !modelsServices.length ? 'wizard' : props.initialTab ?? 'setup');
   const [unsavedWizardProviders, setUnsavedWizardProviders] = React.useState<Set<string>>(new Set());
   const showAllServices = false;
 
   // state - menus
   const [mainMenuOpen, setMainMenuOpen] = React.useState(false);
-  const [dcMenuAnchor, setDcMenuAnchor] = React.useState<HTMLElement | null>(null);
-  const [visMenuAnchor, setVisMenuAnchor] = React.useState<HTMLElement | null>(null);
+  const subMenuHost = useSubMenuHost();
 
   // external state
   const isMobile = useIsMobile();
   const hasLLMs = useHasLLMs();
   const { showPromisedOverlay } = useOverlayComponents();
-  const { showModelsHidden, setShowModelsHidden, starredOnTop, setStarredOnTop } = useUIPreferencesStore(useShallow(state => ({
+  const { showModelsFn, setShowModelsFn, showModelsHidden, setShowModelsHidden, starredOnTop, setStarredOnTop } = useUIPreferencesStore(useShallow(state => ({
+    showModelsFn: state.showModelsFn,
+    setShowModelsFn: state.setShowModelsFn,
     showModelsHidden: state.showModelsHidden,
     setShowModelsHidden: state.setShowModelsHidden,
     starredOnTop: state.modelsStarredOnTop,
@@ -83,11 +90,37 @@ export function ModelsConfiguratorModal(props: {
     ?? null;
 
   const activeService = modelsServices.find(s => s.id === activeServiceId);
-  // const hasClones = useModelsStore(({ llms }) => llms.some(llm => llm.sId === activeServiceId && llm.isUserClone));
+
+
+  // external state - refresh state of all services
+  const refreshBatch = useModelsRefreshBatchStore(useShallow(state => ({
+    running: state.runningAt !== null,
+    done: state.doneIds.length,
+    total: state.serviceIds.length,
+  })));
+  const isRefreshingAll = refreshBatch.running;
+
+  // external state - models updater for this service only (synced via react-query with the per-service configuration page)
+  const { isFetching: isRefreshing, refetch: handleRefreshModels } = useLlmUpdateModels(false, activeService ?? null);
+
+
+  // vendor docs page for the active service; openai in custom-host mode is documented by the custom-endpoints page instead
+  const activeServiceDocsUrl = React.useMemo(() => {
+    if (!activeService?.vId) return null;
+    const isCustomOpenAIHost = activeService.vId === 'openai' && !!(activeService.setup as { oaiHost?: string } | undefined)?.oaiHost;
+    const docSlug = isCustomOpenAIHost ? 'connect-custom-endpoints' : VENDOR_DOCS[activeService.vId];
+    return !docSlug ? null : BaseProduct.DocsBaseSite + '/' + docSlug;
+  }, [activeService]);
+
+  // menu enablement - boolean selectors (early-exit scans, primitive return: no re-render unless flipping)
+  // mirrors exactly what each action would touch: resetServiceUserParameters strips userParameters + userLabel (skipping clones)
+  const hasServiceCustomizations = useModelsStore(({ llms }) => llms.some(llm => llm.sId === activeServiceId && !llm.isUserClone && (llm.userLabel !== undefined || isLLMCustomUserParameters(llm))));
+  const hasServiceClones = useModelsStore(({ llms }) => llms.some(llm => llm.sId === activeServiceId && llm.isUserClone === true));
 
   const hasAnyServices = !!modelsServices.length;
   const isTabWizard = tab === 'wizard';
   const isTabSetup = tab === 'setup';
+  const isTabChangelog = tab === 'changelog';
   const activeHasFreeLLMs = useHasFreeLLMs(activeServiceId);
   // const isTabDefaults = tab === 'defaults';
 
@@ -114,6 +147,31 @@ export function ModelsConfiguratorModal(props: {
   const handleShowWizard = React.useCallback(() => setTab('wizard'), []);
   // const handleToggleDefaults = React.useCallback(() => setTab(tab => tab === 'defaults' ? 'setup' : 'defaults'), []);
 
+  // update every eligible service, and show the progress on the changelog tab (the menu unmounts with the tab: close it here)
+  const handleUpdateAllModels = React.useCallback(() => {
+    void llmsRefreshAllServices('models-configurator');
+    setMainMenuOpen(false);
+    setTab('changelog');
+  }, []);
+
+  const handleShowChangelog = React.useCallback(() => {
+    setMainMenuOpen(false);
+    setTab('changelog');
+  }, []);
+
+  // the service selector: a real service goes to its setup, 'All services' to the Updates screen
+  const handleSelectService = React.useCallback((serviceId: DModelsServiceId | null) => {
+    if (serviceId === ALL_SERVICES_OPTION_ID)
+      return setTab('changelog');
+    setConfServiceId(serviceId);
+    setTab('setup');
+  }, [setConfServiceId]);
+
+  const handleBreadcrumbSetup = React.useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    setTab('setup');
+  }, []);
+
   // callback for wizard to report unsaved provider changes
   const handleWizardProviderUnsavedChange = React.useCallback((providerId: string, hasUnsaved: boolean) => {
     setUnsavedWizardProviders(prev => {
@@ -130,22 +188,18 @@ export function ModelsConfiguratorModal(props: {
 
   const handleMainMenuOpenChange = React.useCallback((_event: React.SyntheticEvent | null, newOpen: boolean) => {
     // submenu is open, stay open
-    if (!newOpen && (dcMenuAnchor || visMenuAnchor)) return;
+    if (!newOpen && subMenuHost.isAnyOpen()) return;
     setMainMenuOpen(newOpen);
     // close submenus when main closes
-    if (!newOpen) {
-      setDcMenuAnchor(null);
-      setVisMenuAnchor(null);
-    }
-  }, [dcMenuAnchor, visMenuAnchor]);
-
-  const { isFetching: isRefreshing, refetch: handleRefreshModels } = useLlmUpdateModels(false, activeService ?? null);
+    if (!newOpen)
+      subMenuHost.closeAll();
+  }, [subMenuHost]);
 
   const handleResetAllParameters = React.useCallback(() => {
     showPromisedOverlay('llms-reset-parameters', {}, ({ onResolve, onUserReject }) =>
       <ConfirmationModal
         open onClose={onUserReject} onPositive={() => onResolve(true)}
-        confirmationText={`Reset all user-customized model parameters and names for ${activeService?.label ?? 'this service'}? All settings such as temperature, reasoning effort, etc. will be reverted to defaults.`}
+        confirmationText={`Reset all user-customized model parameters and names for ${activeService?.label ?? 'this service'}? All settings such as temperature, reasoning effort, etc. will be reverted to defaults. Duplicated models will not be affected.`}
         positiveActionText='Reset'
       />,
     ).then(() => llmsStoreActions().resetServiceUserParameters(activeServiceId)).catch(() => null /* ignore closure */);
@@ -229,113 +283,128 @@ export function ModelsConfiguratorModal(props: {
     // Service-level 3-dots menu when we have LLMs
     if (isTabSetup && hasLLMs)
       return (
-        <Box sx={{ flex: 1, display: 'flex', gap: 1, alignItems: 'center', justifyContent: 'space-between' }}>
-          <Dropdown open={mainMenuOpen} onOpenChange={handleMainMenuOpenChange}>
-            <MenuButton slots={{ root: IconButton }} /* slotProps={{ root: { variant: 'plain' } }} */>
-              <MoreVertIcon sx={{ fontSize: 'xl' }} />
-            </MenuButton>
-            <Menu placement='bottom-start' disablePortal sx={{ minWidth: 280 }}>
+        <SubMenuHost host={subMenuHost}>
+          <Box sx={{ flex: 1, display: 'flex', gap: 1, alignItems: 'center', justifyContent: 'space-between' }}>
+            <Dropdown open={mainMenuOpen} onOpenChange={handleMainMenuOpenChange}>
+              <MenuButton slots={{ root: IconButton }} /* slotProps={{ root: { variant: 'plain' } }} */>
+                <MoreVertIcon sx={{ fontSize: 'xl' }} />
+              </MenuButton>
+              <Menu placement='bottom-start' disablePortal sx={{ minWidth: 280 }}>
 
-              {/*{dcHasEligible && <Typography level='body-sm' textAlign='center' my={1}>All services</Typography>}*/}
-              {dcHasEligible && (
-                <MenuItem onClick={joyKeepPopup((event) => setDcMenuAnchor(dcMenuAnchor ? null : event.currentTarget))}>
-                  <ListItemDecorator />
-                  {/*<ListItemDecorator><ArrowForwardRoundedIcon /></ListItemDecorator>*/}
-                  All Services
-                  {/*<Box sx={{ color: 'text.tertiary' }}>({modelsServices.length})</Box>*/}
-                  <KeyboardArrowRightIcon sx={{ ml: 'auto' }} />
+                {/*{dcHasEligible && <Typography level='body-sm' textAlign='center' my={1}>All services</Typography>}*/}
+                <SubMenuItem label='All Services' minWidth={240} isMobile={isMobile}>
+                  <MenuItem disabled={isRefreshingAll} onClick={handleUpdateAllModels}>
+                    <ListItemDecorator>
+                      {isRefreshingAll ? <CircularProgress size='sm' /> : <RefreshIcon />}
+                    </ListItemDecorator>
+                    Update All Models
+                  </MenuItem>
+                  <MenuItem onClick={handleShowChangelog}>
+                    <ListItemDecorator><HistoryIcon /></ListItemDecorator>
+                    Updates
+                  </MenuItem>
+                  {dcHasEligible && <ListDivider>Direct Connection {dcStatus.enabled}/{dcStatus.eligible}</ListDivider>}
+                  {dcHasEligible && (
+                    <MenuItem disabled={dcAllEnabled} onClick={handleEnableAllDC}>
+                      {/*<ListItemDecorator><VisibilityIcon /></ListItemDecorator>*/}
+                      Enable for all
+                    </MenuItem>
+                  )}
+                  {dcHasEligible && (
+                    <MenuItem disabled={dcNoneEnabled} onClick={handleDisableAllDC}>
+                      {/*<ListItemDecorator><VisibilityOffIcon /></ListItemDecorator>*/}
+                      Disable for all
+                    </MenuItem>
+                  )}
+                </SubMenuItem>
+
+                {/* X Models */}
+                <ListDivider />
+                {/*<Typography level='body-sm' textAlign='center' my={2}>{activeService?.label ?? 'Service'} models</Typography>*/}
+
+                {/* Refresh Models */}
+                <MenuItem disabled={isRefreshing} onClick={handleRefreshModels}>
+                  <ListItemDecorator>
+                    {isRefreshing ? <CircularProgress size='sm' /> : <RefreshIcon />}
+                  </ListItemDecorator>
+                  {isRefreshing ? 'Refreshing...' : <>Update {activeService?.label ?? ''} Models</>}
                 </MenuItem>
-              )}
 
-              {/* X Models */}
-              <ListDivider />
-              {/*<Typography level='body-sm' textAlign='center' my={2}>{activeService?.label ?? 'Service'} models</Typography>*/}
+                {/* Reset All Parameters */}
+                <MenuItem disabled={!hasServiceCustomizations} onClick={handleResetAllParameters}>
+                  <ListItemDecorator><RestoreIcon /></ListItemDecorator>
+                  Reset Customizations
+                </MenuItem>
 
-              {/* Refresh Models */}
-              <MenuItem disabled={isRefreshing} onClick={handleRefreshModels}>
-                <ListItemDecorator>
-                  {isRefreshing ? <CircularProgress size='sm' /> : <RefreshIcon />}
-                </ListItemDecorator>
-                {isRefreshing ? 'Refreshing...' : <>Update {activeService?.label ?? ''} Models</>}
-              </MenuItem>
+                {/* Remove Cloned Models */}
+                <MenuItem disabled={!hasServiceClones} onClick={handleRemoveClones}>
+                  <ListItemDecorator><DeleteOutlineIcon /></ListItemDecorator>
+                  Remove Duplicated Models
+                </MenuItem>
 
-              {/* Reset All Parameters */}
-              <MenuItem onClick={handleResetAllParameters}>
-                <ListItemDecorator><RestoreIcon /></ListItemDecorator>
-                Remove Customizations
-              </MenuItem>
+                {/* Vendor Setup Guide (big-agi.com/docs) */}
+                {!!activeServiceDocsUrl && (
+                  <MenuItem component='a' href={activeServiceDocsUrl} target='_blank'>
+                    {/*<ListItemDecorator><HelpOutlineRoundedIcon /></ListItemDecorator>*/}
+                    <ListItemDecorator />
+                    {activeService?.label ?? 'Service'} setup guide
+                    <LaunchIcon sx={{ ml: 'auto', fontSize: 16, opacity: 0.7 }} />
+                  </MenuItem>
+                )}
 
-              {/* Remove Cloned Models */}
-              <MenuItem onClick={handleRemoveClones}>
-                <ListItemDecorator><DeleteOutlineIcon /></ListItemDecorator>
-                Remove Duplicated Models
-              </MenuItem>
+                <ListDivider />
 
-              <MenuItem onClick={joyKeepPopup((event: any) => setVisMenuAnchor(visMenuAnchor ? null : event.currentTarget))}>
-                <ListItemDecorator />
-                Visibility
-                <KeyboardArrowRightIcon sx={{ ml: 'auto' }} />
-              </MenuItem>
+                {/* View toggles */}
+                <MenuItem onClick={joyKeepPopup(() => setShowModelsFn(!showModelsFn))}>
+                  <ListItemDecorator><Checkbox color='neutral' checked={showModelsFn} /></ListItemDecorator>
+                  Show Function Support (DEV)
+                </MenuItem>
+                <MenuItem onClick={joyKeepPopup(() => setStarredOnTop(!starredOnTop))}>
+                  <ListItemDecorator><Checkbox color='neutral' checked={starredOnTop} /></ListItemDecorator>
+                  Show Starred on Top
+                </MenuItem>
 
-              <ListDivider />
+                <ListDivider />
 
-              {/* View toggles */}
-              <MenuItem onClick={joyKeepPopup(() => setShowModelsHidden(!showModelsHidden))}>
-                <ListItemDecorator><Checkbox color='neutral' checked={showModelsHidden} /></ListItemDecorator>
-                View Hidden Models
-              </MenuItem>
-              <MenuItem onClick={joyKeepPopup(() => setStarredOnTop(!starredOnTop))}>
-                <ListItemDecorator><Checkbox color='neutral' checked={starredOnTop} /></ListItemDecorator>
-                View Starred on Top
-              </MenuItem>
+                <MenuItem onClick={joyKeepPopup(() => setShowModelsHidden(!showModelsHidden))}>
+                  <ListItemDecorator><Checkbox color='neutral' checked={showModelsHidden} /></ListItemDecorator>
+                  View Hidden Models
+                </MenuItem>
 
-            </Menu>
-          </Dropdown>
+                <SubMenuItem label='Visibility' minWidth={160} isMobile={isMobile}>
+                  <MenuItem onClick={handleShowAllModels}>
+                    <ListItemDecorator><VisibilityIcon /></ListItemDecorator>
+                    Show All
+                  </MenuItem>
+                  <MenuItem onClick={handleHideAllModels}>
+                    <ListItemDecorator><VisibilityOffIcon /></ListItemDecorator>
+                    Hide All
+                  </MenuItem>
+                  {activeHasFreeLLMs && <ListDivider />}
+                  {activeHasFreeLLMs && <MenuItem onClick={handleShowOnlyFree}>
+                    <ListItemDecorator><PhGift /></ListItemDecorator>
+                    Only Free
+                  </MenuItem>}
+                  {activeHasFreeLLMs && <MenuItem onClick={handleShowOnlyPaid}>
+                    <ListItemDecorator />
+                    Only Paid
+                  </MenuItem>}
+                  <ListDivider />
+                  <MenuItem onClick={handleResetVisibility}>
+                    <ListItemDecorator><RestoreIcon /></ListItemDecorator>
+                    Reset
+                  </MenuItem>
+                </SubMenuItem>
 
-          {/* DC submenu */}
-          {!!dcMenuAnchor && <CloseablePopup menu anchorEl={dcMenuAnchor} onClose={() => setDcMenuAnchor(null)} placement='right-start' zIndex={themeZIndexOverMobileDrawer} minWidth={220}>
-            <ListDivider>Direct Connection {dcStatus.enabled}/{dcStatus.eligible}</ListDivider>
-            <MenuItem disabled={dcAllEnabled} onClick={handleEnableAllDC}>
-              {/*<ListItemDecorator><VisibilityIcon /></ListItemDecorator>*/}
-              Enable for all
-            </MenuItem>
-            <MenuItem disabled={dcNoneEnabled} onClick={handleDisableAllDC}>
-              {/*<ListItemDecorator><VisibilityOffIcon /></ListItemDecorator>*/}
-              Disable for all
-            </MenuItem>
-          </CloseablePopup>}
+              </Menu>
+            </Dropdown>
 
-          {/* Visibility submenu */}
-          {!!visMenuAnchor && <CloseablePopup menu anchorEl={visMenuAnchor} onClose={() => setVisMenuAnchor(null)} placement='right-start' zIndex={themeZIndexOverMobileDrawer}>
-            <MenuItem onClick={handleShowAllModels}>
-              <ListItemDecorator><VisibilityIcon /></ListItemDecorator>
-              Show All
-            </MenuItem>
-            <MenuItem onClick={handleHideAllModels}>
-              <ListItemDecorator><VisibilityOffIcon /></ListItemDecorator>
-              Hide All
-            </MenuItem>
-            {activeHasFreeLLMs && <ListDivider />}
-            {activeHasFreeLLMs && <MenuItem onClick={handleShowOnlyFree}>
-              <ListItemDecorator><PhGift /></ListItemDecorator>
-              Only Free
-            </MenuItem>}
-            {activeHasFreeLLMs && <MenuItem onClick={handleShowOnlyPaid}>
-              <ListItemDecorator />
-              Only Paid
-            </MenuItem>}
-            <ListDivider />
-            <MenuItem onClick={handleResetVisibility}>
-              <ListItemDecorator><RestoreIcon /></ListItemDecorator>
-              Reset Default Visibility
-            </MenuItem>
-          </CloseablePopup>}
-
-        </Box>
+          </Box>
+        </SubMenuHost>
       );
 
     return undefined;
-  }, [activeHasFreeLLMs, activeService?.label, dcAllEnabled, dcHasEligible, dcMenuAnchor, dcNoneEnabled, dcStatus.eligible, dcStatus.enabled, handleDisableAllDC, handleEnableAllDC, handleHideAllModels, handleMainMenuOpenChange, handleRefreshModels, handleRemoveClones, handleResetAllParameters, handleResetVisibility, handleShowAllModels, handleShowOnlyFree, handleShowOnlyPaid, handleShowWizard, hasAnyServices, hasLLMs, isMobile, isRefreshing, isTabSetup, isTabWizard, mainMenuOpen, setShowModelsHidden, setStarredOnTop, showModelsHidden, starredOnTop, visMenuAnchor]);
+  }, [activeHasFreeLLMs, activeService?.label, activeServiceDocsUrl, dcAllEnabled, dcHasEligible, dcNoneEnabled, dcStatus.eligible, dcStatus.enabled, handleDisableAllDC, handleEnableAllDC, handleHideAllModels, handleMainMenuOpenChange, handleRefreshModels, handleRemoveClones, handleResetAllParameters, handleResetVisibility, handleShowAllModels, handleShowChangelog, handleShowOnlyFree, handleShowOnlyPaid, handleShowWizard, handleUpdateAllModels, hasAnyServices, hasLLMs, hasServiceClones, hasServiceCustomizations, isMobile, isRefreshing, isRefreshingAll, isTabSetup, isTabWizard, mainMenuOpen, setShowModelsFn, setShowModelsHidden, setStarredOnTop, showModelsFn, showModelsHidden, starredOnTop, subMenuHost]);
 
 
   // custom done button for wizard mode (combines start and close buttons)
@@ -377,6 +446,30 @@ export function ModelsConfiguratorModal(props: {
   }, [hasLLMs, unsavedWizardProviders, isMobile, isTabWizard, handleShowAdvanced]);
 
 
+  // title control on the setup tab, parked: the selector row's 'Update all models' and the menu item cover it
+  // const uiComplexityMode = useUIComplexityMode();
+  // const titleUpdateAllButton = React.useMemo(() => {
+  //   if (modelsServices.length < 2 || !isTabSetup || uiComplexityMode !== 'extra')
+  //     return null;
+  //   const decorator = isRefreshingAll ? <CircularProgress size='sm' /> : <RefreshIcon />;
+  //   // in the title bar's button cluster (right), the 'More Services' / 'Quick Setup' look
+  //   return isMobile
+  //     ? <IconButton variant='outlined' color='neutral' disabled={isRefreshingAll} onClick={handleUpdateAllModels} aria-label='Update all models' sx={{ my: -1, backgroundColor: 'background.popup' }}>{decorator}</IconButton>
+  //     : <Button variant='outlined' color='neutral' disabled={isRefreshingAll} onClick={handleUpdateAllModels} startDecorator={decorator} sx={{ my: -1, backgroundColor: 'background.popup' }}>Update all</Button>;
+  // }, [handleUpdateAllModels, isMobile, isRefreshingAll, isTabSetup, modelsServices.length, uiComplexityMode]);
+
+  const updateAllButton = React.useMemo(() => (
+    <Button
+      disabled={refreshBatch.running}
+      startDecorator={refreshBatch.running ? <CircularProgress sx={{ '--CircularProgress-size': '16px' }} /> : <RefreshIcon />}
+      onClick={handleUpdateAllModels}
+      sx={{ minWidth: 140, flex: 1 }}
+    >
+      {refreshBatch.running ? `${Math.min(refreshBatch.done + 1, refreshBatch.total)} of ${refreshBatch.total}...` : 'Update all'}
+    </Button>
+  ), [handleUpdateAllModels, refreshBatch.done, refreshBatch.running, refreshBatch.total]);
+
+
   // Explainer section
   const isMissingModels = useModelsZeroState();
   const { novel: isFirstVisit, touch: markVisited } = useUICounter('models-setup-first-visit', 1);
@@ -411,7 +504,7 @@ export function ModelsConfiguratorModal(props: {
         unfilterBackdrop
         sx={{ maxWidth: '28rem' }}
         // closeText='Got It'
-        closeText='I understand'
+        closeText='I have a key'
       >
         <Box sx={{
           py: 3,
@@ -454,6 +547,11 @@ export function ModelsConfiguratorModal(props: {
           <AppBreadcrumbs.Leaf><b>Setup AI Models</b></AppBreadcrumbs.Leaf>
           {/*<AppBreadcrumbs.Leaf>Setup <b>AI Models</b></AppBreadcrumbs.Leaf>*/}
         </AppBreadcrumbs>
+      ) : isTabChangelog ? (
+        <AppBreadcrumbs size='md' rootTitle='Configure'>
+          <AppBreadcrumbs.Link color='neutral' textColor='text.primary' underline='hover' href='#' onClick={handleBreadcrumbSetup}>AI Models</AppBreadcrumbs.Link>
+          <AppBreadcrumbs.Leaf><b>Updates</b></AppBreadcrumbs.Leaf>
+        </AppBreadcrumbs>
       ) : (
         // <>Configure <b>AI Models</b></>
         <AppBreadcrumbs size='md' rootTitle='Configure'>
@@ -470,6 +568,7 @@ export function ModelsConfiguratorModal(props: {
           {/*</Box>*/}
         </AppBreadcrumbs>
       )}
+      // titleEndDecorator={titleUpdateAllButton} // parked: the selector row's 'Update all models' and the menu item cover it
       open onClose={optimaActions().closeModels}
       // darkBottomClose={!isTabWizard}
       hideBottomClose={isTabWizard}
@@ -478,7 +577,7 @@ export function ModelsConfiguratorModal(props: {
       animateEnter={!hasLLMs}
       unfilterBackdrop
       autoOverflow={true /* forces some shrinkage of the contents (ModelsList) */}
-      fullscreen={isMobile ? 'button' : undefined} // NOTE: was disabled because on mobile there's one screen with a stretch issue - but can't reproduce
+      fullscreen={isMobile ? true : undefined} // mobile: always maximized (no toggle)
     >
 
       {isTabWizard && (
@@ -491,8 +590,9 @@ export function ModelsConfiguratorModal(props: {
         />
       )}
 
-      {isTabSetup && <ModelsServiceSelector modelsServices={modelsServices} selectedServiceId={activeServiceId} setSelectedServiceId={setConfServiceId} onDeleteService={handleDeleteService} onSwitchToWizard={handleShowWizard} />}
-      {isTabSetup && <Divider sx={activeService ? undefined : { visibility: 'hidden' }} />}
+      {(isTabSetup || isTabChangelog) && <ModelsServiceSelector modelsServices={modelsServices} selectedServiceId={isTabChangelog ? ALL_SERVICES_OPTION_ID : activeServiceId} setSelectedServiceId={handleSelectService} onDeleteService={handleDeleteService} onSwitchToWizard={handleShowWizard} allServicesControl={updateAllButton} />}
+      {(isTabSetup || isTabChangelog) && <Divider sx={(activeService || isTabChangelog) ? undefined : { visibility: 'hidden' }} />}
+
       {isTabSetup && (
         <Box sx={{ display: 'grid', gap: 'var(--Card-padding)' }}>
           {activeService
@@ -537,6 +637,8 @@ export function ModelsConfiguratorModal(props: {
           }}
         />
       )}
+
+      {isTabChangelog && <ModelsChangelogPanel modelsServices={modelsServices} isMobile={isMobile} onConfigureService={handleSelectService} />}
 
     </GoodModal>
   );

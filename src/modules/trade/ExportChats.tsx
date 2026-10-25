@@ -2,14 +2,16 @@ import * as React from 'react';
 
 import { Box, Button, Grid, Typography } from '@mui/joy';
 import DoneIcon from '@mui/icons-material/Done';
-import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 
-import { getBackendCapabilities } from '~/modules/backend/store-backend-capabilities';
+import { hasServerConf } from '~/common/app.serverconf';
 
 import type { DConversationId } from '~/common/stores/chat/chat.conversation';
 import { GoodTooltip } from '~/common/components/GoodTooltip';
 import { KeyStroke } from '~/common/components/KeyStroke';
 import { getConversation } from '~/common/stores/chat/store-chats';
+import { humanReadableBytes } from '~/common/util/textUtils';
+import { ExportClaudeCode } from './claude-code/ExportClaudeCode';
 
 import { ChatLinkExport } from './link/ChatLinkExport';
 import { FlashBackup } from './BackupRestore';
@@ -29,12 +31,14 @@ export type ExportConfig = {
 export function ExportChats(props: { config: ExportConfig, onClose: () => void }) {
 
   // state
-  const [downloadedJSONState, setDownloadedJSONState] = React.useState<'ok' | 'fail' | null>(null);
-  const [downloadedMarkdownState, setDownloadedMarkdownState] = React.useState<'ok' | 'fail' | null>(null);
-  const [downloadedAllState, setDownloadedAllState] = React.useState<'ok' | 'fail' | null>(null);
+  const [downloadedJSONState, setDownloadedJSONState] = React.useState<'busy' | 'ok' | 'fail' | null>(null);
+  const [downloadedMarkdownState, setDownloadedMarkdownState] = React.useState<'busy' | 'ok' | 'fail' | null>(null);
+  const [downloadedAllState, setDownloadedAllState] = React.useState<'busy' | 'ok' | 'fail' | null>(null);
+  const [downloadAllError, setDownloadAllError] = React.useState<string | null>(null);
+  const [downloadAllInfo, setDownloadAllInfo] = React.useState<string | null>(null);
 
   // external state
-  const enableSharing = getBackendCapabilities().hasDB;
+  const enableSharing = hasServerConf('hasDB');
 
   // derived state
   const { exportAll } = props.config;
@@ -43,27 +47,42 @@ export function ExportChats(props: { config: ExportConfig, onClose: () => void }
   // download chats
 
   const handleDownloadConversationJSON = () => {
-    if (!props.config.conversationId) return;
+    if (!props.config.conversationId || downloadedJSONState === 'busy') return;
     const conversation = getConversation(props.config.conversationId);
     if (!conversation) return;
+    setDownloadedJSONState('busy');
     downloadSingleChat(conversation, 'json')
       .then(() => setDownloadedJSONState('ok'))
-      .catch(() => setDownloadedJSONState('fail'));
+      .catch((error: any) => setDownloadedJSONState(error?.name === 'AbortError' ? null : 'fail'));
   };
 
   const handleDownloadConversationMarkdown = () => {
-    if (!props.config.conversationId) return;
+    if (!props.config.conversationId || downloadedMarkdownState === 'busy') return;
     const conversation = getConversation(props.config.conversationId);
     if (!conversation) return;
+    setDownloadedMarkdownState('busy');
     downloadSingleChat(conversation, 'markdown')
       .then(() => setDownloadedMarkdownState('ok'))
-      .catch(() => setDownloadedMarkdownState('fail'));
+      .catch((error: any) => setDownloadedMarkdownState(error?.name === 'AbortError' ? null : 'fail'));
   };
 
   const handleDownloadAllConversationsJSON = () => {
+    if (downloadedAllState === 'busy') return;
+    setDownloadedAllState('busy');
+    setDownloadAllError(null);
+    setDownloadAllInfo(null);
     downloadAllJsonV1B()
-      .then(() => setDownloadedAllState('ok'))
-      .catch(() => setDownloadedAllState('fail'));
+      .then(({ conversationCount, sizeBytes }) => {
+        setDownloadedAllState('ok');
+        setDownloadAllInfo(`Saved ${conversationCount.toLocaleString()} chats · ${humanReadableBytes(sizeBytes)}`);
+      })
+      .catch((error: any) => {
+        // user closed the save dialog: back to idle, not an error
+        if (error?.name === 'AbortError')
+          return setDownloadedAllState(null);
+        setDownloadedAllState('fail');
+        setDownloadAllError(error?.message || 'Unknown error saving the backup.');
+      });
   };
 
 
@@ -85,9 +104,9 @@ export function ExportChats(props: { config: ExportConfig, onClose: () => void }
 
           <GoodTooltip title={<KeyStroke variant='solid' combo='Ctrl + S' />}>
             <Button
-              variant='soft' disabled={!hasConversation}
+              variant='soft' disabled={!hasConversation || downloadedJSONState === 'busy'} loading={downloadedJSONState === 'busy'}
               color={downloadedJSONState === 'ok' ? 'success' : downloadedJSONState === 'fail' ? 'warning' : 'primary'}
-              endDecorator={downloadedJSONState === 'ok' ? <DoneIcon /> : downloadedJSONState === 'fail' ? '✘' : <FileDownloadIcon />}
+              endDecorator={downloadedJSONState === 'ok' ? <DoneIcon /> : downloadedJSONState === 'fail' ? '✘' : <FileDownloadOutlinedIcon />}
               sx={{ minWidth: 240, justifyContent: 'space-between' }}
               onClick={handleDownloadConversationJSON}
             >
@@ -96,9 +115,9 @@ export function ExportChats(props: { config: ExportConfig, onClose: () => void }
           </GoodTooltip>
 
           <Button
-            variant='soft' disabled={!hasConversation}
+            variant='soft' disabled={!hasConversation || downloadedMarkdownState === 'busy'} loading={downloadedMarkdownState === 'busy'}
             color={downloadedMarkdownState === 'ok' ? 'success' : downloadedMarkdownState === 'fail' ? 'warning' : 'primary'}
-            endDecorator={downloadedMarkdownState === 'ok' ? <DoneIcon /> : downloadedMarkdownState === 'fail' ? '✘' : <FileDownloadIcon />}
+            endDecorator={downloadedMarkdownState === 'ok' ? <DoneIcon /> : downloadedMarkdownState === 'fail' ? '✘' : <FileDownloadOutlinedIcon />}
             sx={{ minWidth: 240, justifyContent: 'space-between' }}
             onClick={handleDownloadConversationMarkdown}
           >
@@ -122,6 +141,8 @@ export function ExportChats(props: { config: ExportConfig, onClose: () => void }
           {/*  Share Copy · ShareGPT*/}
           {/*</Button>*/}
 
+          <ExportClaudeCode conversationId={props.config.conversationId} getConversation={getConversation} />
+
         </Box>
       </Grid>
 
@@ -135,14 +156,26 @@ export function ExportChats(props: { config: ExportConfig, onClose: () => void }
             </Typography>
 
             <Button
-              variant='soft'
+              variant='soft' disabled={downloadedAllState === 'busy'} loading={downloadedAllState === 'busy'}
               color={downloadedAllState === 'ok' ? 'success' : downloadedAllState === 'fail' ? 'warning' : 'primary'}
-              endDecorator={downloadedAllState === 'ok' ? <DoneIcon /> : downloadedAllState === 'fail' ? '✘' : <FileDownloadIcon />}
+              endDecorator={downloadedAllState === 'ok' ? <DoneIcon /> : downloadedAllState === 'fail' ? '✘' : <FileDownloadOutlinedIcon />}
               sx={{ minWidth: 240, justifyContent: 'space-between' }}
               onClick={handleDownloadAllConversationsJSON}
             >
               Backup All Chats
             </Button>
+
+            {!!downloadAllInfo && (
+              <Typography level='body-xs' color='success' sx={{ maxWidth: 240 }}>
+                {downloadAllInfo}
+              </Typography>
+            )}
+
+            {!!downloadAllError && (
+              <Typography level='body-xs' color='danger' sx={{ maxWidth: 240 }}>
+                {downloadAllError}
+              </Typography>
+            )}
 
             {/* Insert to Download a Flash */}
             <FlashBackup />

@@ -14,7 +14,7 @@ import { workspaceActions } from '~/common/stores/workspace/store-client-workspa
 import { workspaceForConversationIdentity } from '~/common/stores/workspace/workspace.types';
 
 import { DMessage, DMessageId, DMessageMetadata, MESSAGE_FLAG_AIX_SKIP, messageHasUserFlag } from './chat.message';
-import { DMessageFragment, DMessageFragmentId, isVoidThinkingFragment } from './chat.fragments';
+import { isVoidThinkingFragment } from './chat.fragments';
 import { V3StoreDataToHead, V4ToHeadConverters } from './chats.converters';
 import { conversationTitle, createDConversation, DConversation, DConversationId, duplicateDConversation } from './chat.conversation';
 import { estimateTokensForFragments } from './chat.tokens';
@@ -45,10 +45,7 @@ export interface ChatActions {
   historyView: (cId: DConversationId) => Readonly<DMessage[]> | undefined;
   appendMessage: (cId: DConversationId, message: DMessage) => void;
   deleteMessage: (cId: DConversationId, mId: DMessageId) => void;
-  editMessage: (cId: DConversationId, mId: DMessageId, update: Partial<DMessage> | ((message: DMessage) => Partial<DMessage>), removePendingState: boolean, touchUpdated: boolean) => void;
-  appendMessageFragment: (cId: DConversationId, mId: DMessageId, fragment: DMessageFragment, removePendingState: boolean, touchUpdated: boolean) => void;
-  deleteMessageFragment: (cId: DConversationId, mId: DMessageId, fId: DMessageFragmentId, removePendingState: boolean, touchUpdated: boolean) => void;
-  replaceMessageFragment: (cId: DConversationId, mId: DMessageId, fId: DMessageFragmentId, newFragment: DMessageFragment, removePendingState: boolean, touchUpdated: boolean) => void;
+  editMessage: (cId: DConversationId, mId: DMessageId, update: Partial<DMessage> | ((message: DMessage) => (Partial<DMessage> | false)), removePendingState: boolean, touchUpdated: boolean) => void;
   updateMetadata: (cId: DConversationId, mId: DMessageId, metadataDelta: Partial<DMessageMetadata>, touchUpdated?: boolean) => void;
   setSystemPurposeId: (cId: DConversationId, personaId: SystemPurposeId) => void;
   setAutoTitle: (cId: DConversationId, autoTitle: string) => void;
@@ -58,19 +55,18 @@ export interface ChatActions {
   title: (cId: DConversationId) => string | undefined;
 
   // utility function
-  _editConversation: (cId: DConversationId, update: Partial<DConversation> | ((conversation: DConversation) => Partial<DConversation>)) => void;
+  _editConversation: (cId: DConversationId, update: Partial<DConversation> | ((conversation: DConversation) => (Partial<DConversation> | false))) => void;
 }
 
 type ConversationsStore = ChatState & ChatActions;
 
-const defaultConversations: DConversation[] = [createDConversation()];
 
 export const useChatStore = create<ConversationsStore>()(/*devtools(*/
   persist(
     (_set, _get) => ({
 
       // default state
-      conversations: defaultConversations,
+      conversations: [], // we used to have a default conversation here for zero-state, but we moved it to the merge function
 
       prependNewConversation: (personaId: SystemPurposeId | undefined, isIncognito: boolean): DConversationId => {
         const newConversation = createDConversation(personaId);
@@ -89,7 +85,7 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
       /** Used by:
        * - openAndLoadConversations (via DataAtRestV1.recreateConversation),
        * - LinkChatViewer(from RestV1),
-       * - ImportChats.handleChatGptLoad(H)
+       * - ImportChats (JSON/backup file import)
        */
       importConversation: (conversation: DConversation, preventClash: boolean): DConversationId => {
         const { conversations } = _get();
@@ -168,17 +164,18 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
 
       // within a conversation
 
-      _editConversation: (conversationId: DConversationId, update: Partial<DConversation> | ((conversation: DConversation) => Partial<DConversation>)) =>
+      _editConversation: (conversationId: DConversationId, update: Partial<DConversation> | ((conversation: DConversation) => (Partial<DConversation> | false))) => {
+        const conversation = _get().conversations.find(c => c.id === conversationId);
+        if (!conversation) return;
+
+        // an updater may decline (false): no state change, no persistence
+        const conversationUpdate = typeof update === 'function' ? update(conversation) : update;
+        if (!conversationUpdate) return;
+
         _set(state => ({
-          conversations: state.conversations.map((conversation): DConversation =>
-            conversation.id === conversationId
-              ? {
-                ...conversation,
-                ...(typeof update === 'function' ? update(conversation) : update),
-              }
-              : conversation,
-          ),
-        })),
+          conversations: state.conversations.map((c): DConversation => c.id === conversationId ? { ...c, ...conversationUpdate } : c),
+        }));
+      },
 
       isIncognito: (conversationId: DConversationId): boolean | undefined =>
         _get().conversations.find(_c => _c.id === conversationId)?._isIncognito ?? undefined,
@@ -301,7 +298,7 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
 
           return {
             messages,
-            tokenCount: messages.reduce((sum, message) => sum + 4 + message.tokenCount || 0, 3),
+            tokenCount: _sumMessagesTokenCounts(messages),
             updated: Date.now(),
           };
         }),
@@ -316,24 +313,32 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
 
           return {
             messages,
-            tokenCount: messages.reduce((sum, message) => sum + 4 + message.tokenCount || 0, 3),
+            tokenCount: _sumMessagesTokenCounts(messages),
             updated: Date.now(),
           };
         }),
 
-      editMessage: (conversationId: DConversationId, messageId: DMessageId, update: Partial<DMessage> | ((message: DMessage) => Partial<DMessage>), removePendingState: boolean, touchUpdated: boolean) =>
+      editMessage: (conversationId: DConversationId, messageId: DMessageId, update: Partial<DMessage> | ((message: DMessage) => (Partial<DMessage> | false)), removePendingState: boolean, touchUpdated: boolean) =>
         _get()._editConversation(conversationId, conversation => {
 
+          let didUpdate = false;
           const messages = conversation.messages.map((message): DMessage => {
-            if (message.id !== messageId)
-              return message;
 
+            // non-target messages pass through
+            if (message.id !== messageId) return message;
+
+            // verify real update, or pass through
+            const messageUpdate = typeof update === 'function' ? update(message) : update;
+            if (!messageUpdate) return message;
+
+            didUpdate = true;
             const updatedMessage: DMessage = {
               ...message,
-              ...(typeof update === 'function' ? update(message) : update),
-              ...(touchUpdated && { updated: Date.now() }),
+              ...messageUpdate,
+              ...(touchUpdated && { updated: Date.now() }), // update Message timestamp if requested
             };
 
+            // [optimization] pending state is removed at the end, and indicator of message readiness
             if (removePendingState)
               delete updatedMessage.pendingIncomplete;
 
@@ -343,51 +348,19 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
             return updatedMessage;
           });
 
+          // skip conversation update if no message changes
+          if (!didUpdate) return false;
+
           // [workspaces]
           // NOTE: we assume that no workspace side-effect-producing change is performed
 
           return {
             messages,
-            tokenCount: messages.reduce((sum, message) => sum + 4 + message.tokenCount || 0, 3),
+            tokenCount: _sumMessagesTokenCounts(messages),
             updated: touchUpdated ? Date.now() : conversation.updated,
           };
         }),
 
-
-      appendMessageFragment: (conversationId: DConversationId, messageId: DMessageId, fragment: DMessageFragment, removePendingState: boolean, touchUpdated: boolean) => {
-        _get().editMessage(conversationId, messageId, message => ({
-          fragments: [...message.fragments, fragment],
-        }), removePendingState, touchUpdated);
-
-        // [workspace]
-        // Note: in the future when we have side-effect appends (e.g. new Attachment/Docs/Etc) we may
-        // need implementation of the fragment methods here
-      },
-
-      deleteMessageFragment: (conversationId: DConversationId, messageId: DMessageId, fragmentId: DMessageFragmentId, removePendingState: boolean, touchUpdated: boolean) =>
-        _get().editMessage(conversationId, messageId, message => ({
-          fragments: message.fragments.filter(f => f.fId !== fragmentId),
-        }), removePendingState, touchUpdated),
-
-      replaceMessageFragment: (conversationId: DConversationId, messageId: DMessageId, fragmentId: DMessageFragmentId, newFragment: DMessageFragment, removePendingState: boolean, touchUpdated: boolean) =>
-        _get().editMessage(conversationId, messageId, message => {
-
-          // Warn if the fragment is not found
-          const fragmentIndex = message.fragments.findIndex(f => f.fId === fragmentId);
-          if (fragmentIndex < 0) {
-            console.error(`replaceFragment: fragment not found for ID ${fragmentId}`);
-            return {};
-          }
-
-          // Replace the fragment
-          return {
-            fragments: message.fragments.map((fragment, index) =>
-              (index === fragmentIndex)
-                ? { ...newFragment } // force the object tree to change, just in case the contents changed but not the object reference
-                : fragment,
-            ),
-          };
-        }, removePendingState, touchUpdated),
 
       updateMetadata: (conversationId: DConversationId, messageId: DMessageId, metadataDelta: Partial<DMessageMetadata>, touchUpdated: boolean = true) => {
         _get()._editConversation(conversationId, conversation => {
@@ -415,6 +388,7 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
           {
             systemPurposeId: personaId,
           }),
+
 
       setAutoTitle: (conversationId: DConversationId, autoTitle: string) =>
         _get()._editConversation(conversationId,
@@ -484,13 +458,17 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
        */
       merge: (persistedState, currentState: ConversationsStore): ConversationsStore => {
 
-        // concatenate-merge conversations reloaded from storage
+        // insert all stored conversations [ current (if any), ...stored ]
         const mergedConversations = [...(currentState?.conversations || [])];
         if (persistedState && typeof persistedState === 'object' && 'conversations' in persistedState) {
           const storedConversations = persistedState.conversations as ChatState['conversations'];
-          if (storedConversations.length)
+          if (storedConversations?.length)
             mergedConversations.push(...storedConversations);
         }
+
+        // zero-state: prepend an empty conversations if there are none
+        if (!mergedConversations.length)
+          mergedConversations.unshift(createDConversation(undefined));
 
         return {
           // default shallow merge
@@ -539,10 +517,20 @@ export const useChatStore = create<ConversationsStore>()(/*devtools(*/
 
 // Convenience function to update a set of messages, using the current chatLLM
 function updateMessagesTokenCounts(messages: DMessage[], forceUpdate: boolean, debugFrom: string): number {
+
+  // no messages: 0, not the base overhead (0 = not yet calculated; keeps empty chats free of a phantom count)
+  if (!messages.length)
+    return 0;
+
   const chatLLMId = getChatLLMId();
   return 3 + messages.reduce((sum, message) => {
     return 4 + updateMessageTokenCount(message, chatLLMId, forceUpdate, debugFrom) + sum;
   }, 0);
+}
+
+// Convenience function to sum already-computed message token counts, same formula as above
+function _sumMessagesTokenCounts(messages: DMessage[]): number {
+  return !messages.length ? 0 : messages.reduce((sum, { tokenCount }) => sum + 4 + (tokenCount || 0), 3);
 }
 
 // Convenience function to count the tokens in a DMessage object

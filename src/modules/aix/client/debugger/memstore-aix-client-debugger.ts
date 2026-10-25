@@ -8,6 +8,7 @@ import type { AixAPI_Context_ChatGenerate } from '../../server/api/aix.wiretypes
 //
 
 const DEFAULT_FRAMES_COUNT = 10;
+const PARTICLES_FLUSH_MS = 200; // particles land in one store update per interval, not one per particle (N-way Beams)
 
 // Context names that should NOT auto-select when created (background operations)
 const BACKGROUND_CONTEXT_NAMES = [
@@ -68,6 +69,9 @@ export type AixFrameId = number;
 
 let _lastInMemoryFrameId = 1;
 
+let _pendingParticles = new Map<AixFrameId, AixClientDebugger.Particle[]>();
+let _pendingFlushTimerId: ReturnType<typeof setTimeout> | null = null;
+
 function _createAixClientDebuggerFrame(transport: AixClientDebugger.Transport, frameContext: AixClientDebugger.Context): AixClientDebugger.Frame {
   return {
     id: ++_lastInMemoryFrameId,
@@ -89,10 +93,14 @@ function _createAixClientDebuggerFrame(transport: AixClientDebugger.Transport, f
 
 /// Store ///
 
+export type AixDebuggerOpenKey = 'headers' | 'body' | 'particles';
+
 interface AixClientDebuggerState {
   frames: AixClientDebugger.Frame[];
   activeFrameId: AixFrameId | null;
   maxFrames: number;
+  // per-section open state for the current frame view
+  openStates: Partial<Record<AixDebuggerOpenKey, true>>;
   // AIX force disable streaming for all requests (separate from per-model llmForceNoStream)
   aixNoStreaming: boolean;
   // AIX next payload override - JSON string injected into requests after validation
@@ -111,6 +119,7 @@ interface AixClientDebuggerActions {
   setActiveFrame: (activeFrameId: AixFrameId | null) => void;
   setMaxFrames: (count: number) => void;
   clearHistory: () => void;
+  toggleOpenState: (key: AixDebuggerOpenKey) => void;
 }
 
 type AixClientDebuggerStore = AixClientDebuggerState & AixClientDebuggerActions;
@@ -122,6 +131,7 @@ export const useAixClientDebuggerStore = create<AixClientDebuggerStore>((_set) =
   frames: [],
   activeFrameId: null,
   maxFrames: DEFAULT_FRAMES_COUNT,
+  openStates: { headers: true, body: true }, // headers + body open by default; particles closed (heavy)
   aixNoStreaming: false,
   requestBodyOverrideJson: '',
 
@@ -135,11 +145,16 @@ export const useAixClientDebuggerStore = create<AixClientDebuggerStore>((_set) =
     // stealing focus from the main conversation request
     const isBackgroundOperation = (BACKGROUND_CONTEXT_NAMES as readonly string[]).includes(initialContext.contextName);
 
-    _set((state) => ({
-      frames: [newFrame, ...state.frames].slice(0, state.maxFrames),
-      // Auto-select if: no active frame yet, OR this is not a background operation
-      activeFrameId: (!state.activeFrameId || !isBackgroundOperation) ? newFrame.id : state.activeFrameId,
-    }));
+    _set(({ activeFrameId, frames, maxFrames }) => {
+      // Sticky selection: only snap to the new frame if the user was following latest (nothing selected, or the current selection is the previous top frame).
+      const previousLatestId = frames[0]?.id ?? null;
+      const isFollowingLatest = activeFrameId === null || activeFrameId === previousLatestId;
+      const shouldAutoSelect = isFollowingLatest && !isBackgroundOperation;
+      return {
+        frames: [newFrame, ...(frames)].slice(0, maxFrames),
+        activeFrameId: shouldAutoSelect ? newFrame.id : activeFrameId,
+      };
+    });
 
     return newFrame.id;
   },
@@ -160,21 +175,22 @@ export const useAixClientDebuggerStore = create<AixClientDebuggerStore>((_set) =
       }),
     })),
 
-  addParticle: (fId, particle, isAborted = false) =>
-    _set(state => ({
-      frames: state.frames.map(frame => frame.id !== fId ? frame : {
-        ...frame,
-        particles: [...frame.particles, particle],
-      }),
-    })),
+  addParticle: (fId, particle, isAborted = false) => {
+    const pending = _pendingParticles.get(fId);
+    if (pending) pending.push(particle);
+    else _pendingParticles.set(fId, [particle]);
+    _pendingFlushTimerId ??= setTimeout(_flushPendingParticles, PARTICLES_FLUSH_MS);
+  },
 
-  completeFrame: (fId) =>
+  completeFrame: (fId) => {
+    _flushPendingParticles(); // land the tail before marking complete
     _set(state => ({
       frames: state.frames.map(frame => frame.id !== fId ? frame : {
         ...frame,
         isComplete: true,
       }),
-    })),
+    }));
+  },
 
 
   // Client View actions
@@ -193,7 +209,33 @@ export const useAixClientDebuggerStore = create<AixClientDebuggerStore>((_set) =
     activeFrameId: null,
   }),
 
+  toggleOpenState: (key) => _set(state => {
+    const next = { ...state.openStates };
+    if (next[key]) delete next[key];
+    else next[key] = true;
+    return { openStates: next };
+  }),
+
 }));
+
+
+function _flushPendingParticles(): void {
+  if (_pendingFlushTimerId) {
+    clearTimeout(_pendingFlushTimerId);
+    _pendingFlushTimerId = null;
+  }
+  if (!_pendingParticles.size) return;
+  const batch = _pendingParticles;
+  _pendingParticles = new Map();
+
+  // frames evicted by maxFrames or clearHistory drop their particles without a store update
+  useAixClientDebuggerStore.setState(state => !state.frames.some(frame => batch.has(frame.id)) ? state : {
+    frames: state.frames.map(frame => {
+      const particles = batch.get(frame.id);
+      return !particles ? frame : { ...frame, particles: frame.particles.concat(particles) };
+    }),
+  });
+}
 
 
 export function aixClientDebuggerActions(): AixClientDebuggerActions {

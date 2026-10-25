@@ -1,0 +1,126 @@
+ # LLM Editorial Control Surface
+
+This document maps where Big-AGI has editorial control over per-model metadata (and therefore can guarantee fields like `pubDate`, curated `description`, `chatPrice`, `benchmark`, `parameterSpecs`, etc.) versus where it must rely on the vendor API's dynamic discovery (and therefore cannot guarantee them).
+
+For the forward-looking pipeline (extraction script, snapshot, website consumption, future schema extensions), see [LLM-models-catalog-pipeline.md](LLM-models-catalog-pipeline.md).
+
+
+## The `pubDate` field
+
+`pubDate?: string` (validated as `/^\d{8}$/`, e.g. `'20250929'`) is **optional** in the wire schema and on `DLLM`. It was added to:
+
+- `ModelDescription_schema` in `src/modules/llms/server/llm.server.types.ts` - the canonical wire type
+- `OrtVendorLookupResult` in the same file - so OpenRouter inherits it via `llmOrt*Lookup`
+- `DLLM` in `src/common/stores/llms/llms.types.ts` - the persisted client model
+
+### Where `pubDate` is guaranteed (always emitted)
+
+- **Editorial entries** in 12 hybrid/editorial vendors. Hand-curated, externally corroborated. Future entries in these arrays are expected to include `pubDate` - and Anthropic, Gemini, and Z.AI now **type-require** it (the model-def type intersects `& { pubDate: string }`).
+- **Anthropic 0-day placeholder** (`llmsAntCreatePlaceholderModel`): when the API surfaces an Anthropic model not in the editorial list, the placeholder uses the API's `created_at` ISO date, falling back to today via `formatPubDate()`.
+- **Gemini 0-day fallback** (`geminiModelToModelDescription`): when the API returns a Gemini model not in `_knownGeminiModels`, the converter falls back to today via `formatPubDate()` (Gemini API does not expose a creation timestamp).
+
+### Where `pubDate` is omitted (optional)
+
+- **Symlink entries** (`KnownLink`) - inherit the target's `pubDate` via the merge logic in `fromManualMapping`.
+- **Unknown variants resolved through `super`/`fallback`** in `fromManualMapping` for non-Anthropic/non-Gemini vendors - the field is left undefined rather than fabricated.
+- **Dynamic-only vendors** (OpenRouter, Novita, ChutesAI, FireworksAI, Azure, LM Studio, LocalAI, FastAPI, ArceeAI, LLMAPI) - no editorial knob; pubDate flows in only when the underlying lookup or upstream API populates it.
+- **TogetherAI** graduated to an id-keyed editorial patch map (`_togetherEditorialPubDates`, 2026-07-12) after its `created` proved to be endpoint churn (re-stamped on redeploys: DeepSeek-V4-Pro, released 2026-04-24, carried created=2026-07-12; 28/269 endpoints report 0, including the newest arrivals). `created` never feeds pubDate there; it only drives list order, with the editorial date as placement fallback.
+
+The rationale: today's date is a defensible 0-day proxy only when we know we're seeing a brand-new model the vendor just announced (Anthropic and Gemini's "discovery via official model list" paths). For arbitrary dynamic vendors, fabricating today would mark old/well-known models as new - misleading. Better to omit.
+
+### Propagation chain
+
+- `fromManualMapping()` in `src/modules/llms/server/models.mappings.ts` - copies the field for OAI-style vendors when present
+- `geminiModelToModelDescription()` in `src/modules/llms/server/gemini/gemini.models.ts` - copies for Gemini, falls back to today for unknowns
+- `llmsAntCreatePlaceholderModel()` in `src/modules/llms/server/anthropic/anthropic.models.ts` - emits from API `created_at` (or today)
+- `_mergeLookup()` in `src/modules/llms/server/openai/models/openrouter.models.ts` - merges for OpenRouter cross-vendor inheritance
+- `_createDLLMFromModelDescription()` in `src/modules/llms/llm.client.ts` - copies onto the persisted DLLM when present
+- `formatPubDate()` helper in `src/modules/llms/server/models.mappings.ts` - shared `'YYYYMMDD'` formatter for the 0-day-fillable paths
+
+### Semantics
+
+`pubDate` is the **earliest public availability** of the model - the date on which the vendor first made this specific model usable by external users via any channel (consumer app, web, console, API, partner, open-weights upload).
+
+It is **not**:
+
+- The date Big-AGI added the entry to its catalog (Ollama uses `added` for that)
+- The training-data cutoff (proposed but not implemented; see `src/common/stores/llms/llms.types.next.ts:217`)
+- The date the model snapshot was built (suffixes like `-1212` may refer to build dates, but `pubDate` tracks public availability)
+
+### Resolution rules (when sources conflict)
+
+1. **Date-suffixed model IDs**: when the suffix matches a documented announcement, the suffix is canonical (vendor convention). xAI, OpenAI, and Mistral all use suffixes that closely track release dates.
+2. **Anthropic exception**: Anthropic's date suffixes are typically the **snapshot/training-cutoff date, not the public release date**. For example, `claude-3-7-sonnet-20250219` was released on 2025-02-24, `claude-opus-4-20250514` was released 2025-05-22, and `claude-haiku-4-5-20251001` was released 2025-10-15. Always corroborate against Anthropic's blog/press for the actual release date. Only `claude-sonnet-4-5-20250929` and `claude-opus-4-1-20250805` have suffixes that match.
+3. **Closed beta -> public beta -> GA**: use the first date *external* users could access the specific variant.
+4. **Family-headline IDs and dated snapshots** (e.g., `claude-opus-4-1` and `claude-opus-4-1-20250805`): typically share a release date.
+5. **Hosted on a third party** (Groq hosting Llama, OpenRouter aggregating): use the *underlying* model's original release date by its creator, not when the host added it.
+6. **Symlinks** (entries with `symLink:`): inherit the target's date.
+7. **Partial dates** (only month known): use the 1st of the month and tag as MEDIUM confidence in the editor's note.
+
+
+## Editorial control matrix
+
+Three categories:
+
+- **Editorial** - the vendor file contains hand-curated entries; we control descriptions, pricing, benchmarks, interfaces, parameter specs, and `pubDate`.
+- **Hybrid** - the API returns the live model list, and editorial entries (keyed by id/idPrefix) merge over the API data via `fromManualMapping`. We control everything except *which models exist*.
+- **Dynamic** - the API is the only source of model identity and metadata. Big-AGI cannot reliably populate `pubDate` here (no editorial knob).
+
+| Vendor | Category | File | Array | Entries | `pubDate` populated |
+|---|---|---|---|---|---|
+| Anthropic | Hybrid | `anthropic/anthropic.models.ts` | `hardcodedAnthropicModels` | 12 | 12/12 HIGH |
+| Gemini | Hybrid | `gemini/gemini.models.ts` | `_knownGeminiModels` | 33 | 33/33 HIGH |
+| OpenAI | Hybrid | `openai/models/openai.models.ts` | `_knownOpenAIChatModels` | 96 | 95/96 HIGH/MED (`osb-120b` skipped, speculative) |
+| xAI | Hybrid | `openai/models/xai.models.ts` | `_knownXAIChatModels` | 13 | 13/13 HIGH (pilot) |
+| Meta AI | Hybrid | `openai/models/metaai.models.ts` | `_knownMetaAIModels` | 6 | 6/6 HIGH (announcement posts; the API's `created` is a constant 0 and there is no changelog - see `/llms:update-models-metaai`) |
+| Mistral | Hybrid | `openai/models/mistral.models.ts` | `_knownMistralModelDetails` | 41 | 41/41 (40 HIGH, 1 MED for legacy `mistral-medium`) |
+| Moonshot (Kimi) | Hybrid | `openai/models/moonshot.models.ts` | `_knownMoonshotModels` | 12 | 12/12 HIGH |
+| Perplexity | Editorial | `openai/models/perplexity.models.ts` | `_knownPerplexityChatModels` | 4 | 4/4 HIGH |
+| MiniMax | Editorial | `openai/models/minimax.models.ts` | `_knownMiniMaxModels` | 12 | 12/12 HIGH |
+| DeepSeek | Hybrid | `openai/models/deepseek.models.ts` | `_knownDeepseekChatModels` | 4 | 4/4 HIGH |
+| Groq | Hybrid (host) | `openai/models/groq.models.ts` | `_knownGroqModels` | 11 | 11/11 HIGH (underlying-model date) |
+| Z.AI / GLM | Hybrid | `openai/models/zai.models.ts` | `_knownZAIModels` | 22 | 22/22 HIGH (`pubDate` type-required, like Anthropic) |
+| NVIDIA NIM | Hybrid (3-tier) | `openai/models/nvidianim.models.ts` | `_knownNvidiaNIMModels` | 36 | 36/36 HIGH (`pubDate` type-required; upstream release dates cross-referenced from sibling vendor tables, NOT NVIDIA's onboarding dates; deny-listed ids dropped - the catalog is a stale superset - and unknown ids surface as `[?]` 0-day entries without pubDate; refresh via `tools/develop/nvidianim-catalog-sync/`) |
+| Bedrock | Reuses Anthropic | `bedrock/bedrock.models.ts` | -> `hardcodedAnthropicModels` | (12) | inherited |
+| Ollama | Editorial (catalog) | `ollama/ollama.models.ts` | `OLLAMA_BASE_MODELS` | 209 | **deferred** - see notes |
+| Arcee AI | Dynamic | `openai/models/arceeai.models.ts` | `_arceeKnownModels` | 0 | n/a (empty) |
+| LLMAPI | Dynamic | `openai/models/llmapi.models.ts` | `_llmapiKnownModels` | 0 | n/a (empty) |
+| Alibaba | Dynamic | `openai/models/alibaba.models.ts` | `_knownAlibabaChatModels` | 0 | n/a (empty) |
+| OpenRouter | Dynamic + delegated lookup | `openai/models/openrouter.models.ts` | (parser) | -- | inherited via `llmOrt*Lookup` |
+| TogetherAI | Dynamic + patch map | `openai/models/together.models.ts` | `_togetherEditorialPubDates` | 4 | editorial-only; API `created` is endpoint churn (re-stamped on redeploys, 28/269 zeros - verified 2026-07-12), never used for pubDate |
+| FireworksAI | Dynamic | `openai/models/fireworksai.models.ts` | (parser) | -- | no |
+| Novita | Dynamic | `openai/models/novita.models.ts` | (parser) | -- | no |
+| ChutesAI | Dynamic | `openai/models/chutesai.models.ts` | (parser) | -- | no |
+| Azure | Dynamic | `openai/models/azure.models.ts` | (parser) | -- | no |
+| LM Studio | Dynamic | `openai/models/lmstudio.models.ts` | (parser) | -- | no |
+| LocalAI | Dynamic | `openai/models/localai.models.ts` | (parser) | -- | no |
+| FastAPI | Dynamic | `openai/models/fastapi.models.ts` | (parser) | -- | no |
+
+**Totals**: editorial entries across 12 vendors, with the sole remaining intentional gap being `osb-120b` (speculative). `glm-5-code` was removed 2026-06-16 (not API-accessible, deny-listed in `zai.models.ts`), and Z.AI now type-requires `pubDate` on every entry (mirrors `_AnthropicModelDef`). NOTE: the 2026-06 catalog refresh shifted several per-vendor counts (e.g. Z.AI 17->21; xAI trimmed retired models) - the numbers above are being re-verified. All vendor files type-check clean.
+
+### Notes
+
+- **Hybrid** vendors are still effectively editorial for the models we know about: when an API id matches a hardcoded `idPrefix` (or `id`), `fromManualMapping` injects all the editorial fields. Unknown ids fall through to a default-shaped placeholder where `pubDate` is undefined.
+- **OpenRouter** delegates back to Anthropic / Gemini / OpenAI editorial lookups via `llmOrtAntLookup_ThinkingVariants`, `llmOrtGemLookup`, `llmOrtOaiLookup`. `pubDate` flows through these lookups, so OpenRouter-served Claude/Gemini/GPT models get `pubDate` automatically once the underlying editorial entry has it.
+- **Bedrock** finds Anthropic editorial via `llmBedrockFindAnthropicModel` and strips unsupported interfaces - `pubDate` inherits from Anthropic.
+- **Ollama** is deferred: 209 entries keyed by upstream model family (e.g. `qwen3.6`, `kimi-k2`, `glm-4.6`). Each entry's `pubDate` would need to be the upstream creator's release date (Meta, Alibaba, Moonshot, Z.AI, etc.). This is large-scale upstream research; better handled in a follow-up pass once cross-vendor `pubDate` data is consolidated and reusable.
+- **Dynamic-only** vendors get nothing automatic. To add `pubDate` for them we'd have to seed editorial entries (which is what `fromManualMapping`'s mapping mechanism was built for); this is a per-vendor decision and out of scope for the initial rollout.
+
+
+## Uncurated-model marker (`[?]`)
+
+Canonical symbols: `llmsLabelUncurated()` / `llmsIsLabelUncurated()` in `src/modules/llms/server/models.mappings.ts` (the doc comment there is the decision record).
+
+**Semantics**: the `[?] ` label prefix means "the list API does not establish what this model IS" - an ids-only catalog where a video/TTS/embedding id could masquerade as chat (the FLUX-on-Modular failure, 2026-08-14). It is NOT a "not yet editorialized" badge: API-characterized 0-day arrivals stay unmarked so they publish and badge as new.
+
+**Downstream effects** (why the marker must not be applied loosely):
+- `tools/data/llms/llm-registry-sync.ts` drops `[?]`-labeled models with `contextWindow === null` before both its local DB and the PostHog `llms_model_spec` push - they never reach big-agi.com.
+- The website strips bracketed segments from `[?]` labels and sinks the pubDate (no NEW badge, bottom of Released sort). Its detection is an independent regex in the website repo (`posthog.server.ts` / `llm.vendors.rankings.ts`) - keep in sync on change.
+
+**Marked** (type-blind list APIs): `fromManualMapping` 'super' resolution (unknown variant of a known family), plus the 0-day fallbacks in nvidianim, modular, sakanaai, metaai, moonshot, groq, deepseek, alibaba, and native OpenAI (Azure included via `isLikelyOpenAI: true`).
+
+**Unmarked** (a type/modality filter proves chat): gemini, xai, together, novita, chutesai, cerebras - each carries an in-file "no '[?]' marker (evaluated 2026-08-14)" comment. Companion rule everywhere: never invent a context window - API value or `null`.
+
+**Exempt** (unknown is the norm; marking would blank whole services): OpenAI-compatible custom hosts (lenient bare `?` fallback, 128K/8K assumption), fastapi, lmstudio, localai, ollama.
+
+**Legacy, not unified**: bedrock's ` [?]` label suffix (real context windows, so no publication effect; unifying would churn pushed specs).

@@ -2,19 +2,23 @@ import * as z from 'zod/v4';
 import { TRPCError } from '@trpc/server';
 
 import { createTRPCRouter, edgeProcedure } from '~/server/trpc/trpc.server';
-import { fetchJsonOrTRPCThrow, TRPCFetcherError } from '~/server/trpc/trpc.router.fetchers';
+import { fetchJsonOrTRPCThrow, fetchResponseOrTRPCThrow, fetchTextOrTRPCThrow, TRPCFetcherError } from '~/server/trpc/trpc.router.fetchers';
 import { serverCapitalizeFirstLetter } from '~/server/wire';
 
-import type { T2ICreateImageAsyncStreamOp } from '~/modules/t2i/t2i.server';
+import { convert_Base64_To_UInt8Array, convert_UInt8Array_To_Base64 } from '~/common/util/blobUtils';
+
+import { getImageInformationFromBytes, type T2ICreateImageAsyncStreamOp } from '~/modules/t2i/t2i.server';
+import { T2I_CONTEXT_NAMES } from '~/modules/t2i/t2i.types';
 import { OpenAIWire_API_Images_Generations } from '~/modules/aix/server/dispatch/wiretypes/openai.wiretypes';
 import { heartbeatsWhileAwaiting } from '~/modules/aix/server/dispatch/heartbeatsWhileAwaiting';
 
 import { wireLocalAIModelsApplyOutputSchema, wireLocalAIModelsAvailableOutputSchema, wireLocalAIModelsListOutputSchema } from './wiretypes/localai.wiretypes';
+import { WireOpenRouterCreateImagesRequest, wireOpenRouterCreateImagesResponseSchema } from './wiretypes/openrouter.wiretypes';
 
 import { ListModelsResponse_schema, ModelDescriptionSchema } from '../llm.server.types';
 import { listModelsRunDispatch } from '../listModels.dispatch';
 
-import { openAIAccess, OpenAIAccessSchema, openAIAccessSchema, OPENAI_API_PATHS } from './openai.access';
+import { OPENAI_API_PATHS, openAIAccess, openAIAccessSchema, OpenAIAccessSchema, OPENROUTER_API_PATHS } from './openai.access';
 
 
 // Router Input/Output Schemas
@@ -30,45 +34,23 @@ const _createImageConfigBase = z.object({
   user: z.string().optional(),
 });
 
-// GPT Image family (gpt-image-1.5, gpt-image-1, gpt-image-1-mini share all parameters)
+// GPT Image family (all members share the same parameter surface)
 const createImageConfigGI = _createImageConfigBase.extend({
-  model: z.enum(['gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini']),
+  model: OpenAIWire_API_Images_Generations.GptImageModels_schema,
   prompt: z.string().max(32000),
   size: z.enum([/*'auto',*/ '1024x1024', '1536x1024', '1024x1536']),
-  quality: z.enum(['high', 'medium', 'low']).optional(),
+  quality: z.enum(['max', 'xhigh', 'high', 'medium', 'low']).optional(), // 'max'/'xhigh': gpt-image-2.5 only - the client clamps
   background: z.enum(['auto', 'transparent', 'opaque']).optional(),
   output_format: z.enum(['png', 'jpeg', 'webp']).optional(),
   output_compression: z.number().min(0).max(100).int().optional(),
   moderation: z.enum(['low', 'auto']).optional(),
 });
 
-// DALL-E 3
-const createImageConfigD3 = _createImageConfigBase.extend({
-  model: z.literal('dall-e-3'),
-  count: z.number().min(1).max(1), // DALL-E 3 only supports n=1
-  prompt: z.string().max(4000),
-  quality: z.enum(['standard', 'hd']),
-  size: z.enum(['1024x1024', '1792x1024', '1024x1792']),
-  style: z.enum(['vivid', 'natural']).optional(),
-  response_format: z.enum([/*'url',*/ 'b64_json']).optional(),
-});
-
-// DALL-E 2
-const createImageConfigD2 = _createImageConfigBase.extend({
-  model: z.literal('dall-e-2'),
-  prompt: z.string().max(1000),
-  quality: z.literal('standard').optional(),
-  size: z.enum(['256x256', '512x512', '1024x1024']),
-  response_format: z.enum([/*'url',*/ 'b64_json']).optional(),
-});
-
 // [LocalAI] simple default configuration
 const createImageConfigLocalAI = _createImageConfigBase.extend({
   model: z.enum([
-    'stablediffusion', // default, mapped to 'gpt-image-1'
-    'dreamshaper', // mapped to 'high', mapped to 'gpt-image-1-mini'
-    'sd-3.5-large-ggml', // mapped to 'medium', mapped to 'dall-e-3'
-    'sd-3.5-medium-ggml', // mapped to 'medium', mapped to 'dall-e-2'
+    'stablediffusion', // default, for the gpt-image models
+    'dreamshaper', // for 'gpt-image-1-mini'
   ]),
   prompt: z.string(),
   size: z.enum([
@@ -81,13 +63,16 @@ const createImageConfigLocalAI = _createImageConfigBase.extend({
 });
 
 
+function _isGptImageConfig(config: CreateImagesInputSchema['generationConfig']): config is z.infer<typeof createImageConfigGI> {
+  return OpenAIWire_API_Images_Generations.GptImageModels_schema.safeParse(config.model).success;
+}
+
+export type CreateImagesInputSchema = z.infer<typeof createImagesInputSchema>;
 const createImagesInputSchema = z.object({
   access: openAIAccessSchema,
   // for this object sync with <> OpenAIWire_API_Images_Generations.Request_schema
   generationConfig: z.discriminatedUnion('model', [
-    createImageConfigGI, // handles both gpt-image-1 and gpt-image-1-mini
-    createImageConfigD3,
-    createImageConfigD2,
+    createImageConfigGI,
     createImageConfigLocalAI,
   ]),
   editConfig: z.object({
@@ -106,6 +91,7 @@ const createImagesInputSchema = z.object({
       base64: z.string(),
     }).optional(),
   }).optional(),
+  t2iContextName: z.enum(T2I_CONTEXT_NAMES),
 });
 
 
@@ -117,7 +103,7 @@ export const llmOpenAIRouter = createTRPCRouter({
     .output(ListModelsResponse_schema)
 
     // tRPC middleware: log errors for this procedure - as we don't have proper try/catch blocks yet
-    .use(async ({ next, path, signal, type, input }) => {
+    .use(async ({ next, path, signal, input }) => {
       const result = await next();
 
       // [PROD] log/warn listModel errors
@@ -127,10 +113,16 @@ export const llmOpenAIRouter = createTRPCRouter({
         const isConnRefused = result.error instanceof TRPCFetcherError && ['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND'].includes(result.error.connErrorName || '');
         if (isConnRefused) return result;
 
+        // Input validation errors (e.g. missing/invalid host): client-input problem, message-only line without a stack
+        if (!(result.error instanceof TRPCFetcherError) && result.error.code === 'BAD_REQUEST') {
+          console.log(`\n❌ ${path}(${input.access?.dialect || '?'}): ${result.error.message}`);
+          return result;
+        }
+
         // '401 unauthorized' is expected with wrong/missing API keys - log instead of warn
         const is401 = result.error instanceof TRPCFetcherError && result.error.httpStatus === 401;
         const isLocalAI = input.access?.dialect === 'localai';
-        console[(is401 || isLocalAI) ? 'log' : 'warn'](`\n❌ [PROD] ${path}(${input.access?.dialect || '?'}):${signal?.aborted ? ' [ABORTED]' : ''}`, result.error);
+        console[(is401 || isLocalAI) ? 'log' : 'warn'](`\n❌ ${path}(${input.access?.dialect || '?'}):${signal?.aborted ? ' [ABORTED]' : ''}`, result.error);
       }
 
       // [DEV] NOTE: the trpc onError will also log next when in development mode, @see handlerEdgeRoutes
@@ -146,6 +138,54 @@ export const llmOpenAIRouter = createTRPCRouter({
     }),
 
 
+  /* [OpenAI] Containers API - download a code-interpreter-generated container file (referenced by a container_file_citation annotation) */
+  containerFileDownload: edgeProcedure
+    .input(z.object({
+      access: openAIAccessSchema,
+      containerId: z.string(),
+      fileId: z.string(),
+    }))
+    .query(async ({ input: { access, containerId, fileId } }) => {
+      const { headers, url } = openAIAccess(access, null, `/v1/containers/${containerId}/files/${fileId}/content`);
+      const response = await fetchResponseOrTRPCThrow({ url, headers, name: 'OpenAI' });
+
+      // Guard against excessively large files (10 MB limit) - mirrors the Anthropic file download endpoint
+      const MAX_FILE_BYTES = 10 * 1024 * 1024;
+      const contentLength = parseInt(response.headers.get('content-length') || '0', 10);
+      if (contentLength > MAX_FILE_BYTES)
+        throw new Error(`File too large to download (${(contentLength / 1024 / 1024).toFixed(1)} MB, limit ${MAX_FILE_BYTES / 1024 / 1024} MB)`);
+
+      const arrayBuffer = await response.arrayBuffer();
+      if (arrayBuffer.byteLength > MAX_FILE_BYTES)
+        throw new Error(`File too large to download (${(arrayBuffer.byteLength / 1024 / 1024).toFixed(1)} MB, limit ${MAX_FILE_BYTES / 1024 / 1024} MB)`);
+
+      return {
+        base64Data: convert_UInt8Array_To_Base64(new Uint8Array(arrayBuffer), 'llms.openai.fileDownload'),
+        mimeType: response.headers.get('content-type') || 'application/octet-stream',
+      };
+    }),
+
+  /* [OpenAI] Containers API - delete a container file (the container itself expires on its own) */
+  containerFileDelete: edgeProcedure
+    .input(z.object({
+      access: openAIAccessSchema,
+      containerId: z.string(),
+      fileId: z.string(),
+    }))
+    .mutation(async ({ input: { access, containerId, fileId } }) => {
+      const { headers, url } = openAIAccess(access, null, `/v1/containers/${containerId}/files/${fileId}`);
+      try {
+        await fetchTextOrTRPCThrow({ url, headers, method: 'DELETE', name: 'OpenAI' });
+        return { success: true, alreadyGone: false };
+      } catch (error: any) {
+        // 404: the file is gone, or the whole container expired ("Container is expired.") - the outcome the caller wanted
+        if (error instanceof TRPCFetcherError && error.httpStatus === 404)
+          return { success: true, alreadyGone: true };
+        throw error;
+      }
+    }),
+
+
   /* [OpenAI/LocalAI] images/generations */
   createImages: edgeProcedure
     .input(createImagesInputSchema)
@@ -153,19 +193,13 @@ export const llmOpenAIRouter = createTRPCRouter({
 
       const { access, generationConfig: config, editConfig } = input;
 
-      // Determine if this is an edit request
-      const isGptImageFamily = config.model === 'gpt-image-1' || config.model === 'gpt-image-1-mini';
+      // Determine if this is an edit request (any member of the GPT Image family supports edits)
+      const isGptImageFamily = _isGptImageConfig(config);
       const isEdit = !!editConfig?.inputImages?.length && isGptImageFamily;
 
       // validate input
       if (isEdit && !isGptImageFamily)
         throw new TRPCError({ code: 'BAD_REQUEST', message: `Image editing is only supported for GPT Image models` });
-      if (config.model === 'dall-e-3' && config.count > 1)
-        throw new TRPCError({ code: 'BAD_REQUEST', message: `[OpenAI Issue] dall-e-3 model does not support more than 1 image` });
-      // if (config.model !== 'gpt-image-1' && (config.background || config.moderation || config.output_compression || config.output_format))
-      //   throw new TRPCError({ code: 'BAD_REQUEST', message: `[OpenAI Issue] background, moderation, output_compression, output_format are only supported for gpt-image-1` });
-      // if (config.model !== 'dall-e-3' && config.style)
-      //   throw new TRPCError({ code: 'BAD_REQUEST', message: `[OpenAI Issue] style is only supported for dall-e-3` });
 
 
       // Prepare request body (JSON for generation, FormData for edit)
@@ -176,7 +210,7 @@ export const llmOpenAIRouter = createTRPCRouter({
 
         const { model, count, ...restConfig } = config;
         requestBody = {
-          ...restConfig, // includes response_format for dall-e-3 and dall-e-2 models
+          ...restConfig, // includes response_format for LocalAI
           model: model as any, // [LocalAI] Fix: LocalAI wants 'stablediffusion' as model name
           n: count,
           user: config.user || 'Big-AGI',
@@ -198,7 +232,6 @@ export const llmOpenAIRouter = createTRPCRouter({
         if (count > 1) requestBody.append('n', '' + count);
         if (quality && (quality as string) !== 'auto') requestBody.append('quality', quality);
         if (size && (size as string) !== 'auto') requestBody.append('size', size);
-        // if (model === 'dall-e-2') requestBody.append('response_format', 'b64_json');
         requestBody.append('user', user || 'Big-AGI');
 
         // append input images
@@ -291,6 +324,97 @@ export const llmOpenAIRouter = createTRPCRouter({
 
   // --- Dialect-specific procedures ---
 
+  /* [OpenRouter] images generation - dedicated endpoint, different path and wire format than OpenAI */
+  dialectOpenRouter_createImages: edgeProcedure
+    .input(z.object({
+      access: openAIAccessSchema,
+      generationConfig: z.object({
+        model: z.string(),
+        prompt: z.string(),
+        count: z.number().min(1).max(10),
+      }),
+      t2iContextName: z.enum(T2I_CONTEXT_NAMES),
+    }))
+    .mutation(async function* ({ input, signal }): AsyncGenerator<T2ICreateImageAsyncStreamOp> {
+
+      const { access, generationConfig: config } = input;
+
+      // -> state.started
+      yield { p: 'state', state: 'started' };
+
+      // -> heartbeats, while waiting for the generation response
+      const wireResponse = yield* heartbeatsWhileAwaiting(
+        openaiPOSTOrThrow<object, WireOpenRouterCreateImagesRequest>(
+          access,
+          config.model,
+          {
+            model: config.model,
+            prompt: config.prompt,
+            ...(config.count > 1 && { n: config.count }), // note: the current client fans out count=1 requests instead, as most models cap n at 1
+            // least-strict content filters: BFL safety_tolerance 0-5 (default 2; >5 needs BFL authorization), OpenAI as the direct GPT Image default
+            ...(config.model.startsWith('black-forest-labs/') && { provider: { options: { 'black-forest-labs': { safety_tolerance: 5 } } } }),
+            ...(config.model.startsWith('openai/') && { provider: { options: { 'openai': { moderation: 'low' } } } }),
+          },
+          OPENROUTER_API_PATHS.images,
+          signal,
+        )
+          .catch((error: any) => {
+            // if aborted, ignore the error, or else we'll throw an error
+            if (signal?.aborted)
+              return null; // de-facto ignores the error, and the connection is already gone
+
+            // otherwise, re-throw the error
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `Error: ${error?.message || error?.toString() || 'Unknown error'}`,
+              cause: error,
+            });
+          }),
+      );
+
+      // null: there was an error
+      if (!wireResponse)
+        return null;
+
+      // parse the response and emit all images in the response
+      const { data: images, usage } = wireOpenRouterCreateImagesResponseSchema.parse(wireResponse);
+      for (const image of images) {
+
+        // b64_json is raw base64 and media_type may be absent - sniff the mime type and dimensions from the bytes
+        const imageBytes = Buffer.from(image.b64_json, 'base64');
+        let mimeType = image.media_type || 'image/png';
+        let width = 0;
+        let height = 0;
+        try {
+          const info = getImageInformationFromBytes(imageBytes.buffer.slice(imageBytes.byteOffset, imageBytes.byteOffset + imageBytes.byteLength) as ArrayBuffer);
+          mimeType = info.mimeType;
+          width = info.width;
+          height = info.height;
+        } catch (error) {
+          // unsupported format (e.g. WebP) - keep the media_type (or default) and unknown dimensions
+          console.warn(`openai.router.dialectOpenRouter_createImages: could not sniff image (${mimeType})`, error);
+        }
+
+        // -> createImage
+        yield {
+          p: 'createImage',
+          image: {
+            mimeType,
+            base64Data: image.b64_json,
+            altText: image.revised_prompt || config.prompt,
+            width,
+            height,
+            ...(usage?.prompt_tokens !== undefined ? { inputTokens: usage.prompt_tokens } : {}),
+            ...(usage?.completion_tokens !== undefined ? { outputTokens: usage.completion_tokens } : {}),
+            generatorName: config.model,
+            parameters: { model: config.model },
+            generatedAt: new Date().toISOString(),
+          },
+        };
+      }
+    }),
+
+
   /* [LocalAI] List all Model Galleries */
   dialectLocalAI_galleryModelsAvailable: edgeProcedure
     .input(listModelsInputSchema)
@@ -323,10 +447,10 @@ export const llmOpenAIRouter = createTRPCRouter({
   dialectLocalAI_galleryModelsJob: edgeProcedure
     .input(z.object({
       access: openAIAccessSchema,
-      jobId: z.string(),
+      jobId: z.guid(), // LocalAI job uuid
     }))
     .query(async ({ input: { access, jobId } }) => {
-      const wireLocalAIModelsJobs = await openaiGETOrThrow(access, `/models/jobs/${jobId}`);
+      const wireLocalAIModelsJobs = await openaiGETOrThrow(access, `/models/jobs/${encodeURIComponent(jobId)}`);
       return wireLocalAIModelsListOutputSchema.parse(wireLocalAIModelsJobs);
     }),
 
@@ -346,8 +470,8 @@ async function openaiPOSTOrThrow<TOut extends object, TPostBody extends object |
 }
 
 
-/** @serverSide Buffer is a Node.js API, not a Browser API. */
+/** Runtime-portable base64 -> Blob (Node, Edge, workerd). */
 function server_base64ToBlob(base64Data: string, mimeType: string) {
-  const buffer = Buffer.from(base64Data, 'base64');
-  return new Blob([buffer], { type: mimeType });
+  const bytes = convert_Base64_To_UInt8Array(base64Data, 'llms.openai.base64ToBlob');
+  return new Blob([bytes], { type: mimeType });
 }

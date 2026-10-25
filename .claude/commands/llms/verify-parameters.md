@@ -1,13 +1,13 @@
 ---
 description: Verify model parameterSpecs match API-validated sweep data
-argument-hint: openai | anthropic | gemini | xai (or empty for all)
+argument-hint: openai | anthropic | gemini | xai | metaai (or empty for all)
 ---
 
 # Verify LLM Parameters
 
 Compare model `parameterSpecs` in definition files against API-validated sweep data.
 
-If `$ARGUMENTS` provided, verify only that dialect, which includes reading the pair of sweep results and model defintions. Otherwise verify all four, and read the pairs in sequence.
+If `$ARGUMENTS` provided, verify only that dialect, which includes reading the pair of sweep results and model defintions. Otherwise verify all five, and read the pairs in sequence.
 
 ## Files
 
@@ -20,14 +20,16 @@ If `$ARGUMENTS` provided, verify only that dialect, which includes reading the p
 - Anthropic: `src/modules/llms/server/anthropic/anthropic.models.ts`
 - Gemini: `src/modules/llms/server/gemini/gemini.models.ts`
 - xAI: `src/modules/llms/server/openai/models/xai.models.ts`
+- Meta AI: `src/modules/llms/server/openai/models/metaai.models.ts`
 
 ## Task
 
-The sweep data is the source of truth for allowed model parameter values or value ranges.
+The sweep data is the source of truth for allowed model parameter values or value ranges, and for the `fn` function-calling capability probe.
 
 For each model in the sweep, verify the model definition exposes exactly those capabilities - no more, no less. This includes:
 - The parameter is present in parameterSpecs
 - The paramId variant covers exactly the values from the sweep, if applicable
+- `LLM_IF_OAI_Fn` in `interfaces` matches `"roundtrip"` in the sweep's `fn` array (see below)
 - etc.
 
 Report models where the definition doesn't match the sweep.
@@ -41,6 +43,7 @@ and need to be carefully updated, otherwise thousands of clients may break.
 | Dialect   | Sweep Key                | Model paramId                |
 |-----------|--------------------------|------------------------------|
 | OpenAI    | `oai-reasoning-effort`   | `llmVndOaiEffort`            |
+| OpenAI    | `oai-reasoning-mode`     | `llmVndOaiReasoningMode`     |
 | OpenAI    | `oai-verbosity`          | `llmVndOaiVerbosity`         |
 | OpenAI    | `oai-image-generation`   | `llmVndOaiImageGeneration`   |
 | OpenAI    | `oai-web-search`         | `llmVndOaiWebSearchContext`  |
@@ -49,6 +52,16 @@ and need to be carefully updated, otherwise thousands of clients may break.
 | Gemini    | `gemini-thinking-level`  | `llmVndGemEffort`            |
 | Gemini    | `gemini-thinking-budget` | `llmVndGeminiThinkingBudget` |
 | xAI       | `xai-web-search`         | `llmVndXaiWebSearch`         |
+| Meta      | `metaai-reasoning-effort`| `llmVndOaiEffort`            |
+| Meta      | `metaai-web-search`      | `llmVndOaiWebSearchContext`  |
+
+## Function-Calling Capability (`fn`)
+
+The sweep `fn` array is a capability probe (not a paramId). `"roundtrip"` is the authoritative signal - full tool-call -> response -> coherent follow-up. `LLM_IF_OAI_Fn` in the model's `interfaces` must track `"roundtrip"`: present iff present.
+
+Flag:
+- `"roundtrip"` in sweep but `LLM_IF_OAI_Fn` missing (or vice versa)
+- `fn` contains `"auto"`/`"required"` without `"roundtrip"` - partial capability, call it out
 
 ## Output
 

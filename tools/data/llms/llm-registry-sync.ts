@@ -41,6 +41,7 @@ interface CliOptions {
   discordWebhook?: string;
   notifyFilters?: string;
   validate?: boolean;
+  exportDbPath?: string;  // --export-db <path>: read-only DB dump (no API calls, no sync)
 }
 
 interface StoredModel {
@@ -53,6 +54,7 @@ interface StoredModel {
   deleted_at: string | null;
   created: number | null;
   updated: number | null;
+  pub_date: string | null;
   context_window: number | null;
   max_completion_tokens: number | null;
   interfaces: string | null;
@@ -90,6 +92,13 @@ function extractSimplePrice(price: any): number | null {
   return null;
 }
 
+/** Idempotent schema migration: adds a column if it doesn't already exist. Safe to call on every run. */
+function ensureColumn(db: DatabaseSync, table: string, column: string, columnDef: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === column))
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${columnDef}`);
+}
+
 function initDatabase(): DatabaseSync {
   const db = new DatabaseSync(DB_PATH);
 
@@ -105,6 +114,7 @@ function initDatabase(): DatabaseSync {
           deleted_at            TEXT,
           created               INTEGER,
           updated               INTEGER,
+          pub_date              TEXT,
           context_window        INTEGER,
           max_completion_tokens INTEGER,
           interfaces            TEXT,
@@ -130,6 +140,9 @@ function initDatabase(): DatabaseSync {
           models_deleted INTEGER NOT NULL
       )
   `);
+
+  // Migrations for existing DBs (safe no-ops on fresh DBs that already have the column from CREATE TABLE).
+  ensureColumn(db, 'models', 'pub_date', 'TEXT');
 
   return db;
 }
@@ -157,15 +170,16 @@ function saveChanges(
 ): void {
   if (changes.new.length > 0) {
     const stmt = db.prepare(`
-        INSERT INTO models (id, vendor, service, label, first_seen, last_seen, created, updated,
+        INSERT INTO models (id, vendor, service, label, first_seen, last_seen, created, updated, pub_date,
                             context_window, max_completion_tokens, interfaces, description,
                             benchmark_elo, benchmark_mmlu, price_input, price_output, original_json, deleted_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
         ON CONFLICT (id, vendor, service) DO UPDATE SET
             label                 = excluded.label,
             last_seen             = excluded.last_seen,
             created               = excluded.created,
             updated               = excluded.updated,
+            pub_date              = excluded.pub_date,
             context_window        = excluded.context_window,
             max_completion_tokens = excluded.max_completion_tokens,
             interfaces            = excluded.interfaces,
@@ -188,6 +202,7 @@ function saveChanges(
         timestamp,
         model.created ?? null,
         model.updated ?? null,
+        model.pubDate ?? null,
         model.contextWindow ?? null,
         model.maxCompletionTokens ?? null,
         model.interfaces ? JSON.stringify(model.interfaces) : null,
@@ -208,6 +223,7 @@ function saveChanges(
             last_seen             = ?,
             created               = ?,
             updated               = ?,
+            pub_date              = ?,
             context_window        = ?,
             max_completion_tokens = ?,
             interfaces            = ?,
@@ -229,6 +245,7 @@ function saveChanges(
         timestamp,
         model.created ?? null,
         model.updated ?? null,
+        model.pubDate ?? null,
         model.contextWindow ?? null,
         model.maxCompletionTokens ?? null,
         model.interfaces ? JSON.stringify(model.interfaces) : null,
@@ -247,11 +264,13 @@ function saveChanges(
 
   if (changes.unchanged.length > 0) {
     const stmt = db.prepare(`
-        INSERT INTO models (id, vendor, service, label, first_seen, last_seen, created, updated,
+        INSERT INTO models (id, vendor, service, label, first_seen, last_seen, created, updated, pub_date,
                             context_window, max_completion_tokens, interfaces, description,
                             benchmark_elo, benchmark_mmlu, price_input, price_output, original_json, deleted_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
-        ON CONFLICT (id, vendor, service) DO UPDATE SET last_seen = excluded.last_seen
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+        ON CONFLICT (id, vendor, service) DO UPDATE SET
+            last_seen = excluded.last_seen,
+            pub_date  = excluded.pub_date
     `);
 
     for (const model of changes.unchanged) {
@@ -264,6 +283,7 @@ function saveChanges(
         timestamp,
         model.created ?? null,
         model.updated ?? null,
+        model.pubDate ?? null,
         model.contextWindow ?? null,
         model.maxCompletionTokens ?? null,
         model.interfaces ? JSON.stringify(model.interfaces) : null,
@@ -311,6 +331,114 @@ function saveSyncHistory(
 }
 
 // ============================================================================
+// Snapshot Export
+// ============================================================================
+
+interface CatalogModel {
+  id: string;
+  vendor: string;
+  service: string;
+  label: string;
+  pubDate: string | null;
+  firstSeen: string;
+  lastSeen: string;
+  deletedAt: string | null;
+  created: number | null;
+  updated: number | null;
+  contextWindow: number | null;
+  maxCompletionTokens: number | null;
+  interfaces: string[] | null;
+  description: string | null;
+  benchmarkElo: number | null;
+  priceInput: number | null;
+  priceOutput: number | null;
+}
+
+interface CatalogSnapshot {
+  schemaVersion: number;
+  exportedAt: string;
+  totalCount: number;
+  activeCount: number;
+  deletedCount: number;
+  byVendor: Record<string, number>;
+  models: CatalogModel[];
+}
+
+/** Dump the entire registry (active + soft-deleted) to a JSON file. Read-only on the DB. */
+function exportSnapshot(db: DatabaseSync, outPath: string): void {
+  const rows = db.prepare(`
+    SELECT id, vendor, service, label, pub_date, first_seen, last_seen, deleted_at,
+           created, updated, context_window, max_completion_tokens, interfaces, description,
+           benchmark_elo, price_input, price_output
+    FROM models
+    ORDER BY vendor, service, id
+  `).all() as unknown as Array<StoredModel & { interfaces: string | null }>;
+
+  const byVendor: Record<string, number> = {};
+  let activeCount = 0;
+  let deletedCount = 0;
+
+  const models: CatalogModel[] = rows.map((r) => {
+    byVendor[r.vendor] = (byVendor[r.vendor] || 0) + 1;
+    if (r.deleted_at) deletedCount++;
+    else activeCount++;
+
+    let parsedInterfaces: string[] | null = null;
+    if (r.interfaces) {
+      try {
+        const parsed = JSON.parse(r.interfaces);
+        if (Array.isArray(parsed)) parsedInterfaces = parsed;
+      } catch {
+        // leave null on parse failure
+      }
+    }
+
+    return {
+      id: r.id,
+      vendor: r.vendor,
+      service: r.service,
+      label: r.label,
+      pubDate: r.pub_date,
+      firstSeen: r.first_seen,
+      lastSeen: r.last_seen,
+      deletedAt: r.deleted_at,
+      created: r.created,
+      updated: r.updated,
+      contextWindow: r.context_window,
+      maxCompletionTokens: r.max_completion_tokens,
+      interfaces: parsedInterfaces,
+      description: r.description,
+      benchmarkElo: r.benchmark_elo,
+      priceInput: r.price_input,
+      priceOutput: r.price_output,
+    };
+  });
+
+  const snapshot: CatalogSnapshot = {
+    schemaVersion: 1,
+    exportedAt: new Date().toISOString(),
+    totalCount: rows.length,
+    activeCount,
+    deletedCount,
+    byVendor,
+    models,
+  };
+
+  // Write atomically: write to temp, then rename. Avoids partial reads if a consumer is watching.
+  const dir = path.dirname(path.resolve(outPath));
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmpPath = `${outPath}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(snapshot, null, 2));
+  fs.renameSync(tmpPath, outPath);
+
+  console.log(
+    `${COLORS.green}✓ Exported${COLORS.reset} ${rows.length} models ` +
+    `(${activeCount} active, ${deletedCount} deleted) ` +
+    `${COLORS.dim}-> ${path.resolve(outPath)}${COLORS.reset}`,
+  );
+}
+
+// ============================================================================
 // Change Detection
 // ============================================================================
 
@@ -353,6 +481,9 @@ function detectChanges(
         existingModel.context_window !== (model.contextWindow ?? null) ||
         existingModel.max_completion_tokens !== (model.maxCompletionTokens ?? null) ||
         existingModel.interfaces !== modelInterfaces;
+      // NOTE: pub_date intentionally EXCLUDED from change detection. On first run after upgrade,
+      // all rows go from NULL -> editorial value, which would fire ~hundreds of spurious "updated"
+      // notifications. The unchanged-touch path below silently backfills pub_date instead.
 
       if (hasChanged) {
         changes.updated.push(model);
@@ -542,6 +673,10 @@ function parseArgs(): CliOptions {
       case '--validate':
         options.validate = true;
         break;
+      case '--export-db':
+        options.exportDbPath = nextArg;
+        i++;
+        break;
     }
   }
 
@@ -566,6 +701,7 @@ ${COLORS.bright}Options:${COLORS.reset}
   --posthog-key <key>         PostHog API key for analytics
   --discord-webhook <url>     Discord webhook URL
   --notify-filters <list>     Comma-separated vendor list (e.g., openai,anthropic)
+  --export-db <path>          Read-only DB dump to JSON (no API calls, no sync). Run separately from sync.
   --help                      Show this help
 
 ${COLORS.bright}Examples:${COLORS.reset}
@@ -669,28 +805,34 @@ function createSingleConfig(
   host?: string,
 ): Record<string, AixAPI_Access> {
   const config: Record<string, AixAPI_Access> = {};
+  const aixDialect = dialect as AixAPI_Access['dialect'];
 
-  switch (dialect) {
-    case 'openai':
+  switch (aixDialect) {
     case 'alibaba':
     case 'azure':
+    case 'cerebras':
+    case 'cohere':
     case 'deepseek':
     case 'groq':
     case 'lmstudio':
     case 'localai':
+    case 'metaai':
     case 'mistral':
+    case 'modular':
     case 'moonshot':
-    case 'openpipe':
+    case 'nvidianim':
+    case 'openai':
     case 'openrouter':
     case 'perplexity':
+    case 'sakanaai':
     case 'togetherai':
     case 'xai':
+    case 'zai':
       config[dialect] = {
         dialect: dialect as any,
         oaiKey: key,
         oaiOrg: '',
         oaiHost: host || '',
-        heliKey: '',
       } as any;
       break;
 
@@ -699,7 +841,6 @@ function createSingleConfig(
         dialect: 'anthropic',
         anthropicKey: key,
         anthropicHost: host || null,
-        heliconeKey: null,
       } as any;
       break;
 
@@ -719,8 +860,22 @@ function createSingleConfig(
       } as any;
       break;
 
+    case 'bedrock':
+      // Single-config mode: --key is the Bedrock bearer token; --host is reused as the AWS region (empty -> server default).
+      config[dialect] = {
+        dialect: 'bedrock',
+        bedrockBearerToken: key,
+        bedrockAccessKeyId: '',
+        bedrockSecretAccessKey: '',
+        bedrockSessionToken: null,
+        bedrockRegion: host || '',
+        clientSideFetch: false,
+      } as any;
+      break;
+
     default:
-      throw new Error(`Unsupported dialect: ${dialect}`);
+      const _exhaustiveCheck: never = aixDialect;
+      throw new Error(`Unsupported dialect: ${aixDialect}`);
   }
 
   return config;
@@ -960,6 +1115,17 @@ async function runSync(
 async function main() {
   try {
     const options = parseArgs();
+
+    // --export-db: read-only DB dump. No config, no sync, no API calls.
+    if (options.exportDbPath) {
+      const db = initDatabase();
+      try {
+        exportSnapshot(db, options.exportDbPath);
+      } finally {
+        db.close();
+      }
+      return;
+    }
 
     let servicesConfig: Record<string, AixAPI_Access>;
 

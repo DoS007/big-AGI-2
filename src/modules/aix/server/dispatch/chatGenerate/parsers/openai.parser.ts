@@ -2,12 +2,17 @@ import { safeErrorString } from '~/server/wire';
 import { serverSideId } from '~/server/trpc/trpc.nanoid';
 
 import type { AixWire_Particles } from '../../../api/aix.wiretypes';
-import type { ChatGenerateParseFunction } from '../chatGenerate.dispatch';
+import type { ChatGenerateParseContext, ChatGenerateParseFunction } from '../chatGenerate.dispatch';
 import type { IParticleTransmitter } from './IParticleTransmitter';
 import { IssueSymbols } from '../ChatGenerateTransmitter';
 
+import { convert_Base64_To_UInt8Array, convert_UInt8Array_To_Base64 } from '~/common/util/blobUtils';
+
 import { OpenAIWire_API_Chat_Completions } from '../../wiretypes/openai.wiretypes';
 import { calculateDurationMs, createWAVFromPCM } from './gemini.audioutils';
+import { openAIUpstreamErrorLogLevel } from './openai.error-severity';
+
+import { OperationRetrySignal } from '../chatGenerate.operation-retry';
 
 
 /**
@@ -43,6 +48,8 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
 
   // [OpenRouter] Provider routing info - extracted from raw JSON before Zod strips it
   let openRouterProviderInfraSent = false;
+  // whether the user has been shown any output: from then on a whole-operation retry would wipe it and bill it twice
+  let hasStreamedOutput = false;
 
   // Supporting structure to accumulate the assistant message
   const accumulator: {
@@ -66,7 +73,7 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
     audio: null,
   };
 
-  return function(pt: IParticleTransmitter, eventData: string) {
+  return function(pt: IParticleTransmitter, eventData: string, _eventName?: string, context?: ChatGenerateParseContext) {
 
     // Time to first event
     if (timeToFirstEvent === undefined)
@@ -82,13 +89,33 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
       return;
 
     // [OpenRouter/others] transmits upstream errors pre-parsing (object wouldn't be valid)
-    if (_forwardOpenRouterDataError(chunkData, pt))
+    if (_forwardOpenRouterDataError(chunkData, pt, hasStreamedOutput ? undefined : context))
       return;
 
     // [OpenAI] Obfuscation message with no data -> skip
     if (!chunkData?.['choices'] && chunkData?.['obfuscation']) {
       // NOTE: these sort of messages have no useful data and would break the parser here
       // console.log('AIX: OpenAI-dispatch: missing-choices chunk skipped', chunkData);
+      return;
+    }
+
+    // [OpenCode, 2026-07-11] Trailing cost-accounting event (no id/model/choices) - harvest cost/usage, then skip
+    if (chunkData?.['x-opencode-type'] === 'inference-cost') {
+      const metricsUpdate: AixWire_Particles.CGSelectMetrics = {};
+      const nu = chunkData.normalizedUsage;
+      if (nu && typeof nu === 'object') {
+        if (typeof nu.inputTokens === 'number') metricsUpdate.TIn = nu.inputTokens;
+        if (typeof nu.outputTokens === 'number') metricsUpdate.TOut = nu.outputTokens;
+        if (typeof nu.reasoningTokens === 'number') metricsUpdate.TOutR = nu.reasoningTokens;
+        if (typeof nu.cacheReadTokens === 'number' && nu.cacheReadTokens > 0) metricsUpdate.TCacheRead = nu.cacheReadTokens;
+        const cacheWrite = (nu.cacheWrite5mTokens || 0) + (nu.cacheWrite1hTokens || 0);
+        if (cacheWrite > 0) metricsUpdate.TCacheWrite = cacheWrite;
+      }
+      const cost = typeof chunkData.cost === 'string' ? parseFloat(chunkData.cost) : (typeof chunkData.cost === 'number' ? chunkData.cost : undefined);
+      if (cost !== undefined && !isNaN(cost))
+        metricsUpdate.$cReported = Math.round(cost * 100 * 10000) / 10000;
+      if (Object.keys(metricsUpdate).length)
+        pt.updateMetrics(metricsUpdate);
       return;
     }
 
@@ -108,8 +135,8 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
 
     // [OpenAI] an upstream error will be handled gracefully and transmitted as text (throw to transmit as 'error')
     if (json.error) {
-      // FIXME: potential point for throwing RequestRetryError (using 'srv-warn' for now)
-      return pt.setDialectTerminatingIssue(safeErrorString(json.error) || 'unknown.', IssueSymbols.Generic, 'srv-warn');
+      // FIXME: potential point for throwing OperationRetrySignal
+      return pt.setDialectTerminatingIssue(safeErrorString(json.error) || 'unknown.', IssueSymbols.Generic, openAIUpstreamErrorLogLevel(json.error));
     }
 
     // [OpenAI] if there's a warning, log it once
@@ -123,11 +150,9 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
       return;
 
 
-    // -> Stats
+    // -> Stats (the usage chunk is the streaming terminal signal; timing survives even without token counts)
     if (json.usage) {
-      const metrics = _fromOpenAIUsage(json.usage, parserCreationTimestamp, timeToFirstEvent);
-      if (metrics)
-        pt.updateMetrics(metrics);
+      pt.updateMetrics(_fromOpenAIMetrics(json.usage, parserCreationTimestamp, timeToFirstEvent));
       // [OpenAI] Expected correct case: the last object has usage, but an empty choices array
       if (!json.choices.length)
         return;
@@ -202,6 +227,10 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
       if (!delta)
         throw new Error(`server response missing content (finish_reason: ${finish_reason})`);
 
+      // any non-empty delta field besides the role is output (text, reasoning, tool calls, audio, images, ..)
+      if (!hasStreamedOutput && Object.entries(delta).some(([key, value]) => key !== 'role' && value !== null && value !== '' && !(Array.isArray(value) && !value.length)))
+        hasStreamedOutput = true;
+
       // delta: Reasoning Content [Deepseek, 2025-01-20]
       let deltaHasReasoning = false;
       if (typeof delta.reasoning_content === 'string' && (delta.reasoning_content || !delta.content)) {
@@ -235,6 +264,16 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
           } else
             console.log('AIX: OpenAI-dispatch: unexpected reasoning detail type:', reasoningDetail);
         }
+
+      }
+      // delta: plain 'reasoning' string [2026-08-16] - hosts that emit delta.reasoning and no reasoning_content: Modular Cloud
+      // z-ai/glm-5.2 + moonshotai/kimi-k2.7-code (minimax-m3 on the same host uses reasoning_content - per-model, not per-host),
+      // Groq + Cerebras gpt-oss-120b, TogetherAI DeepSeek-V4-Flash - all previously declared-but-dropped reasoning.
+      // Last in the chain: OpenRouter/Nous send the same text in both 'reasoning' and 'reasoning_details', handled above.
+      else if (typeof delta.reasoning === 'string' && delta.reasoning) {
+
+        pt.appendReasoningText(delta.reasoning);
+        deltaHasReasoning = true;
 
       }
 
@@ -287,7 +326,7 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
             id: deltaToolCall.id || serverSideId('aix-tool-call-id'),
             type: 'function',
             function: {
-              name: deltaToolCall.function.name || '',
+              name: deltaToolCall.function.name ?? '',
               arguments: deltaToolCall.function.arguments || '',
             },
           };
@@ -412,13 +451,13 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
   const parserCreationTimestamp = Date.now();
   let progressiveCitationNumber = 1;
 
-  return function(pt: IParticleTransmitter, eventData: string) {
+  return function(pt: IParticleTransmitter, eventData: string, _eventName?: string, context?: ChatGenerateParseContext) {
 
     // Throws on malformed event data
     const completeData = JSON.parse(eventData);
 
     // [OpenRouter/others] transmits upstream errors pre-parsing (object wouldn't be valid)
-    if (_forwardOpenRouterDataError(completeData, pt))
+    if (_forwardOpenRouterDataError(completeData, pt, context))
       return;
 
     // [OpenAI] we don't know yet if warning messages are sent in non-streaming - for now we log
@@ -445,12 +484,8 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
     if (json.model)
       pt.setModelName(json.model);
 
-    // -> Stats
-    if (json.usage) {
-      const metrics = _fromOpenAIUsage(json.usage, parserCreationTimestamp, undefined);
-      if (metrics)
-        pt.updateMetrics(metrics);
-    }
+    // -> Metrics: timing always, tokens only when the usage block carries them (#1149)
+    pt.updateMetrics(_fromOpenAIMetrics(json.usage, parserCreationTimestamp, undefined));
 
     // Assumption/validate: expect 1 completion, or stop
     if (json.choices.length !== 1)
@@ -494,22 +529,37 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
       } else if (message.content !== undefined && message.content !== null)
         throw new Error(`unexpected message content type: ${typeof message.content}`);
 
+      // [DeepSeek, 2026-04-24] Non-streaming reasoning_content -> 'ma' reasoning part (mirror of streaming path above)
+      let messageHasReasoning = false;
+      if (typeof message.reasoning_content === 'string' && message.reasoning_content) {
+        pt.appendReasoningText(message.reasoning_content);
+        messageHasReasoning = true;
+      }
+
       // [OpenRouter, 2025-01-20] Handle structured reasoning_details
       if (Array.isArray(message.reasoning_details)) {
         for (const reasoningDetail of message.reasoning_details) {
           if (reasoningDetail.type === 'reasoning.text') {
-            if (typeof reasoningDetail.text === 'string')
+            if (typeof reasoningDetail.text === 'string') {
               pt.appendReasoningText(reasoningDetail.text);
+              messageHasReasoning = true;
+            }
             // else: empty reasoning chunk, e.g. "{ type: 'reasoning.text' }", skip
           } else if (reasoningDetail.type === 'reasoning.summary' && typeof reasoningDetail.summary === 'string') {
             // pt.appendReasoningText(`[Summary] ${reasoningDetail.summary}`);
             pt.appendReasoningText(reasoningDetail.summary);
+            messageHasReasoning = true;
           } else if (reasoningDetail.type === 'reasoning.encrypted') {
             // reasoning happened but not returned, skip
           } else
             console.log('AIX: OpenAI-dispatch-NS: unexpected reasoning detail type:', reasoningDetail);
         }
       }
+
+      // [2026-08-16] plain 'reasoning' string (Modular glm-5.2/kimi-k2.7-code return it with reasoning_content: null; also Groq/Cerebras
+      // gpt-oss-120b, Together DeepSeek-V4-Flash), fallback only - mirror of the streaming path above
+      if (!messageHasReasoning && typeof message.reasoning === 'string' && message.reasoning)
+        pt.appendReasoningText(message.reasoning);
 
       // message: Tool Calls
       for (const toolCall of (message.tool_calls || [])) {
@@ -624,7 +674,7 @@ function _fromOpenAIFinishReason(finish_reason: string | null | undefined) {
     case 'end_turn': // [OpenRouter] Anthropic Claude 3.5 backend
     case 'COMPLETE': // [OpenRouter] Command R+
     case 'eos': // [OpenRouter] Phind: CodeLlama
-    case 'STOP': // [TLUS?]
+    case 'STOP': // some OpenAI-compatible gateways upper-case it
       return 'ok';
 
     // [OpenAI] finished due to requesting tool+ to be called
@@ -645,36 +695,48 @@ function _fromOpenAIFinishReason(finish_reason: string | null | undefined) {
   return null;
 }
 
-function _fromOpenAIUsage(usage: OpenAIWire_API_Chat_Completions.Response['usage'], parserCreationTimestamp: number, timeToFirstEvent: number | undefined) {
+function _fromOpenAIMetrics(usage: OpenAIWire_API_Chat_Completions.Response['usage'], parserCreationTimestamp: number, timeToFirstEvent: number | undefined): AixWire_Particles.CGSelectMetrics {
 
-  // -> Stats only in some packages
-  if (!usage)
-    return undefined;
-
-  // Require at least the completion tokens, or issue a DEV warning otherwise
-  if (usage.completion_tokens === undefined) {
-    // Warn, so we may adjust this usage parsing for Non-OpenAI APIs
-    console.log('[DEV] AIX: OpenAI-dispatch missing completion tokens in usage', { usage });
-    return undefined;
-  }
-
-  // Create the metrics update object
+  // Time Metrics - measured locally (parser-creation -> now), independent of the upstream `usage` block.
+  // Emitted UNCONDITIONALLY so the run duration (`dtAll`) survives even when a provider omits usage or its
+  // completion tokens; gating timing behind usage-presence would silently discard it (#1149, cf. #1143).
   const metricsUpdate: AixWire_Particles.CGSelectMetrics = {
-    TIn: usage.prompt_tokens ?? undefined,
-    TOut: usage.completion_tokens,
     // dtInner: openAI is not reporting the time as seen by the servers
     dtAll: Date.now() - parserCreationTimestamp,
   };
+  if (timeToFirstEvent !== undefined)
+    metricsUpdate.dtStart = timeToFirstEvent;
+
+  // Token Metrics - only when the upstream usage block carries completion tokens
+  if (usage?.completion_tokens === undefined) {
+    // Warn (dev) when usage is present but lacks completion tokens, so we may adjust for Non-OpenAI APIs
+    if (usage)
+      console.log('[DEV] AIX: OpenAI-dispatch missing completion tokens in usage', { usage });
+    return metricsUpdate;
+  }
+
+  metricsUpdate.TIn = usage.prompt_tokens ?? undefined;
+  metricsUpdate.TOut = usage.completion_tokens;
 
   // Input Metrics
 
   // Input redistribution: Cache Read
   if (usage.prompt_tokens_details) {
-    const TCacheRead = usage.prompt_tokens_details.cached_tokens;
+    // TODO Input redistribution: Audio tokens
+    // const TAudioIn = usage.prompt_tokens_details.audio_tokens ?? undefined;
+    const TCacheRead = usage.prompt_tokens_details.cached_tokens ?? undefined;
     if (TCacheRead !== undefined && TCacheRead > 0) {
       metricsUpdate.TCacheRead = TCacheRead;
       if (metricsUpdate.TIn !== undefined)
         metricsUpdate.TIn -= TCacheRead;
+    }
+
+    // [OpenRouter, 2026-07-10] Input redistribution: Cache Write (paid-write providers via OR: Anthropic, Qwen)
+    const TCacheWrite = usage.prompt_tokens_details.cache_write_tokens ?? undefined;
+    if (TCacheWrite !== undefined && TCacheWrite > 0) {
+      metricsUpdate.TCacheWrite = TCacheWrite;
+      if (metricsUpdate.TIn !== undefined)
+        metricsUpdate.TIn -= TCacheWrite;
     }
   }
 
@@ -688,18 +750,18 @@ function _fromOpenAIUsage(usage: OpenAIWire_API_Chat_Completions.Response['usage
     }
   }
 
-  // TODO Input redistribution: Audio tokens
-
   // Output Metrics
 
   // Output breakdown: Reasoning
   if (usage.completion_tokens_details) {
-    const details = usage.completion_tokens_details || {};
-    if (details.reasoning_tokens !== undefined)
-      metricsUpdate.TOutR = usage.completion_tokens_details.reasoning_tokens;
+    const TOutReasoning = usage.completion_tokens_details.reasoning_tokens ?? undefined;
+    if (TOutReasoning !== undefined)
+      metricsUpdate.TOutR = TOutReasoning;
+    // TODO: Output breakdown: Audio / Image
+    // const TOutAudio = details.audio_tokens ?? undefined;
+    // const TOutImage = details.image_tokens ?? undefined;
   }
 
-  // TODO: Output breakdown: Audio
 
   // Upstream Cost Reporting
 
@@ -715,18 +777,35 @@ function _fromOpenAIUsage(usage: OpenAIWire_API_Chat_Completions.Response['usage
     }
   }
 
-  // Time Metrics
-
-  if (timeToFirstEvent !== undefined)
-    metricsUpdate.dtStart = timeToFirstEvent;
+  // [OpenRouter, 2026-09-08] server tools: searches run by OpenRouter (or by the provider on the 'native' engine),
+  // also reported for the legacy 'web' plugin. Fetches have no counter of their own (tool_calls_executed only).
+  const ortWebSearches = usage.server_tool_use_details?.web_search_requests;
+  if (ortWebSearches)
+    metricsUpdate.nWebSearch = ortWebSearches;
 
   return metricsUpdate;
 }
 
 /**
- * If there's an error in the pre-decoded message, push it down to the particle transmitter.
+ * HTTP-equivalent status of a transient in-band error worth an operation retry, or undefined.
+ * [OpenRouter] after the 200, errors arrive as a chunk with a top-level `error` whose numeric `code` mirrors the HTTP status:
+ * 429 rate limited (platform or upstream provider), 502 model down or invalid upstream response. A provider dropping
+ * mid-stream carries code 'server_error'.
+ * Not retried: 503 is "no provider meets your routing requirements" (an outcome of the request, not a blip), 408 timed out
+ * (a retry repeats the wait), and the 4xx family (credits, moderation, bad request).
+ * https://openrouter.ai/docs/api-reference/errors - https://openrouter.ai/docs/api-reference/streaming
  */
-function _forwardOpenRouterDataError(parsedData: any, pt: IParticleTransmitter) {
+function _transientOpenRouterErrorToHttpStatus(code: unknown): 429 | 500 | 502 | undefined {
+  if (code === 'server_error') return 500;
+  const status = typeof code === 'number' ? code : typeof code === 'string' ? Number(code) : NaN;
+  return status === 429 ? 429 : status === 502 ? 502 : undefined;
+}
+
+/**
+ * If there's an error in the pre-decoded message, push it down to the particle transmitter.
+ * @param retryContext only when a whole-operation retry is harmless: nothing has been streamed to the user yet
+ */
+function _forwardOpenRouterDataError(parsedData: any, pt: IParticleTransmitter, retryContext: ChatGenerateParseContext | undefined) {
 
   // operate on .error
   if (!parsedData || !parsedData.error) return false;
@@ -738,21 +817,16 @@ function _forwardOpenRouterDataError(parsedData: any, pt: IParticleTransmitter) 
     return false;
   }
 
-  // prepare the text message
-  let errorMessage = safeErrorString(error) || 'unknown.';
+  // prepare the text message - safeErrorString unwraps the [OpenRouter] 'metadata' upstream cause
+  const errorMessage = safeErrorString(error) || 'unknown.';
 
-  // [OpenRouter] we may have a more specific error message inside the 'metadata' field
-  if ('metadata' in error && typeof error.metadata === 'object') {
-    const { metadata } = error;
-    if ('provider_name' in metadata && 'raw' in metadata)
-      errorMessage += ` -- cause: ${safeErrorString(metadata.provider_name)} error: ${safeErrorString(metadata.raw)}`;
-    else
-      errorMessage += ` -- cause: ${safeErrorString(metadata)}`;
-  }
+  // Transient and retries left: unwind to the operation retrier
+  const retryHttpStatus = _transientOpenRouterErrorToHttpStatus(error.code);
+  if (retryHttpStatus && retryContext?.hasRetriesForHttpStatus(retryHttpStatus))
+    throw new OperationRetrySignal(errorMessage, { causeHttp: retryHttpStatus, causeConn: typeof error.code === 'string' ? error.code : undefined });
 
   // Transmit the error as text - note: throw if you want to transmit as 'error'
-  // FIXME: potential point for throwing RequestRetryError (using 'srv-warn' for now)
-  pt.setDialectTerminatingIssue(errorMessage, IssueSymbols.Generic, 'srv-warn');
+  pt.setDialectTerminatingIssue(errorMessage, IssueSymbols.Generic, openAIUpstreamErrorLogLevel(error));
   return true;
 }
 
@@ -770,14 +844,14 @@ function openaiConvertPCM16ToWAV(base64PCMData: string): {
     bitsPerSample: 16,
   };
 
-  const pcmBuffer = Buffer.from(base64PCMData, 'base64');
+  const pcmBytes = convert_Base64_To_UInt8Array(base64PCMData, 'openai.parser.pcm16');
 
-  const wavBuffer = createWAVFromPCM(pcmBuffer, format);
-  const durationMs = calculateDurationMs(pcmBuffer.length, format);
+  const wavBytes = createWAVFromPCM(pcmBytes, format);
+  const durationMs = calculateDurationMs(pcmBytes.length, format);
 
   return {
     mimeType: 'audio/wav',
-    base64Data: wavBuffer.toString('base64'),
+    base64Data: convert_UInt8Array_To_Base64(wavBytes, 'openai.parser.pcm16'),
     durationMs,
   };
 }

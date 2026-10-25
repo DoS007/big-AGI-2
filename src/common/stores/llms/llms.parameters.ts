@@ -13,6 +13,7 @@
  * @module llms
  */
 
+import type { Immutable } from '~/common/types/immutable.types';
 
 /**
  * Implicit common parameters always supported by all models, not listed in parameterSpecs.
@@ -151,7 +152,7 @@ export const DModelParameterRegistry = {
     label: 'Effort',
     type: 'enum',
     description: 'Controls reasoning depth. Works alongside thinking budget.',
-    values: ['low', 'medium', 'high', 'max'],
+    values: ['low', 'medium', 'high', 'xhigh', 'max'],
     // undefined means high effort (default)
   }),
 
@@ -167,7 +168,7 @@ export const DModelParameterRegistry = {
     label: 'Reasoning Effort',
     type: 'enum',
     description: 'Controls how much effort the model spends on reasoning.',
-    values: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+    values: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], // [2026-07-09, OpenAI] 'max' added with GPT-5.6
     // undefined means vendor default
   }),
 
@@ -175,7 +176,8 @@ export const DModelParameterRegistry = {
     label: 'Thinking',
     type: 'enum',
     description: 'Enable or disable extended thinking mode.',
-    values: ['none', 'high'],
+    values: ['none', 'low', 'high', 'max'],
+    // 'max' is DeepSeek V4 + Kimi Code k3; 'low' is Kimi Code k3-specific; other vendors restrict via enumValues
     // undefined means vendor default (usually 'high', i.e. thinking enabled)
   }),
 
@@ -189,12 +191,23 @@ export const DModelParameterRegistry = {
     // undefined means off (e.g. default 200K context window)
   },
 
+  llmVndAntCodeSandbox: _enumDef({
+    label: 'Code Sandbox',
+    type: 'enum',
+    description: 'Run code in a server-side hosted-container sandbox (data analysis, files, charts). Skills and programmatic tool calls enable this automatically.',
+    values: ['auto'],
+    // undefined means off (the code_execution_20260120 tool is not added). Enum (not boolean) for future
+    // extensibility, matching the other vendors' code-exec params (Gemini/xAI/OpenAI). UI renders as a toggle.
+  }),
+
   llmVndAntInfSpeed: _enumDef({
     label: 'Fast Mode',
     type: 'enum',
-    description: 'Accelerated inference (~2.5x faster output) at 6x pricing. Preview access required.',
-    values: ['fast'],
-    enumPriceMultiplier: { fast: 6 },
+    description: 'Accelerated inference (~2.5x faster output) at premium pricing. Preview access required.',
+    // The wire always sends speed:'fast'; the value encodes the per-model PRICE TIER (the cost multiplier differs by model).
+    // Each model exposes exactly one tier via its parameterSpec `enumValues`. 'fast' is the legacy alias (=6x) for params stored before tiers existed.
+    values: ['fast_2x', 'fast_6x', 'fast'],
+    enumPriceMultiplier: { fast_2x: 2, fast_6x: 6, fast: 6 },
     // undefined means standard speed (omitted from request)
   }),
 
@@ -207,23 +220,45 @@ export const DModelParameterRegistry = {
   },
 
   /**
-   * NOTE: this is being phased out with Opus 4.6 in favor of llmVndAntEffort, while this is implicitly
-   *       adaptive if missing (as-if we had our custom sentinel value of -1).
+   * Anthropic thinking mode, one integer parameter whose value has four meanings:
    *
-   * Important: when this is set to anything other than nullish, it enables Adaptive(-1)/Extended(int > 1024) thinking,
-   * and as a side effect **disables the temperature** in the requests (even when tunneled through OpenRouter). So this
-   * control must disable the UI controls for temperature in both the side panel and the model configuration dialog.
+   * - `undefined`: no preference, the `thinking` field is omitted and the model's own default applies
+   *   (off on 4.x, on for every Claude 5).
+   *
+   * - `-1`: adaptive thinking (4.6+), sent as `thinking: {type: 'adaptive'}` - the model decides when and how much to reason,
+   *         `llmVndAntEffort` sets the depth. Deliberately outside `range` so no slider can produce it:
+   *         it is the `initialValue` on every adaptive model's spec, hidden on most, VISIBLE on Opus 5, Sonnet 5.5 and Haiku 5.5 where the editors
+   *         render it as a Thinking switch (on = -1, off = null).
+   *
+   * - `null`: thinking off, sent as `thinking: {type: 'disabled'}`. Legal on 4.x, Sonnet 5, Opus 5 and Haiku 5.5 (the last two at effort <= high, the adapter clamps);
+   *           sent as `{type: 'between_tools'}` on Sonnet 5.5 (no up-front thinking, effort <= high, clamped);
+   *           rejected by Fable/Mythos 5 and 5.1 and Opus 5.5, where the adapter coerces it to adaptive.
+   *
+   * - `1024..65536`: a manual budget, sent as `thinking: {type: 'enabled', budget_tokens}` - 4.5 and earlier only.
+   *                  4.7+ and every Claude 5 reject budgets, so the adapter coerces a number to adaptive there (a legacy
+   *                  persisted value, or the Max override pushing the range top).
+   *
+   * - `writeFactoryValue` (16384): what a UI writes when the user turns manual thinking on without picking a budget.
+   *
+   * Side effect: any non-nullish value disables temperature (adaptive/extended thinking rejects it, also via OpenRouter),
+   * so both parameter editors lock the temperature control while thinking is on.
    */
   llmVndAntThinkingBudget: {
     label: 'Thinking Budget',
     type: 'integer',
     description: 'Budget for extended thinking',
     range: [1024, 65536],
-    writeFactoryValue: 16384, // special: '-1' is an out-of-range sentinel for 'adaptive' thinking (hidden, used for 4.6+)
-    nullable: { // null means to not turn on thinking at all, and it's the user-overridden equivalent to the param missing
+    writeFactoryValue: 16384,
+    nullable: {
       meaning: 'Disable extended thinking',
     },
-    // undefined means model default
+  },
+
+  llmVndAntWebDynamic: { // applies to both web search and web fetch when enabled
+    label: 'Dynamic Filtering',
+    type: 'boolean',
+    description: 'Use dynamic filtering for search/fetch - more accurate, reduces tokens (Opus/Sonnet 4.6+, not ZDR-eligible)',
+    // undefined means false (standard versions)
   },
 
   llmVndAntWebFetch: _enumDef({ // implies: LLM_IF_Tools_WebSearch
@@ -273,7 +308,7 @@ export const DModelParameterRegistry = {
     label: 'Bedrock API',
     type: 'enum',
     description: 'Bedrock invocation API for this model',
-    values: ['converse', 'invoke-anthropic', 'mantle'],
+    values: ['converse', 'invoke-anthropic', 'mantle', 'mantle-responses'],
     // undefined is not accepted when this parameter is used
   }),
 
@@ -284,12 +319,12 @@ export const DModelParameterRegistry = {
     label: 'Aspect Ratio',
     type: 'enum',
     description: 'Controls the aspect ratio of generated images',
-    values: ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9'],
+    values: ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9', '1:4', '4:1', '1:8', '8:1'], // the API-wide set (2026-10-06); models narrow via enumValues
     // when undefined, the model decides the aspect ratio
   }),
 
   llmVndGeminiCodeExecution: _enumDef({
-    label: 'Code Execution',
+    label: 'Code Sandbox',
     type: 'enum',
     description: 'Enable automatic Python code generation and execution by the model',
     values: ['auto'],
@@ -341,14 +376,22 @@ export const DModelParameterRegistry = {
     // when undefined, the model chooses automatically
   },
 
-  // NOTE: we don't have this as a parameter, as for now we use it in tandem with llmVndGeminiGoogleSearch
-  // llmVndGeminiUrlContext: {
-  //   label: 'URL Context',
-  //   type: 'enum',
-  //   description: 'Enable fetching and analyzing content from URLs provided in prompts (up to 20 URLs, 34MB each)',
-  //   values: ['auto'],
-  //   // undefined means off
-  // },
+  // Gemini Interactions API agent_config - per-agent knobs (Deep Research only today)
+  llmVndGeminiAgentViz: _enumDef({
+    label: 'Visualizations',
+    type: 'enum',
+    description: 'Charts and images in Deep Research reports. Disable for text-only output (helpful when merging multiple reports).',
+    values: ['auto', 'off'],
+    // undefined means upstream default ('auto'); we only forward when explicitly 'off'
+  }),
+
+  llmVndGeminiUrlContext: _enumDef({
+    label: 'URL Context',
+    type: 'enum',
+    description: 'Read content from URLs independently of Google Search (up to 20 URLs, 34MB each)',
+    values: ['auto'],
+    // undefined means off
+  }),
 
 
   // Moonshot-specific parameters
@@ -371,6 +414,29 @@ export const DModelParameterRegistry = {
     // we used to have the writeFactoryValue to true, but we don't basically use/want this anymore
     // undefined means off
   },
+
+  llmVndOaiReasoningMode: _enumDef({
+    // [2026-07-09, OpenAI] GPT-5.6+ Responses API reasoning.mode - 'pro' replaces the standalone '-pro' models
+    label: 'Reasoning Mode',
+    type: 'enum',
+    description: 'Pro mode performs additional model work for difficult tasks, billed at standard token rates',
+    values: ['standard', 'pro'],
+    // undefined means vendor default ('standard'); 'standard' stays a legal stored value but is no longer offered by the pickers
+  }),
+
+  llmVndOaiServiceTier: _enumDef({
+    // [2026-09-03, OpenAI] request `service_tier`: 'flex' = slower, batch rates; 'fast' (formerly 'priority') = up to 2.5x faster, 2x rates.
+    // [2026-09-29, OpenAI] 'ultrafast' = up to 6x faster, 6x rates; Responses only, on the models whose enumValues list it (400 elsewhere).
+    // Multipliers apply to every token class after the cache discount; per-call tool fees are flat. The response echoes the tier
+    // actually served ('default' on a downgrade), which the parser turns into the confirmed multiplier (metrics $xPrice).
+    // Every model declares its tiers via parameterSpec `enumValues` - a spec without them would offer 'ultrafast'.
+    label: 'Service Tier',
+    type: 'enum',
+    description: 'Flex: slower at half price. Fast: faster at double price. Ultrafast: fastest at 6x price. Downgrades bill at standard rates.',
+    values: ['flex', 'fast', 'ultrafast'],
+    enumPriceMultiplier: { flex: 0.5, fast: 2, ultrafast: 6 },
+    // undefined means standard processing (omitted from the request)
+  }),
 
   llmVndOaiVerbosity: _enumDef({
     label: 'Verbosity',
@@ -403,12 +469,17 @@ export const DModelParameterRegistry = {
     label: 'Image Generation',
     type: 'enum',
     description: 'Image generation mode and quality',
-    values: ['mq', 'hq', 'hq_edit' /* precise input editing */, 'hq_png' /* uncompressed */], // our values, not upstream's
+    values: [
+      'mq', // medium
+      'hq', // high
+      'max' // gpt-image-2.5 'max'
+      // former values, now suppressed: 'hq_edit' /* precise input editing */, 'hq_png' /* uncompressed */
+    ], // our values, not upstream's; legacy 'hq_edit'/'hq_png' are mapped to 'hq' at request time
     // undefined means no image generation
   }),
 
   llmVndOaiCodeInterpreter: _enumDef({
-    label: 'Code Interpreter',
+    label: 'Code Sandbox',
     type: 'enum',
     description: 'Python code execution ($0.03/container)',
     values: ['off', 'auto'],
@@ -417,14 +488,34 @@ export const DModelParameterRegistry = {
 
 
   // OpenRouter-specific
+  // Web tools run by OpenRouter itself (aix.wiretypes.openrouter.ts); engine values mirror the wire enums, compile-time
+  // checked in openrouter.webtools.ts
 
   llmVndOrtWebSearch: _enumDef({ // implies: LLM_IF_Tools_WebSearch
     label: 'Web Search',
     type: 'enum',
-    description: 'Enable OpenRouter web search (uses native search for OpenAI/Anthropic, Exa for others)',
-    values: ['auto'],
+    description: 'Web search run by OpenRouter; Auto picks native or Exa',
+    values: [
+      'auto', // original type to discriminate on/off
+      'native', 'exa', 'parallel', 'firecrawl', 'perplexity', // [OpenRouter, 2026-09-08] added types for engine specialization
+    ],
+    // undefined means off; 'auto' is also the pre-2026-09-08 plain on-switch
+  }),
+
+  llmVndOrtWebFetch: _enumDef({ // implies: LLM_IF_Tools_WebSearch
+    label: 'Web Fetch',
+    type: 'enum',
+    description: 'Web fetch run by OpenRouter: the model reads pages by URL',
+    values: ['auto', 'native', 'exa', 'openrouter', 'firecrawl', 'parallel'], // [OpenRouter, 2026-09-08] differentiated search vs fetch
     // undefined means off
   }),
+
+  llmVndOrtWebToolsAdvanced: {
+    label: 'Web Tools Options',
+    type: 'string',
+    description: 'Depth and limits for OpenRouter web search and fetch',
+    // undefined means OpenRouter defaults; a JSON string, codec in openrouter.webtools.ts
+  },
 
 
   // Perplexity-specific parameters
@@ -449,7 +540,7 @@ export const DModelParameterRegistry = {
   // xAI-specific parameters
 
   llmVndXaiCodeExecution: _enumDef({
-    label: 'Code Execution',
+    label: 'Code Sandbox',
     type: 'enum',
     description: 'Enable server-side code execution by the model',
     values: ['off', 'auto'],
@@ -555,6 +646,11 @@ export interface DModelParameterSpec<T extends DModelParameterId> {
 
 /// Utility Functions
 
+export function duplicateDModelParameterValues(values: Immutable<DModelParameterValues>): DModelParameterValues {
+  // shallow clone is sufficient since values are primitives
+  return { ...values };
+}
+
 export function applyModelParameterSpecsInitialValues(destValues: DModelParameterValues, modelParameterSpecs: DModelParameterSpecAny[], overwriteExisting: boolean): void {
   for (const parameterSpec of modelParameterSpecs) {
     const paramId = parameterSpec.paramId;
@@ -582,11 +678,18 @@ export function applyModelParameterSpecsInitialValues(destValues: DModelParamete
 
 
 export function getAllModelParameterValues(initialParameters: undefined | DModelParameterValues, userParameters?: DModelParameterValues): DModelParameterValues {
-  return {
+  const values: DModelParameterValues = {
     ...LLMImplicitParametersRuntimeFallback,
     ...initialParameters,
     ...userParameters,
   };
+
+  // legacy persisted values - the stores never validate enum values against the registry, so migrate here (feeds both the UI and the AIX request)
+  const imageGeneration: unknown = values.llmVndOaiImageGeneration;
+  if (imageGeneration === true) values.llmVndOaiImageGeneration = 'mq'; // pre-enum boolean
+  else if (imageGeneration === 'hq_edit' || imageGeneration === 'hq_png') values.llmVndOaiImageGeneration = 'hq'; // dropped 2026-09-09: input_fidelity is rejected by gpt-image-2+, uncompressed PNG saving never landed
+
+  return values;
 }
 
 

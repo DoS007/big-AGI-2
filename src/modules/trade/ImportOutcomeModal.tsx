@@ -1,11 +1,10 @@
 import * as React from 'react';
 
-import { Alert, Box, Divider, IconButton, List, ListItem, Tooltip, Typography } from '@mui/joy';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import { Alert, Box, Divider, List, ListItem, Typography } from '@mui/joy';
 
 import type { DConversation, DConversationId } from '~/common/stores/chat/chat.conversation';
+import type { DModelsService } from '~/common/stores/llms/llms.service.types';
 import { GoodModal } from '~/common/components/modals/GoodModal';
-import { copyToClipboard } from '~/common/util/clipboardUtils';
 
 
 type ConversationOutcome = {
@@ -23,24 +22,21 @@ type ConversationOutcome = {
 export interface ImportedOutcome {
   conversations: ConversationOutcome[];
   activateConversationId: DConversationId | null;
+  modelServices: DModelsService[];
+  servicesOutcome?: { added: number; skipped: number }; // set by the applier (trade.client), not the parser
 }
 
 
 /**
  * Displays the result of an import operation as a modal dialog.
  */
-export function ImportOutcomeModal(props: { outcome: ImportedOutcome, rawJson: string | null, onClose: () => void }) {
+export function ImportOutcomeModal(props: { outcome: ImportedOutcome, onClose: () => void }) {
   const { conversations } = props.outcome;
 
   const successes = conversations.filter(c => c.success);
   const failures = conversations.filter(c => !c.success);
   const hasAnyResults = successes.length > 0 || failures.length > 0;
   const hasAnyFailures = failures.length > 0;
-
-  const handleCopyRawJson = () => {
-    if (props.rawJson)
-      copyToClipboard(props.rawJson, 'ChatGPT JSON');
-  };
 
   return (
     <GoodModal open title={hasAnyResults ? hasAnyFailures ? 'Import issues' : 'Import successful' : 'Import failed'} strongerTitle onClose={props.onClose}>
@@ -52,19 +48,21 @@ export function ImportOutcomeModal(props: { outcome: ImportedOutcome, rawJson: s
           <Typography>
             Imported {successes.length} conversation{successes.length === 1 ? '' : 's'}.
           </Typography>
-          {!!props.rawJson && (
-            <Tooltip title='Copy JSON to clipboard'>
-              <IconButton variant='outlined' onClick={handleCopyRawJson} sx={{ ml: 'auto' }}>
-                <ContentCopyIcon />
-              </IconButton>
-            </Tooltip>
-          )}
         </Alert>
         <Typography>
           The conversation{successes.length === 1 ? '' : 's'} can be found in the menu,
           and {successes.length === 1 ? 'it' : 'the last one'} is now active.
         </Typography>
       </>}
+
+      {!!props.outcome.servicesOutcome?.added && (
+        <Alert variant='soft' color='success'>
+          <Typography>
+            Restored {props.outcome.servicesOutcome.added} AI service configuration{props.outcome.servicesOutcome.added === 1 ? '' : 's'} (including keys).
+            Open the Models settings to refresh {props.outcome.servicesOutcome.added === 1 ? 'its' : 'their'} model list.
+          </Typography>
+        </Alert>
+      )}
 
       {failures.length >= 1 && <Box>
         <Alert variant='soft' color='danger'>

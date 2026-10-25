@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 
-import { LLM_IF_HOTFIX_NoWebP, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Vision } from '~/common/stores/llms/llms.types';
+import { LLM_IF_HOTFIX_NoWebP, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Reasoning, LLM_IF_OAI_Vision } from '~/common/stores/llms/llms.types';
 
 import { fetchJsonOrTRPCThrow } from '~/server/trpc/trpc.router.fetchers';
 
@@ -50,6 +50,12 @@ export namespace LMStudioWire_API_Models_List {
     capabilities: z.object({
       vision: z.boolean().optional(),
       trained_for_tool_use: z.boolean().optional(),
+      // [LM Studio, 2026-08-17] reasoning-capable models carry a config here, e.g. { allowed_options: ['on'], default: 'on' };
+      // the option names are runtime-declared, so we only read presence - https://lmstudio.ai/docs/developer/rest/list
+      reasoning: z.object({
+        allowed_options: z.array(z.string()).nullish(),
+        default: z.string().nullish(),
+      }).nullish(),
     }).nullish(),
     description: z.string().nullish(),
   });
@@ -102,6 +108,8 @@ export function lmStudioModelsToModelDescriptions(wireModels: LMStudioWire_API_M
         descs.push('[vision]');
       if (model.capabilities?.trained_for_tool_use)
         descs.push('[tool use]');
+      if (model.capabilities?.reasoning)
+        descs.push('[reasoning]');
       if (model.description)
         descs.push(model.description);
 
@@ -113,13 +121,18 @@ export function lmStudioModelsToModelDescriptions(wireModels: LMStudioWire_API_M
         LLM_IF_OAI_Chat,
         ...(model.capabilities?.vision ? [LLM_IF_OAI_Vision] : []),
         ...(model.capabilities?.trained_for_tool_use ? [LLM_IF_OAI_Fn] : []),
+        ...(model.capabilities?.reasoning ? [LLM_IF_OAI_Reasoning] : []),
         LLM_IF_HOTFIX_NoWebP, // because they are not supported
       ];
 
-      // If loaded, use the actual context length from the instance config
+      // Best case wins. The model list is persisted and only refreshed on demand, so a transient load config
+      // must never shrink a long-lived record: the user can reload at a larger context at any moment, and we
+      // would keep under-reporting until they hit Models again. (Measured on 0.4.21: the engine pins
+      // context_length to max and ignores -c, so in practice these two coincide anyway.)
       const loadedContextLength = model.loaded_instances?.length
         ? model.loaded_instances[0]?.config?.context_length ?? null
         : null;
+      const effectiveContextWindow = (contextWindow && loadedContextLength) ? Math.max(contextWindow, loadedContextLength) : contextWindow || loadedContextLength;
 
       return {
         id: modelId,
@@ -128,10 +141,10 @@ export function lmStudioModelsToModelDescriptions(wireModels: LMStudioWire_API_M
         // created
         // updated
         description,
-        contextWindow: (contextWindow && loadedContextLength) ? Math.max(contextWindow, loadedContextLength) : contextWindow || loadedContextLength,
+        contextWindow: effectiveContextWindow,
         interfaces,
         // parameterSpects
-        maxCompletionTokens: contextWindow ? Math.round(contextWindow / 2) : undefined,
+        maxCompletionTokens: effectiveContextWindow ? Math.round(effectiveContextWindow / 2) : undefined,
         // benchmark
         chatPrice: { input: 'free', output: 'free' },
         // hidden

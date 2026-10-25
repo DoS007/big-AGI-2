@@ -6,7 +6,6 @@ import AbcIcon from '@mui/icons-material/Abc';
 import CodeIcon from '@mui/icons-material/Code';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import HtmlIcon from '@mui/icons-material/Html';
-import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
 import PermMediaOutlinedIcon from '@mui/icons-material/PermMediaOutlined';
 import PhotoSizeSelectLargeOutlinedIcon from '@mui/icons-material/PhotoSizeSelectLargeOutlined';
 import PhotoSizeSelectSmallOutlinedIcon from '@mui/icons-material/PhotoSizeSelectSmallOutlined';
@@ -24,6 +23,7 @@ import { RenderImageURL } from '~/modules/blocks/image/RenderImageURL';
 import type { AttachmentDraft, AttachmentDraftConverterType, AttachmentDraftId } from '~/common/attachment-drafts/attachment.types';
 import { DMessageDataRef, DMessageImageRefPart, isImageRefPart, isZyncAssetImageReferencePartWithLegacyDBlob } from '~/common/stores/chat/chat.fragments';
 import { LiveFileIcon } from '~/common/livefile/liveFile.icons';
+import { PhImageSquare } from '~/common/components/icons/phosphor/PhImageSquare';
 import { TooltipOutlined } from '~/common/components/TooltipOutlined';
 import { ellipsizeFront, ellipsizeMiddle } from '~/common/util/textUtils';
 
@@ -97,10 +97,10 @@ const converterTypeToIconMap: { [key in AttachmentDraftConverterType]: React.Com
   'rich-text-cleaner': CodeIcon,
   'rich-text-markdown': TextFieldsIcon,
   'rich-text-table': PivotTableChartIcon,
-  'image-original': ImageOutlinedIcon,
+  'image-original': PhImageSquare,
   'image-resized-high': PhotoSizeSelectLargeOutlinedIcon,
   'image-resized-low': PhotoSizeSelectSmallOutlinedIcon,
-  'image-to-default': ImageOutlinedIcon,
+  'image-to-default': PhImageSquare,
   'image-caption': AbcIcon,
   'image-ocr': AbcIcon,
   'pdf-auto': PictureAsPdfIcon,
@@ -109,18 +109,19 @@ const converterTypeToIconMap: { [key in AttachmentDraftConverterType]: React.Com
   'pdf-images-ocr': AbcIcon,
   'pdf-text-and-images': PermMediaOutlinedIcon,
   'docx-to-html': DescriptionOutlinedIcon,
+  'xlsx-to-text': PivotTableChartIcon,
   'url-page-text': TextFieldsIcon, // was LanguageIcon
   'url-page-markdown': CodeIcon, // was LanguageIcon
   'url-page-html': HtmlIcon, // was LanguageIcon
   'url-page-null': TextureIcon,
-  'url-page-image': ImageOutlinedIcon,
+  'url-page-image': PhImageSquare,
   'youtube-transcript': YouTubeIcon,
   'youtube-transcript-simple': YouTubeIcon,
   'ego-fragments-inlined': TelegramIcon,
   'unhandled': TextureIcon,
 };
 
-function attachmentIcons(attachmentDraft: AttachmentDraft, noTooltips: boolean, onViewImageRefPart?: (imageRefPart: DMessageImageRefPart) => void) {
+function attachmentIcons(attachmentDraft: AttachmentDraft, noTooltips: boolean, onViewImageRefPart: (imageRefPart: DMessageImageRefPart) => void) {
   const activeConverters = attachmentDraft.converters.filter(c => c.isActive);
   if (activeConverters.length === 0)
     return null;
@@ -139,7 +140,7 @@ function attachmentIcons(attachmentDraft: AttachmentDraft, noTooltips: boolean, 
       outputSingleImageRefDBlobs = [fragment.part.dataRef];
   }
 
-  const handleViewFirstImage = !onViewImageRefPart ? undefined : (e: React.MouseEvent) => {
+  const handleViewFirstImage = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     const fragment = attachmentDraft.outputFragments[0];
@@ -203,7 +204,7 @@ function attachmentIcons(attachmentDraft: AttachmentDraft, noTooltips: boolean, 
 }
 
 function attachmentLabelText(attachmentDraft: AttachmentDraft): string {
-  const converter = attachmentDraft.converters.find(c => c.isActive) ?? null;
+  const converter = (!attachmentDraft.labelUserSet && attachmentDraft.converters.find(c => c.isActive)) || null; // user-set names skip the placeholder remaps below
   if (converter && attachmentDraft.label === 'Text') {
     if (converter.id === 'text-markdown')
       return 'Markdown';
@@ -231,7 +232,7 @@ function AttachmentDraftButton(props: {
   enrichment?: IAttachmentEnrichment,
   menuShown: boolean,
   onToggleMenu: (attachmentDraftId: AttachmentDraftId, anchor: HTMLAnchorElement) => void,
-  onViewImageRefPart?: (imageRefPart: DMessageImageRefPart) => void,
+  onViewImageRefPart: (imageRefPart: DMessageImageRefPart) => void,
 }) {
 
   // derived state

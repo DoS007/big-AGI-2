@@ -16,6 +16,7 @@ type ModelDomainSpec = {
   requiredInterfaces?: DModelInterfaceV1[];
   autoStrategy: 'topVendorTopLlm' | 'topVendorLowestCost';
   fallbackDomain?: DModelDomainId;
+  editorialFallbackDomain?: DModelDomainId; // for editorial use only, in case of empty editorials
 };
 
 
@@ -33,7 +34,7 @@ export const ModelDomainsRegistry: Record<DModelDomainId, ModelDomainSpec> = {
   codeApply: {
     label: 'Code Editor',
     confLabel: 'Code',
-    confTooltip: 'Model for applying code changes and other code-related complex operations. E.g. Sonnet 3.5',
+    confTooltip: 'Model for applying code changes and other code operations',
     description: 'Code changes editor and applicator',
     recommended: 'Sonnet 3.5',
     requiredInterfaces: [LLM_IF_OAI_Fn],

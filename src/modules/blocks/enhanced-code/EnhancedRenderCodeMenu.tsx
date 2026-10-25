@@ -2,16 +2,23 @@ import * as React from 'react';
 import { fileSave } from 'browser-fs-access';
 
 import { Box, ListDivider, ListItemDecorator, MenuItem } from '@mui/joy';
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DisabledByDefaultIcon from '@mui/icons-material/DisabledByDefault';
+import SaveAsOutlinedIcon from '@mui/icons-material/SaveAsOutlined';
 import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
-import SaveAsOutlinedIcon from '@mui/icons-material/SaveAsOutlined';
 
 import { CloseablePopup } from '~/common/components/CloseablePopup';
+import { animationSpinHalfPause } from '~/common/util/animUtils';
 import { copyToClipboard } from '~/common/util/clipboardUtils';
 import { reverseLookupMdTitle, reverseLookupMimeType } from '~/common/attachment-drafts/attachment.mimetypes';
 
 import { getCodeCollapseManager } from './codeCollapseManager';
+import { useERCDiffContext } from './ERCDiffContext';
 
 
 /**
@@ -24,10 +31,23 @@ export function EnhancedRenderCodeMenu(props: {
   onClose: () => void,
   isCollapsed: boolean,
   onToggleCollapse: () => void,
+  onDeleteContainingCodeBlock?: (code: string) => void,
 }) {
 
   // state
+  const deleteActionRef = React.useRef<HTMLDivElement>(null);
+  const [deleteTarget, setDeleteTarget] = React.useState<{
+    code: string;
+    title: string;
+    onDelete: (code: string) => void;
+  } | null>(null);
+  // Confirmation belongs to this code and deletion target; changes require a new confirmation.
+  const deleteArmed = !!deleteTarget && deleteTarget.code === props.code && deleteTarget.title === props.title
+    && deleteTarget.onDelete === props.onDeleteContainingCodeBlock;
   // const { showPromisedOverlay } = useOverlayComponents();
+
+  // external state
+  const diffContext = useERCDiffContext();
 
 
   // handlers
@@ -40,11 +60,34 @@ export function EnhancedRenderCodeMenu(props: {
     getCodeCollapseManager().triggerCollapseAll(false);
   }, []);
 
-  const { onClose } = props;
+  const { onClose, onDeleteContainingCodeBlock } = props;
 
   const handleCopyToClipboard = React.useCallback(() => {
     copyToClipboard(props.code, 'Code');
   }, [props.code]);
+
+  const canCompare = !!diffContext?.baseCode && diffContext.baseCode !== props.code;
+
+  const handleSetAsDiffBase = React.useCallback(() => {
+    if (!diffContext) return;
+    diffContext.setBase(props.code, props.title || '(no title)');
+    diffContext.setShowDiff(false); // just to be sure
+    onClose();
+  }, [diffContext, onClose, props.code, props.title]);
+
+  const handleClearDiffBase = React.useCallback(() => {
+    if (!diffContext) return;
+    diffContext.setBase('', '');
+    diffContext.setShowDiff(false);
+    onClose();
+  }, [diffContext, onClose]);
+
+  const handleCompareWithBase = React.useCallback(() => {
+    if (!diffContext) return;
+    diffContext.setCompare(props.code, props.title || '(no title)');
+    diffContext.setShowDiff(true);
+    onClose();
+  }, [diffContext, onClose, props.code, props.title]);
 
   const handleSaveAs = React.useCallback(async () => {
     // guess the mimetype from the markdown title
@@ -91,6 +134,24 @@ export function EnhancedRenderCodeMenu(props: {
   //   ).then(() => setLabsEnhanceCodeBlocks(false)).catch(() => null /* ignore closure */);
   // }, [labsEnhanceCodeBlocks, setLabsEnhanceCodeBlocks, showPromisedOverlay]);
 
+  // delete this code block
+  const handleCancelDelete = React.useCallback(() => {
+    setDeleteTarget(null);
+    deleteActionRef.current?.focus();
+  }, []);
+
+  const handleDelete = React.useCallback(() => {
+    if (!onDeleteContainingCodeBlock) return;
+    if (deleteArmed) {
+      onDeleteContainingCodeBlock(props.code);
+      onClose();
+      return;
+    }
+    setDeleteTarget({ code: props.code, title: props.title, onDelete: onDeleteContainingCodeBlock });
+  }, [deleteArmed, onClose, onDeleteContainingCodeBlock, props.code, props.title]);
+
+
+
   return (
     <CloseablePopup
       menu anchorEl={props.anchor} onClose={props.onClose}
@@ -117,10 +178,59 @@ export function EnhancedRenderCodeMenu(props: {
         Copy
       </MenuItem>
 
+      {/* Delete (with confirmation) */}
+      {!!onDeleteContainingCodeBlock && (
+        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          {deleteArmed && (
+            <MenuItem onClick={handleCancelDelete} sx={{ flex: 1 }}>
+              <ListItemDecorator><CloseRoundedIcon /></ListItemDecorator>
+              Cancel
+            </MenuItem>
+          )}
+          {/* Ask / Confirm */}
+          <MenuItem ref={deleteActionRef} onClick={handleDelete} sx={{ flex: 1 }}>
+            <ListItemDecorator>{deleteArmed ? <DeleteForeverIcon sx={{ color: 'danger.solidBg' }} /> : <DeleteOutlineIcon />}</ListItemDecorator>
+            {deleteArmed ? 'Confirm delete' : 'Delete'}
+          </MenuItem>
+        </Box>
+      )}
+
       <MenuItem onClick={handleSaveAs}>
         <ListItemDecorator><SaveAsOutlinedIcon /></ListItemDecorator>
         Save As ...
       </MenuItem>
+
+      {/* Diff Menu entries */}
+      {!!diffContext && <>
+        <ListDivider />
+
+        {/*{!!diffContext.baseCode && (*/}
+        {/*  <ListItem>*/}
+        {/*    <Typography level='body-sm'>Comparing</Typography>*/}
+        {/*  </ListItem>*/}
+        {/*)}*/}
+
+        {!diffContext.baseCode && (
+          <MenuItem onClick={handleSetAsDiffBase}>
+            <ListItemDecorator><CompareArrowsIcon /></ListItemDecorator>
+            <div>Compare <span style={{ opacity: 0.5 }}>From ...</span></div>
+          </MenuItem>
+        )}
+
+        {!!diffContext.baseCode && (
+          <MenuItem onClick={handleCompareWithBase} disabled={!canCompare} color={!canCompare ? undefined : 'success'}>
+            <ListItemDecorator><CompareArrowsIcon sx={!canCompare ? undefined : { animation: `${animationSpinHalfPause} 2s ease-out` }} /></ListItemDecorator>
+            <Box fontWeight='lg'>Compare <span style={{ opacity: 0.5 }}>To ...</span></Box>
+          </MenuItem>
+        )}
+
+        {!!diffContext.baseCode && (
+          <MenuItem onClick={handleClearDiffBase}>
+            <ListItemDecorator><DisabledByDefaultIcon /></ListItemDecorator>
+            Cancel <span style={{ opacity: 0.5 }}>Comparison</span>
+          </MenuItem>
+        )}
+      </>}
 
     </CloseablePopup>
   );

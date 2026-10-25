@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
-import { Box, Button, Dropdown, IconButton, ListDivider, ListItem, ListItemButton, ListItemDecorator, Menu, MenuButton, MenuItem, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, Chip, Dropdown, IconButton, ListDivider, ListItem, ListItemButton, ListItemDecorator, Menu, MenuButton, MenuItem, Tooltip, Typography } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import AttachFileRoundedIcon from '@mui/icons-material/AttachFileRounded';
@@ -10,15 +10,13 @@ import ClearIcon from '@mui/icons-material/Clear';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import FileUploadOutlinedIcon from '@mui/icons-material/FileUploadOutlined';
-import FolderIcon from '@mui/icons-material/Folder';
 import FormatPaintOutlinedIcon from '@mui/icons-material/FormatPaintOutlined';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import StarOutlineRoundedIcon from '@mui/icons-material/StarOutlineRounded';
 
 import type { DConversationId } from '~/common/stores/chat/chat.conversation';
-import { CloseablePopup } from '~/common/components/CloseablePopup';
-import { DFolder, useFolderStore } from '~/common/stores/folders/store-chat-folders';
 import { DebouncedInputMemo } from '~/common/components/DebouncedInput';
+import { FolderChangeRequest, FoldersSelectPopup } from '~/common/components/folders/FoldersSelectPopup';
 import { FoldersToggleOff } from '~/common/components/icons/FoldersToggleOff';
 import { FoldersToggleOn } from '~/common/components/icons/FoldersToggleOn';
 import { OPTIMA_DRAWER_BACKGROUND } from '~/common/layout/optima/optima.config';
@@ -28,45 +26,34 @@ import { capitalizeFirstLetter } from '~/common/util/textUtils';
 import { getIsMobile } from '~/common/components/useMatchMedia';
 import { optimaCloseDrawer } from '~/common/layout/optima/useOptima';
 import { themeScalingMap, themeZIndexOverMobileDrawer } from '~/common/app.theme';
+import { useChatFolderActive } from '~/common/stores/folders/hooks/useChatFolderActive';
 import { useUIPreferencesStore } from '~/common/stores/store-ui';
 
-import { ChatDrawerItemMemo, FolderChangeRequest } from './ChatDrawerItem';
+import { ChatDrawerItemMemo } from './ChatDrawerItem';
+import { ChatDrawerStorageWarning } from './ChatDrawerStorageWarning';
 import { ChatFolderList } from './folders/ChatFolderList';
 import { ChatNavGrouping, ChatSearchDepth, ChatSearchSorting, isDrawerSearching, useChatDrawerRenderItems } from './useChatDrawerRenderItems';
-import { ClearFolderText } from '../layout-bar/useFolderDropdown';
 import { useChatDrawerFilters } from '../../store-app-chat';
 
 
-// this is here to make shallow comparisons work on the next hook
-const noFolders: DFolder[] = [];
-
-/*
- * Lists folders and returns the active folder
- */
-export const useFolders = (activeFolderId: string | null) => useFolderStore(useShallow(({ enableFolders, folders, toggleEnableFolders }) => {
-
-  // finds the active folder if any
-  const activeFolder = (enableFolders && activeFolderId)
-    ? folders.find(folder => folder.id === activeFolderId) ?? null
-    : null;
-
-  return {
-    activeFolder,
-    allFolders: enableFolders ? folders : noFolders,
-    enableFolders,
-    toggleEnableFolders,
-  };
-}));
+// 'Older than' age filter presets (days of last activity; null = off)
+const AGE_FILTER_OPTIONS: { days: number | null, label: string, shortLabel: string }[] = [
+  { days: null, label: 'Any age', shortLabel: 'Any' },
+  { days: 7, label: 'Older than 1 week', shortLabel: '>1w' },
+  { days: 14, label: 'Older than 2 weeks', shortLabel: '>2w' },
+  { days: 30, label: 'Older than 1 month', shortLabel: '>1m' },
+  { days: 90, label: 'Older than 3 months', shortLabel: '>3m' },
+];
 
 
 export const ChatDrawerMemo = React.memo(ChatDrawer);
 
 function ChatDrawer(props: {
+  isMobile: boolean,
   activeConversationId: DConversationId | null,
   activeFolderId: string | null,
   chatPanesConversationIds: DConversationId[],
   disableNewButton: boolean,
-  focusedChatBeamOpen: boolean,
   onConversationActivate: (conversationId: DConversationId) => void,
   onConversationBranch: (conversationId: DConversationId, messageId: string | null, addSplitPane: boolean) => void,
   onConversationNew: (forceNoRecycle: boolean, isIncognito: boolean) => void,
@@ -82,6 +69,7 @@ function ChatDrawer(props: {
   const [navGrouping, setNavGrouping] = React.useState<ChatNavGrouping>('date');
   const [searchSorting, setSearchSorting] = React.useState<ChatSearchSorting>('date');
   const [searchDepth, setSearchDepth] = React.useState<ChatSearchDepth>('attachments'); // default: full search
+  const [searchInArchived, setSearchInArchived] = React.useState(false);
   const [debouncedSearchQuery, setDebouncedSearchQuery] = React.useState('');
   const [folderChangeRequest, setFolderChangeRequest] = React.useState<FolderChangeRequest | null>(null);
   const [renderLimit, setRenderLimit] = React.useState(200); // progressive loading limit
@@ -89,16 +77,18 @@ function ChatDrawer(props: {
   // external state
   const {
     clearFilters,
+    filterHasBeamOpen,
     filterHasDocFragments, toggleFilterHasDocFragments,
     filterHasImageAssets, toggleFilterHasImageAssets,
     filterHasStars, toggleFilterHasStars,
     filterIsArchived, toggleFilterIsArchived,
+    filterOlderThanDays, setFilterOlderThanDays,
     showPersonaIcons, toggleShowPersonaIcons,
     showRelativeSize, toggleShowRelativeSize,
   } = useChatDrawerFilters();
-  const { activeFolder, allFolders, enableFolders, toggleEnableFolders } = useFolders(props.activeFolderId);
+  const { activeFolder, allFolders, enableFolders, toggleEnableFolders } = useChatFolderActive(props.activeFolderId);
   const { filteredChatsCount, filteredChatIDs, filteredChatsAreEmpty, filteredChatsBarBasis, filteredChatsIncludeActive, renderNavItems } = useChatDrawerRenderItems(
-    props.activeConversationId, props.chatPanesConversationIds, debouncedSearchQuery, activeFolder, allFolders, filterHasStars, filterHasImageAssets, filterHasDocFragments, filterIsArchived, navGrouping, searchSorting, showRelativeSize, searchDepth,
+    props.activeConversationId, props.chatPanesConversationIds, debouncedSearchQuery, activeFolder, allFolders, filterHasBeamOpen, filterHasStars, filterHasImageAssets, filterHasDocFragments, filterIsArchived, filterOlderThanDays, navGrouping, searchSorting, showRelativeSize, searchDepth, searchInArchived,
   );
   const [uiComplexityMode, contentScaling] = useUIPreferencesStore(useShallow((state) => [state.complexityMode, state.contentScaling]));
   const zenMode = uiComplexityMode === 'minimal';
@@ -117,9 +107,9 @@ function ChatDrawer(props: {
 
   // New/Activate/Delete Conversation
 
-  const isMultiPane = props.chatPanesConversationIds.length >= 2;
+  // const isMultiPane = props.chatPanesConversationIds.length >= 2;
   const disableNewButton = props.disableNewButton && filteredChatsIncludeActive;
-  const newButtonDontRecycle = isMultiPane || !filteredChatsIncludeActive;
+  const newButtonDontRecycle = /*isMultiPane ||*/ !filteredChatsIncludeActive;
 
   const handleButtonNew = React.useCallback((event: React.MouseEvent) => {
     // FIXME: undocumented: shift+click to force incognito mode
@@ -143,7 +133,8 @@ function ChatDrawer(props: {
   }, [onConversationsDelete]);
 
   const handleConversationsExport = React.useCallback(() => {
-    props.activeConversationId && onConversationsExportDialog(props.activeConversationId, true);
+    // null conversationId is fine: the dialog disables the single-chat buttons and still offers the all-chats/flash backups
+    onConversationsExportDialog(props.activeConversationId, true);
   }, [onConversationsExportDialog, props.activeConversationId]);
 
 
@@ -152,19 +143,6 @@ function ChatDrawer(props: {
   const handleConversationFolderChange = React.useCallback((folderChangeRequest: FolderChangeRequest) => setFolderChangeRequest(folderChangeRequest), []);
 
   const handleConversationFolderCancel = React.useCallback(() => setFolderChangeRequest(null), []);
-
-  const handleConversationFolderSet = React.useCallback((conversationId: DConversationId, nextFolderId: string | null) => {
-    // Remove conversation from existing folders
-    const { addConversationToFolder, folders, removeConversationFromFolder } = useFolderStore.getState();
-    folders.forEach(folder => folder.conversationIds.includes(conversationId) && removeConversationFromFolder(folder.id, conversationId));
-
-    // Add conversation to the selected folder
-    nextFolderId && addConversationToFolder(nextFolderId, conversationId);
-
-    // Close the menu
-    setFolderChangeRequest(null);
-  }, []);
-
 
   // Render limit - load more items
 
@@ -240,6 +218,22 @@ function ChatDrawer(props: {
             <ListItemDecorator>{filterHasDocFragments && <CheckRoundedIcon />}</ListItemDecorator>
             Has Attachments <AttachFileRoundedIcon />
           </MenuItem>
+          {/* Age filter (compact chip row for mobile) */}
+          <ListDivider />
+          <ListItem sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+            <ListItemDecorator><Typography level='body-sm'>Age</Typography></ListItemDecorator>
+            {AGE_FILTER_OPTIONS.map(({ days, label, shortLabel }) => (
+              <Chip
+                key={label}
+                aria-label={label}
+                // size='sm'
+                variant={filterOlderThanDays === days ? 'solid' : 'soft'}
+                onClick={() => setFilterOlderThanDays(days)}
+              >
+                {shortLabel}
+              </Chip>
+            ))}
+          </ListItem>
 
           <ListDivider />
           <ListItem>
@@ -284,12 +278,16 @@ function ChatDrawer(props: {
             <ListItemDecorator>{searchDepth === 'attachments' && <CheckRoundedIcon />}</ListItemDecorator>
             Full
           </MenuItem>
+          <MenuItem selected={searchInArchived} onClick={() => setSearchInArchived(!searchInArchived)}>
+            <ListItemDecorator>{searchInArchived && <CheckRoundedIcon />}</ListItemDecorator>
+            Include Archived
+          </MenuItem>
         </Menu>
       )}
     </Dropdown>
   ), [
-    filterHasDocFragments, filterHasImageAssets, filterHasStars, isSearching, navGrouping, searchSorting, searchDepth, filterIsArchived, showPersonaIcons, showRelativeSize,
-    toggleFilterHasDocFragments, toggleFilterHasImageAssets, toggleFilterHasStars, toggleFilterIsArchived, toggleShowPersonaIcons, toggleShowRelativeSize,
+    filterHasDocFragments, filterHasImageAssets, filterHasStars, isSearching, navGrouping, searchSorting, searchDepth, searchInArchived, filterIsArchived, showPersonaIcons, showRelativeSize, filterOlderThanDays,
+    toggleFilterHasDocFragments, toggleFilterHasImageAssets, toggleFilterHasStars, toggleFilterIsArchived, toggleShowPersonaIcons, toggleShowRelativeSize, setFilterOlderThanDays,
   ]);
 
   const displayNavItems = React.useMemo(() => {
@@ -303,6 +301,18 @@ function ChatDrawer(props: {
     const activeItem = renderNavItems.find((i, idx) => idx >= renderLimit && i.type === 'nav-item-chat-data' && i.conversationId === props.activeConversationId);
     return activeItem ? [...sliced, activeItem] : sliced;
   }, [renderNavItems, renderLimit, props.activeConversationId]);
+
+
+  // when filters/search transition from active to inactive, the active chat may end up
+  // submerged below the fold of a much longer list - scroll it back into view
+  const chatsListRef = React.useRef<HTMLDivElement>(null);
+  const isFiltering = isSearching || filterHasBeamOpen || filterHasDocFragments || filterHasImageAssets || filterHasStars || filterIsArchived || filterOlderThanDays !== null;
+  React.useLayoutEffect(() => {
+    if (isFiltering) return;
+    const activeEl = chatsListRef.current?.querySelector('[aria-current="true"]') as HTMLElement | null;
+    activeEl?.scrollIntoView({ block: 'nearest' });
+  }, [isFiltering]);
+
 
   return <>
 
@@ -328,6 +338,7 @@ function ChatDrawer(props: {
     {/*}}>*/}
     {enableFolders && (
       <ChatFolderList
+        isMobile={props.isMobile}
         folders={allFolders}
         // folderChatCounts={folderChatCounts}
         contentScaling={contentScaling}
@@ -336,7 +347,7 @@ function ChatDrawer(props: {
         sx={{
           // shrink this at twice the rate as the Titles list
           flexGrow: 0, flexShrink: 2, overflow: 'hidden',
-          minHeight: '7.5rem',
+          // minHeight: '7.5rem', // DISABLED: let it collapse fully, we have a Zero State message
           p: 2,
           backgroundColor: 'background.level1',
         }}
@@ -390,7 +401,7 @@ function ChatDrawer(props: {
       </Box>
 
       {/* Chat Titles List (shrink as half the rate as the Folders List) */}
-      <Box sx={{ flexGrow: 1, flexShrink: 1, flexBasis: '20rem', overflowY: 'auto', ...themeScalingMap[contentScaling].chatDrawerItemSx }}>
+      <Box key='chatlist' ref={chatsListRef} sx={{ flexGrow: 1, flexShrink: 1, flexBasis: '20rem', overflowY: 'auto', ...themeScalingMap[contentScaling].chatDrawerItemSx }}>
         {displayNavItems.map((item, idx) => item.type === 'nav-item-chat-data' ? (
             <ChatDrawerItemMemo
               key={'nav-chat-' + item.conversationId}
@@ -422,7 +433,7 @@ function ChatDrawer(props: {
                 {filterHasStars && <StarOutlineRoundedIcon sx={{ color: 'primary.softColor', fontSize: 'xl', mb: -0.5, mr: 1 }} />}
                 {item.message}
               </Typography>
-              {(filterHasStars || filterHasImageAssets || filterHasDocFragments || filterIsArchived) && (
+              {(filterHasBeamOpen || filterHasStars || filterHasImageAssets || filterHasDocFragments || filterIsArchived || filterOlderThanDays !== null) && (
                 <Tooltip title='Clear Filters'>
                   <IconButton size='sm' color='primary' onClick={clearFilters}>
                     <ClearIcon />
@@ -456,6 +467,9 @@ function ChatDrawer(props: {
         )}
       </Box>
 
+      {/* Browser-storage disclaimer (issue #672) - dismissable, persisted to the app-chat store */}
+      <ChatDrawerStorageWarning />
+
       <ListDivider sx={{ my: 0 }} />
 
       {/* Bottom commands */}
@@ -468,7 +482,10 @@ function ChatDrawer(props: {
           {/*<OpenAIIcon sx={{  ml: 'auto' }} />*/}
         </ListItemButton>
 
-        <ListItemButton disabled={filteredChatsAreEmpty || props.focusedChatBeamOpen} onClick={handleConversationsExport} sx={{ flex: 1 }}>
+        {/* Always enabled: this is also the only route to 'Backup All Chats' / 'Export All', which must stay reachable (e.g. with Beam open, or zero chats).
+          - former gate (d8c78b1a004, 'Export: disable when beam open, as it's not exported for now'), kept for the record:
+            disabled={filteredChatsAreEmpty || props.focusedChatBeamOpen} */}
+        <ListItemButton onClick={handleConversationsExport} sx={{ flex: 1 }}>
           <ListItemDecorator>
             <FileUploadOutlinedIcon />
           </ListItemDecorator>
@@ -488,46 +505,11 @@ function ChatDrawer(props: {
 
     {/* [Menu] Chat Item Folder Change */}
     {!!folderChangeRequest?.anchorEl && (
-      <CloseablePopup
-        menu anchorEl={folderChangeRequest.anchorEl} onClose={handleConversationFolderCancel}
-        bigIcons
-        minWidth={200}
-        placement='bottom-start'
-        zIndex={themeZIndexOverMobileDrawer /* need to be on top of the Modal on Mobile */}
-      >
-
-        {/* Folder Assignment Buttons */}
-        {allFolders.map(folder => {
-          const isRequestFolder = folder === folderChangeRequest.currentFolder;
-          return (
-            <ListItem
-              key={folder.id}
-              variant={isRequestFolder ? 'soft' : 'plain'}
-              onClick={() => handleConversationFolderSet(folderChangeRequest.conversationId, folder.id)}
-            >
-              <ListItemButton>
-                <ListItemDecorator>
-                  <FolderIcon sx={{ color: folder.color }} />
-                </ListItemDecorator>
-                {folder.title}
-              </ListItemButton>
-            </ListItem>
-          );
-        })}
-
-        {/* Remove Folder Assignment */}
-        {!!folderChangeRequest.currentFolder && (
-          <ListItem onClick={() => handleConversationFolderSet(folderChangeRequest.conversationId, null)}>
-            <ListItemButton>
-              <ListItemDecorator>
-                <ClearIcon />
-              </ListItemDecorator>
-              {ClearFolderText}
-            </ListItemButton>
-          </ListItem>
-        )}
-
-      </CloseablePopup>
+      <FoldersSelectPopup
+        allFolders={allFolders}
+        request={folderChangeRequest}
+        onClose={handleConversationFolderCancel}
+      />
     )}
 
   </>;

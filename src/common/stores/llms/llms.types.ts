@@ -4,6 +4,8 @@
 
 import type { ModelVendorId } from '~/modules/llms/vendors/vendors.registry';
 
+import { toLocalDateYYYYMMDD } from '~/common/util/timeUtils';
+
 import type { DModelParameterSpecAny, DModelParameterValues } from './llms.parameters';
 import type { DModelPricing } from './llms.pricing';
 import type { DModelsServiceId } from './llms.service.types';
@@ -19,12 +21,13 @@ export type DLLMId = string;
  * Large Language Model - description and configuration (data object, stored)
  */
 export interface DLLM {
-  id: DLLMId;
+  readonly id: DLLMId;
 
   // factory properties (overwritten on update)
   label: string;
   created: number | 0;
   updated?: number | 0;
+  pubDate?: string; // official release date in 'YYYYMMDD'
   description: string;
   hidden: boolean;
 
@@ -40,8 +43,10 @@ export interface DLLM {
   initialParameters: DModelParameterValues;
 
   // references (const, never change)
-  sId: DModelsServiceId; // could be weak, but they're removed at the same time
-  vId: ModelVendorId; // known hardcoded value
+  readonly sId: DModelsServiceId; // could be weak, but they're removed at the same time
+  readonly vId: ModelVendorId; // known hardcoded value
+
+  readonly firstSeen?: string; // when model first appeared in listing, in 'YYYYMMDD' (absent: present before we began tracking)
 
   // user edited properties - if not undefined/missing, they override the others
   userLabel?: string;
@@ -97,6 +102,10 @@ export function isLLMVisible(llm: DLLM): boolean {
   return !(llm.userHidden ?? llm.hidden ?? false);
 }
 
+export function isLLMCustomUserParameters(llm: DLLM): boolean {
+  return !!(llm.userParameters && Object.keys(llm.userParameters).length > 0);
+}
+
 /**
  * Returns the effective context token limit for a model.
  * Checks user override first, then vendor-specific parameters, then falls back to model default.
@@ -133,6 +142,95 @@ export function getLLMMaxOutputTokens(llm: DLLM | null): DLLMMaxOutputTokens | u
   return llm.userMaxOutputTokens ?? llm.maxOutputTokens;
 }
 
+/**
+ * Parse the model's editorial `pubDate` ('YYYYMMDD') into a Date, or null if missing/malformed.
+ * Date is constructed at local midnight - pubDate is day-precision, no time component.
+ */
+export function getLLMPubDate(llm: DLLM | null | undefined): Date | null {
+  const p = llm?.pubDate;
+  if (!p || !/^\d{8}$/.test(p)) return null;
+  const y = parseInt(p.slice(0, 4), 10);
+  const m = parseInt(p.slice(4, 6), 10) - 1; // JS Date months are 0-indexed
+  const d = parseInt(p.slice(6, 8), 10);
+  const date = new Date(y, m, d);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+/** Number of days a model is considered "recently published" (keeps the "new" badge) after its editorial pubDate. */
+export const LLM_RECENTLY_PUBLISHED_DAYS = 45; // ~1.5 vendor release cycles: outlasts launch-awareness, expires before the next-next model
+
+/**
+ * Whether the model was published within the last `LLM_RECENTLY_PUBLISHED_DAYS` days, based on its editorial `pubDate`.
+ * Returns false when there's no/invalid pubDate. Reusable for the "new" badge and (later) surfacing the newest accessible models on the home page.
+ */
+export function isLLMRecentlyPublished(llm: DLLM | null | undefined, nowMs: number = Date.now()): boolean {
+  const pubDate = getLLMPubDate(llm);
+  if (!pubDate) return false;
+  return (nowMs - pubDate.getTime()) < LLM_RECENTLY_PUBLISHED_DAYS * 24 * 60 * 60 * 1000;
+}
+
+/** Validated editorial `pubDate` as a sortable 'YYYYMMDD' string, or '' when missing/malformed ('' sorts before any real date). */
+function _llmPubKey(llm: DLLM | null | undefined): string {
+  const p = llm?.pubDate;
+  return p && /^\d{8}$/.test(p) ? p : '';
+}
+
+/**
+ * Newest accessible models grouped by vendor, ordered most-recent-first: the vendor whose freshest
+ * surfaced model has the latest `pubDate` leads - fitting for a "what's new" surface.
+ *
+ * Per vendor:
+ *  - if it has recently-published models (within `LLM_RECENTLY_PUBLISHED_DAYS`, the "new" badge window),
+ *    surface up to `maxNew` of them, in display order;
+ *  - otherwise (when `maxFallback > 0`) surface up to `maxFallback` of its newest models by `pubDate`
+ *    (descending; or first-in-display-order when no dates are known).
+ * Vendors with no accessible models - or no pick - are omitted. Resolve the display name from `vendorId` at render time.
+ *
+ * Self-contained and fast: recency/ordering compare editorial 'YYYYMMDD' strings directly (no Date parsing per model).
+ * Intended for surfacing "what's new" (e.g. the home page). Pass `llmsStoreState().llms`.
+ */
+export function getNewestModelsByVendor(llms: ReadonlyArray<DLLM>, options?: {
+  maxNew?: number,       // cap of recently-published ("new") models per vendor (default 5)
+  maxFallback?: number,  // when a vendor has nothing recently published, surface up to this many newest-by-date (default 2; 0 disables)
+  onlyVisible?: boolean, // accessible (non-hidden) models only (default true)
+}) {
+  const { maxNew = 5, maxFallback = 2, onlyVisible = true } = options ?? {};
+  const cutoff = toLocalDateYYYYMMDD(Date.now() - LLM_RECENTLY_PUBLISHED_DAYS * 24 * 60 * 60 * 1000); // 'YYYYMMDD' recency threshold, computed once (same local-midnight basis as getLLMPubDate)
+
+  // group accessible models by vendor (no clones, no symlink aliases), preserving the store's display order
+  const byVendor = new Map<ModelVendorId, DLLM[]>();
+  for (const llm of llms) {
+    if (llm.isUserClone) continue;
+    if (llm.label.startsWith('🔗')) continue; // skip symlink aliases: they share a base model and never carry the "new" badge
+    if (onlyVisible && !isLLMVisible(llm)) continue;
+    const group = byVendor.get(llm.vId);
+    if (group) group.push(llm);
+    else byVendor.set(llm.vId, [llm]);
+  }
+
+  return [...byVendor].flatMap(([vendorId, vendorModels]) => {
+
+    // 1. recently-published ("new"): pubDate >= cutoff, in display order, capped to maxNew
+    const isNew = vendorModels.filter(llm => _llmPubKey(llm) >= cutoff);
+    let models: DLLM[];
+    if (isNew.length)
+      models = isNew.slice(0, maxNew);
+    // 2. fallback: newest by pubDate (string-descending), else first-in-display-order, capped to maxFallback
+    else if (maxFallback > 0) {
+      const dated = vendorModels.map(llm => [llm, _llmPubKey(llm)] as const).filter(([, k]) => k !== '');
+      models = (dated.length ? dated.sort((a, b) => a[1] < b[1] ? 1 : a[1] > b[1] ? -1 : 0).map(([llm]) => llm) : vendorModels).slice(0, maxFallback);
+    } else
+      return [];
+
+    // freshest surfaced pubDate (string max) -> most-recent-first vendor ordering
+    const newest = models.reduce((mx, llm) => { const k = _llmPubKey(llm); return k > mx ? k : mx; }, '');
+    return [{ vendorId, models, newest }];
+  })
+    // most-recent-first across vendors, then drop the ordering key
+    .sort((a, b) => a.newest < b.newest ? 1 : a.newest > b.newest ? -1 : 0)
+    .map(({ vendorId, models }) => ({ vendorId, models }));
+}
+
 /// Interfaces ///
 
 // do not change anything below! those will be persisted in data
@@ -145,9 +243,11 @@ export type DModelInterfaceV1 =
   | 'oai-chat-reasoning'
   | 'ant-prompt-caching'
   | 'gem-code-execution'
+  | 'gem-interactions'
   | 'oai-prompt-caching'
   | 'oai-realtime'
   | 'oai-responses'
+  | 'inputs-video'             // TEMP: ui flag - supports video inputs (URL-referenced or inline), e.g. Gemini video understanding
   | 'outputs-audio'            // TEMP: ui flag - supports audio output (e.g., text-to-speech)
   | 'outputs-image'            // TEMP: ui flag - supports image output (image generation)
   | 'outputs-no-text'          // disable text outputs (used in conjunction with alt-outputs) - assumed off
@@ -164,17 +264,20 @@ export type DModelInterfaceV1 =
 // FIXME: keep this in sync with the server side on modules/llms/server/llm.server.types.ts
 export const LLM_IF_OAI_Chat: DModelInterfaceV1 = 'oai-chat';
 export const LLM_IF_OAI_Fn: DModelInterfaceV1 = 'oai-chat-fn';
+/** @deprecated we don't se this one anymore 2026-04-19; suspended until we have a reason or per-model continuos validation of this */
 export const LLM_IF_OAI_Json: DModelInterfaceV1 = 'oai-chat-json'; // for Structured Outputs (or JSON mode at worst)
 export const LLM_IF_ANT_ToolsSearch: DModelInterfaceV1 = 'ant-tools-search';
 // export const LLM_IF_OAI_JsonSchema: ... future?
 export const LLM_IF_OAI_Vision: DModelInterfaceV1 = 'oai-chat-vision';
 export const LLM_IF_OAI_Reasoning: DModelInterfaceV1 = 'oai-chat-reasoning';
+export const LLM_IF_Inputs_Video: DModelInterfaceV1 = 'inputs-video';
 export const LLM_IF_Outputs_Audio: DModelInterfaceV1 = 'outputs-audio';
 export const LLM_IF_Outputs_Image: DModelInterfaceV1 = 'outputs-image';
 export const LLM_IF_Outputs_NoText: DModelInterfaceV1 = 'outputs-no-text';
 export const LLM_IF_Tools_WebSearch: DModelInterfaceV1 = 'tools-web-search';
 export const LLM_IF_ANT_PromptCaching: DModelInterfaceV1 = 'ant-prompt-caching';
 export const LLM_IF_GEM_CodeExecution: DModelInterfaceV1 = 'gem-code-execution';
+export const LLM_IF_GEM_Interactions: DModelInterfaceV1 = 'gem-interactions';
 export const LLM_IF_OAI_PromptCaching: DModelInterfaceV1 = 'oai-prompt-caching';
 export const LLM_IF_OAI_Responses: DModelInterfaceV1 = 'oai-responses';
 export const LLM_IF_HOTFIX_NoStream: DModelInterfaceV1 = 'hotfix-no-stream';
@@ -195,6 +298,7 @@ export const LLMS_ALL_INTERFACES = [
   LLM_IF_ANT_ToolsSearch,     // Anthropic tool: Tools Search
   // Generalized capabilities
   LLM_IF_OAI_Reasoning,       // COSMETIC ONLY - may show a 'brain' icon in supported screens
+  LLM_IF_Inputs_Video,        // Models that accept video inputs (URL-referenced fileData or inline) - e.g. Gemini 2.5+/3.x
   LLM_IF_Outputs_Audio,       // COSMETIC ONLY FOR NOW - Models that generate audio output (TTS models)
   LLM_IF_Outputs_Image,       // COSMETIC ONLY FOR NOW - Models that can generate images (Gemini, DALL-E, etc.)
   LLM_IF_Outputs_NoText,      // Disable Text Outputs - e.g. Gemini pure TTS
@@ -202,6 +306,7 @@ export const LLMS_ALL_INTERFACES = [
   // Vendor-specific capabilities
   LLM_IF_ANT_PromptCaching,   // [Anthropic] model supports anthropic-specific caching
   LLM_IF_GEM_CodeExecution,   // [Gemini] Tool: code execution
+  LLM_IF_GEM_Interactions,    // [Gemini] Interactions API (required by Deep Research agents)
   LLM_IF_OAI_PromptCaching,   // [OpenAI] model supports OpenAI prompt caching
   LLM_IF_OAI_Responses,       // [OpenAI] Responses API (new) support
   // Hotfixes to patch specific model quirks

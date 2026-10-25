@@ -36,6 +36,12 @@ interface UIPreferencesStore {
   enterIsNewline: boolean;
   setEnterIsNewline: (enterIsNewline: boolean) => void;
 
+  messageFullWidth: boolean; // stretch assistant messages to the full row
+  setMessageFullWidth: (messageFullWidth: boolean) => void;
+
+  renderHTMLInitial: boolean;
+  setRenderHTMLInitial: (renderHTMLInitial: boolean) => void;
+
   renderCodeLineNumbers: boolean;
   setRenderCodeLineNumbers: (renderCodeLineNumbers: boolean) => void;
 
@@ -44,6 +50,9 @@ interface UIPreferencesStore {
 
   showPersonaFinder: boolean;
   setShowPersonaFinder: (showPersonaFinder: boolean) => void;
+
+  showModelsFn: boolean; // =false, DEV only
+  setShowModelsFn: (showModelsFn: boolean) => void;
 
   showModelsHidden: boolean;
   setShowModelsHidden: (showModelsHidden: boolean) => void;
@@ -61,6 +70,11 @@ interface UIPreferencesStore {
 
   aixInspector: boolean;
   toggleAixInspector: () => void;
+
+  // Developer features
+
+  devsUISymbolHighlight: boolean;
+  toggleDevsUISymbolHighlight: () => void;
 
   // UI Dismissals
 
@@ -110,6 +124,12 @@ export const useUIPreferencesStore = create<UIPreferencesStore>()(
       enterIsNewline: false,
       setEnterIsNewline: (enterIsNewline: boolean) => set({ enterIsNewline }),
 
+      messageFullWidth: false,
+      setMessageFullWidth: (messageFullWidth: boolean) => set({ messageFullWidth }),
+
+      renderHTMLInitial: true,
+      setRenderHTMLInitial: (renderHTMLInitial: boolean) => set({ renderHTMLInitial }),
+
       renderCodeLineNumbers: false,
       setRenderCodeLineNumbers: (renderCodeLineNumbers: boolean) => set({ renderCodeLineNumbers }),
 
@@ -120,7 +140,10 @@ export const useUIPreferencesStore = create<UIPreferencesStore>()(
       showPersonaFinder: false,
       setShowPersonaFinder: (showPersonaFinder: boolean) => set({ showPersonaFinder }),
 
-      showModelsHidden: false,
+      showModelsFn: false,
+      setShowModelsFn: (showModelsFn: boolean) => set({ showModelsFn }),
+
+      showModelsHidden: true,
       setShowModelsHidden: (showModelsHidden: boolean) => set({ showModelsHidden }),
 
       showModelsStarredOnly: false,
@@ -136,6 +159,11 @@ export const useUIPreferencesStore = create<UIPreferencesStore>()(
 
       aixInspector: false,
       toggleAixInspector: () => set((state) => ({ aixInspector: !state.aixInspector })),
+
+      // Developer features
+
+      devsUISymbolHighlight: false,
+      toggleDevsUISymbolHighlight: () => set((state) => ({ devsUISymbolHighlight: !state.devsUISymbolHighlight })),
 
       // UI Dismissals
 
@@ -218,8 +246,17 @@ export function useUIContentScaling(): ContentScaling {
   return useUIPreferencesStore((state) => state.contentScaling);
 }
 
+export function getUIEnterIsNewline(): boolean {
+  return useUIPreferencesStore.getState().enterIsNewline;
+}
+
 export function getAixInspectorEnabled(): boolean {
   return useUIPreferencesStore.getState().aixInspector;
+}
+
+
+export function getRenderHTMLInitial(): boolean {
+  return useUIPreferencesStore.getState().renderHTMLInitial;
 }
 
 
@@ -250,8 +287,6 @@ type KnownKeys =
   | 'beam-wizard'                     // first Beam
   | 'call-wizard'                     // first Call
   | 'composer-shift-enter'            // not used Shift + Enter in the Composer yet
-  | 'composer-alt-enter'              // not used Alt + Enter in the Composer yet
-  | 'composer-ctrl-enter'             // not used Ctrl + Enter in the Composer yet
   | 'models-setup-first-visit'        // first visit to the Models Setup
   ;
 

@@ -4,11 +4,11 @@ import type { AixAPI_Model, AixAPIChatGenerate_Request, AixMessages_ChatMessage,
 import { XAIWire_API_Responses, XAIWire_Responses_Tools } from '../../wiretypes/xai.wiretypes';
 
 import { aixDocPart_to_OpenAITextContent, aixMetaRef_to_OpenAIText, aixTexts_to_OpenAIInstructionText } from './openai.chatCompletions';
-import { aixSpillShallFlush, aixSpillSystemToUser, approxDocPart_To_String } from './adapters.common';
+import { aixSpillShallFlush, aixSpillSystemToUser, approxDocPart_To_String, approxMediaUrlPart_To_String } from './adapters.common';
 
 
 // configuration
-const AIX_XAI_ADD_ENCRYPTED_REASONING = false;
+const AIX_XAI_ADD_ENCRYPTED_REASONING = true;
 // const AIX_XAI_ADD_INLINE_CITATIONS = true; // yes but we don't know how yet
 
 
@@ -95,17 +95,22 @@ export function aixToXAIResponses(
   }
 
   // Reasoning
+  // - grok-4.7:                  low/medium/high/xhigh (always-on reasoning, 'none' rejected; vendor default high)
+  // - grok-4.6:                  low/medium/high/xhigh (always-on reasoning, 'none' rejected; vendor default high)
+  // - grok-4.5:                  low/medium/high/xhigh (always-on reasoning, 'none' rejected)
+  // - grok-4.3:                  none/low(default)/medium/high
+  // - grok-4.20-multi-agent:     low/medium/high/xhigh (4 vs 16 agents)
+  // - grok-4.20 reasoning/non-reasoning: no effort param (slug selects mode)
   const reasoningEffort = model.reasoningEffort; // ?? model.vndOaiReasoningEffort;
-  if (reasoningEffort === 'none' || reasoningEffort === 'minimal' || reasoningEffort === 'xhigh' || reasoningEffort === 'max') // domain validation
+  if (reasoningEffort === 'minimal' || reasoningEffort === 'max') // domain validation: still unsupported
     throw new Error(`XAI Responses API does not support reasoning effort '${reasoningEffort}'`);
 
-  if (reasoningEffort) {
-    payload.reasoning = {
-      effort: reasoningEffort,
-      // generate_summary: unsupported
-      // summary: unsupported, defaults to 'detailed'
-    };
-  }
+  // Always request detailed reasoning summaries - grok-4.3 and others have reasoning enabled by default
+  // but only return summary text when explicitly requested. Also set effort when configured.
+  payload.reasoning = {
+    ...(reasoningEffort ? { effort: reasoningEffort } : {}),
+    summary: 'detailed',
+  };
 
   // Add include options for reasoning and specialized for tool sources
   if (AIX_XAI_ADD_ENCRYPTED_REASONING)
@@ -220,6 +225,16 @@ function _toXAIResponsesInput(
     });
   }
 
+  function newReasoningItem(itemId: string | undefined, encryptedContent: string | undefined) {
+    // Mirror of the OpenAI Responses adapter - xAI Responses accepts the same reasoning input item shape.
+    inputItems.push({
+      type: 'reasoning' as const,
+      ...(itemId ? { id: itemId } : {}),
+      summary: [],
+      ...(encryptedContent ? { encrypted_content: encryptedContent } : {}),
+    });
+  }
+
   for (const aixMessage of chatSequence) {
     const { role: messageRole, parts: messageParts } = aixMessage;
 
@@ -251,6 +266,14 @@ function _toXAIResponsesInput(
                 type: 'input_image',
                 detail: 'high',
                 image_url: base64DataUrl,
+              });
+              break;
+
+            case 'media_url':
+              // URL-referenced video: no native lowering - honest text degradation
+              getUserMessage().content.push({
+                type: 'input_text',
+                text: approxMediaUrlPart_To_String(part),
               });
               break;
 
@@ -310,6 +333,9 @@ function _toXAIResponsesInput(
                   newFunctionCallItem(part.id, invocation.name, invocation.args || '');
                   break;
                 case 'code_execution':
+                  // NOTE: unlike OpenAI Responses (canonical 'code_interpreter_call' round-trip + container reuse),
+                  // xAI history still collapses this to a fake 'execute_code' function_call. xAI has no container concept
+                  // ([XAI-UNSUPPORTED] in xai.wiretypes.ts) and its code-execution continuity is unverified - revisit if needed.
                   newFunctionCallItem(part.id, 'execute_code', invocation.code || '');
                   break;
                 default:
@@ -319,24 +345,17 @@ function _toXAIResponsesInput(
               break;
 
             case 'ma':
-              // reasoning/thinking block - ignored for input
+              // xAI uses its OWN _vnd namespace - the wire schema mirrors OpenAI's, but encrypted_content is
+              // encrypted with xAI-private keys and the rs_... id references xAI-private server state. Crossing
+              // these (e.g., replaying an OpenAI handle to xAI or vice versa) yields "Item with id rs_... not
+              // found" or silent reasoning corruption.
+              // Round-trip ONLY when both encrypted_content AND id are present (canonical, complete handle).
+              // Defense-in-depth: matches the parser's capture gate; rejects torn handles even if any sneak through.
+              const xaiReasoning = part._vnd?.xai?.reasoningItem;
+              if (xaiReasoning?.encryptedContent && xaiReasoning?.id)
+                newReasoningItem(xaiReasoning.id, xaiReasoning.encryptedContent);
               break;
 
-            case 'meta_cache_control':
-              // ignored
-              break;
-
-            default:
-              const _exhaustiveCheck: never = mPt;
-              throw new Error(`Unsupported part type in Model message: ${mPt}`);
-          }
-        }
-        break;
-
-      case 'tool':
-        for (const part of messageParts) {
-          const tPt = part.pt;
-          switch (tPt) {
             case 'tool_response':
               const responseType = part.response.type;
               switch (responseType) {
@@ -346,7 +365,7 @@ function _toXAIResponsesInput(
                   break;
                 default:
                   const _check: never = responseType;
-                  throw new Error(`Unsupported tool response type: ${tPt}/${responseType}`);
+                  throw new Error(`Unsupported tool response type in Model message: ${mPt}/${responseType}`);
               }
               break;
 
@@ -355,8 +374,8 @@ function _toXAIResponsesInput(
               break;
 
             default:
-              const _exhaustiveCheck: never = tPt;
-              throw new Error(`Unsupported part type in Tool message: ${tPt}`);
+              const _exhaustiveCheck: never = mPt;
+              throw new Error(`Unsupported part type in Model message: ${mPt}`);
           }
         }
         break;
@@ -459,8 +478,9 @@ function _toXAIToolChoice(policy: AixTools_ToolsPolicy): XAIWire_Responses_Tools
       return 'auto';
     case 'any':
       return 'required';
-    case 'function_call':
-      return { type: 'function', name: policy.function_call.name };
+    // DISABLED 2026-07-17 - forced named tool, see ToolsPolicy_schema
+    // case 'function_call':
+    //   return { type: 'function', name: policy.function_call.name };
     default:
       const _exhaustiveCheck: never = policy;
       throw new Error(`Unsupported XAI tools policy type: ${(policy as any).type}`);

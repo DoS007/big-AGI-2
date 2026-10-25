@@ -1,15 +1,20 @@
 import * as React from 'react';
 import type { StateCreator } from 'zustand/vanilla';
 
+import type { AixReattachMode } from '~/modules/aix/client/aix.client';
+
 import type { DLLMId } from '~/common/stores/llms/llms.types';
 import type { DMessage } from '~/common/stores/chat/chat.message';
-import type { DMessageFragment, DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
+import type { DMessageFragment } from '~/common/stores/chat/chat.fragments';
 import { agiUuid } from '~/common/util/idUtils';
 
 import { CUSTOM_FACTORY_ID, FFactoryId, findFusionFactory, FUSION_FACTORIES, FUSION_FACTORY_DEFAULT } from './instructions/beam.gather.factories';
+import type { BeamStatus } from '../beam.status';
 import { RootStoreSlice } from '../store-beam_vanilla';
 import { ScatterStoreSlice } from '../scatter/beam.scatter';
+import { beamMergeStreamedGuts, beamReattachStream } from '../beam.reattach';
 import { gatherStartFusion, gatherStopFusion, Instruction } from './instructions/beam.gather.execution';
+import { GatherInputsWait, gatherInputsFromRays, gatherInputsWait } from './beam.gather.inputs';
 import { updateBeamLastConfig } from '../store-module-beam';
 
 
@@ -17,12 +22,7 @@ import { updateBeamLastConfig } from '../store-module-beam';
 
 type BFusionId = string;
 
-type BFusionStage =
-  | 'idle'      // at the beginning, never go back here
-  | 'fusing'    // in progress (progressX is defined)
-  | 'success'   // completed successfully
-  | 'stopped'   // aborted by the user
-  | 'error';    // failed (fusionIssue is defined)
+type BFusionStage = BeamStatus; // shared with rays: idle | running | completed | truncated | failed (errorText may be set) | aborted (by the user)
 
 
 export interface BFusion {
@@ -36,10 +36,12 @@ export interface BFusion {
 
   // status
   stage: BFusionStage;
+  fusedInputsCount?: number; // replies merged by the last run, recorded at its start when stage=fusing
   errorText?: string;
   outputDMessage?: DMessage;
 
   // execution state to sync Instruction I/O with the UI
+  inputsWait?: GatherInputsWait; // a requested start, waiting for the rays still generating
   fusingAbortController?: AbortController; // of the full chain
   fusingProgressComponent?: React.ReactNode;
   fusingInstructionComponent?: React.ReactNode;
@@ -56,10 +58,12 @@ const createBFusion = (factoryId: FFactoryId, instructions: Instruction[], llmId
 
   // status
   stage: 'idle',
+  fusedInputsCount: undefined, // dynamic, when really started, post input-wait
   errorText: undefined,
   outputDMessage: undefined,
 
   // execution progress
+  inputsWait: undefined,
   fusingAbortController: undefined,
   fusingProgressComponent: undefined,
   fusingInstructionComponent: undefined,
@@ -74,12 +78,16 @@ export function fusionIsIdle(fusion: BFusion | null): boolean {
   return fusion?.stage === 'idle';
 }
 
+export function fusionIsWaiting(fusion: BFusion | null): boolean {
+  return !!fusion?.inputsWait;
+}
+
 export function fusionIsFusing(fusion: BFusion | null): boolean {
-  return fusion?.stage === 'fusing';
+  return fusion?.stage === 'running';
 }
 
 export function fusionIsStopped(fusion: BFusion | null): boolean {
-  return fusion?.stage === 'stopped';
+  return fusion?.stage === 'aborted';
 }
 
 export function fusionIsUsableOutput(fusion: BFusion | null): boolean {
@@ -87,7 +95,7 @@ export function fusionIsUsableOutput(fusion: BFusion | null): boolean {
 }
 
 export function fusionIsError(fusion: BFusion | null): boolean {
-  return fusion?.stage === 'error' || fusion?.errorText !== undefined;
+  return fusion?.stage === 'failed' || fusion?.errorText !== undefined;
 }
 
 
@@ -132,16 +140,19 @@ export interface GatherStoreSlice extends GatherStateSlice {
   fusionRecreateAsCustom: (sourceFusionId: BFusionId) => void;
   fusionInstructionUpdate: (fusionId: BFusionId, instructionIndex: number, update: Partial<Instruction>) => void;
   fusionSetLlmId: (fusionId: BFusionId, llmId: DLLMId | null) => void;
-  fusionDeleteFragment: (fusionId: BFusionId, fragmentId: DMessageFragmentId) => void;
-  fusionReplaceFragment: (fusionId: BFusionId, fragmentId: DMessageFragmentId, newFragment: DMessageFragment) => void;
+  fusionReplaceFragments: (fusionId: BFusionId, fragments: DMessageFragment[]) => void;
 
   createFusion: () => void;
   removeFusion: (fusionId: BFusionId) => void;
   toggleFusionGathering: (fusionId: BFusionId) => void;
+  _fusionStartNow: (fusionId: BFusionId) => void;
+  stopGatheringAllWaiting: () => void;
+  fusionReattach: (fusionId: BFusionId, mode: AixReattachMode) => void;
+  fusionClearUpstreamHandle: (fusionId: BFusionId) => void;
 
 }
 
-export const createGatherSlice: StateCreator<RootStoreSlice & ScatterStoreSlice & GatherStoreSlice, [], [], GatherStoreSlice> = (_set, _get) => ({
+export const createGatherSlice: StateCreator<RootStoreSlice & ScatterStoreSlice & GatherStoreSlice, [], [], GatherStoreSlice> = (_set, _get, _store) => ({
 
   // initial state
   ...reInitGatherStateSlice([], null),
@@ -216,56 +227,9 @@ export const createGatherSlice: StateCreator<RootStoreSlice & ScatterStoreSlice 
       llmId,
     }),
 
-  fusionDeleteFragment: (fusionId: BFusionId, fragmentId: DMessageFragmentId) =>
-    _get()._fusionUpdate(fusionId, (fusion) => {
-      // Ensure there's an output message
-      if (!fusion.outputDMessage) {
-        console.error(`fusionDeleteFragment: No output message for fusion ${fusionId}`);
-        return {};
-      }
-
-      // Find the fragment to delete
-      const fragmentIndex = fusion.outputDMessage.fragments.findIndex(f => f.fId === fragmentId);
-      if (fragmentIndex < 0) {
-        console.error(`fusionDeleteFragment: Fragment not found for ID ${fragmentId} in fusion ${fusionId}`);
-        return {};
-      }
-
-      return {
-        outputDMessage: {
-          ...fusion.outputDMessage,
-          fragments: fusion.outputDMessage.fragments.filter((_, index) => index !== fragmentIndex),
-          updated: Date.now(),
-        },
-      };
-    }),
-
-  fusionReplaceFragment: (fusionId: BFusionId, fragmentId: DMessageFragmentId, newFragment: DMessageFragment) =>
-    _get()._fusionUpdate(fusionId, (fusion) => {
-      // Ensure there's an output message
-      if (!fusion.outputDMessage) {
-        console.error(`fusionReplaceFragment: No output message for fusion ${fusionId}`);
-        return {};
-      }
-
-      // Find the fragment to replace
-      const fragmentIndex = fusion.outputDMessage.fragments.findIndex(f => f.fId === fragmentId);
-      if (fragmentIndex < 0) {
-        console.error(`fusionReplaceFragment: Fragment not found for ID ${fragmentId} in fusion ${fusionId}`);
-        return {};
-      }
-
-      return {
-        outputDMessage: {
-          ...fusion.outputDMessage,
-          fragments: fusion.outputDMessage.fragments.map((fragment, index) =>
-            (index === fragmentIndex)
-              ? { ...newFragment }
-              : fragment,
-          ),
-          updated: Date.now(),
-        },
-      };
+  fusionReplaceFragments: (fusionId: BFusionId, fragments: DMessageFragment[]) =>
+    _get()._fusionUpdate(fusionId, (fusion) => !fusion.outputDMessage ? {} : {
+      outputDMessage: { ...fusion.outputDMessage, fragments, updated: Date.now() },
     }),
 
 
@@ -300,22 +264,83 @@ export const createGatherSlice: StateCreator<RootStoreSlice & ScatterStoreSlice 
 
   toggleFusionGathering: (fusionId: BFusionId) => {
     // this will start/stop the fusion
-    const fusion = _get().fusions.find(fusion => fusion.fusionId === fusionId);
+    const { fusions, rays, _fusionStartNow, _fusionUpdate } = _get();
+    const fusion = fusions.find(fusion => fusion.fusionId === fusionId);
     if (!fusion) return;
 
-    // stop if fusing
-    if (fusion?.stage === 'fusing')
+    // stop if fusing, or waiting to
+    if (fusion.stage === 'running' || fusion.inputsWait)
       return gatherStopFusion(fusion);
 
     // start: update the model (NOTE: keep the same per-fusion)
     // _fusionUpdate(fusion.fusionId, { llmId: currentGatherLlmId });
 
-    // start the fusion
-    const { inputHistory, rays, _fusionUpdate } = _get();
-    const chatMessages = inputHistory ? [...inputHistory] : [];
-    const rayMessages = rays.map(ray => ray.message).filter(message => !!message.fragments.length);
-    const onUpdate = (update: FusionUpdateOrFn) => _fusionUpdate(fusion.fusionId, update);
-    gatherStartFusion(fusion, chatMessages, rayMessages, onUpdate);
+    // start now, if no reply is still generating
+    if (!gatherInputsFromRays(rays).pendingCount)
+      return _fusionStartNow(fusionId);
+
+    // or wait for the replies - see beam.gather.inputs.ts for what settles the wait
+    const inputsWait = gatherInputsWait(_store);
+    _fusionUpdate(fusionId, { inputsWait });
+    void inputsWait.outcome.then((outcome) => {
+      _fusionUpdate(fusionId, (fusion) => fusion.inputsWait === inputsWait ? { inputsWait: undefined } : null);
+      if (outcome !== 'cancelled')
+        _fusionStartNow(fusionId);
+    });
   },
+
+  _fusionStartNow: (fusionId: BFusionId) => {
+    // reads everything live: the fusion may have been edited while waiting
+    const { inputHistory, fusions, rays, _fusionUpdate } = _get();
+    const fusion = fusions.find(fusion => fusion.fusionId === fusionId);
+    if (!fusion) return;
+
+    // start the fusion
+    const chatMessages = inputHistory ? [...inputHistory] : [];
+    const onUpdate = (update: FusionUpdateOrFn) => _fusionUpdate(fusion.fusionId, update);
+    gatherStartFusion(fusion, chatMessages, gatherInputsFromRays(rays).messages, onUpdate);
+  },
+
+  stopGatheringAllWaiting: () =>
+    _get().fusions.forEach(fusion => fusion.inputsWait?.cancel()),
+
+  // Gemini Interactions (Deep Research) resume for a merge: re-stream (replay) or one-shot fetch (snapshot)
+  // the upstream-stored run into the fusion output. Enters 'running' so the header Stop aborts it (= detach,
+  // the background run survives) and the resume block hides. See kb/modules/LLM-gemini-interactions.md.
+  fusionReattach: (fusionId: BFusionId, mode: AixReattachMode) => {
+    const { fusions, _fusionUpdate } = _get();
+    const fusion = fusions.find(_f => _f.fusionId === fusionId);
+    if (!fusion || fusion.fusingAbortController) return; // missing, or already running
+    const generator = fusion.outputDMessage?.generator;
+    if (!generator?.upstreamHandle) return;
+    const llmId = fusion.llmId || (generator.mgt === 'aix' ? generator.aix.mId : null);
+    if (!llmId) return;
+
+    const abortController = new AbortController();
+    beamReattachStream({
+      llmId, generator, contextName: 'beam-gather', contextRef: fusionId, mode,
+      abortSignal: abortController.signal,
+      onMessageUpdate: (guts, completed) => _fusionUpdate(fusionId, (fusion) => fusion.outputDMessage ? ({ outputDMessage: beamMergeStreamedGuts(fusion.outputDMessage, guts, completed) }) : {}),
+      onTerminal: (outcome) => _fusionUpdate(fusionId, (fusion) => ({
+        stage: outcome,
+        fusingAbortController: undefined,
+        outputDMessage: fusion.outputDMessage ? { ...fusion.outputDMessage, pendingIncomplete: undefined } : fusion.outputDMessage,
+      })),
+    });
+
+    // optimistic: enter fusing (header shows Stop, resume block hides)
+    _fusionUpdate(fusionId, (fusion) => ({
+      stage: 'running',
+      errorText: undefined,
+      fusingAbortController: abortController,
+      outputDMessage: fusion.outputDMessage ? { ...fusion.outputDMessage, pendingIncomplete: true } : fusion.outputDMessage,
+    }));
+  },
+
+  fusionClearUpstreamHandle: (fusionId: BFusionId) =>
+    _get()._fusionUpdate(fusionId, (fusion) => {
+      if (!fusion.outputDMessage?.generator?.upstreamHandle) return {};
+      return { outputDMessage: { ...fusion.outputDMessage, generator: { ...fusion.outputDMessage.generator, upstreamHandle: undefined } } };
+    }),
 
 });

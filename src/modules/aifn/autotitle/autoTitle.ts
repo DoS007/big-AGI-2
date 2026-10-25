@@ -49,7 +49,7 @@ export async function autoConversationTitle(conversationId: string, forceReplace
       autoTitleLlmId,
       'You are an AI conversation titles assistant who specializes in creating expressive yet few-words chat titles.',
       `Analyze the given short conversation (every line is truncated) and extract a concise chat title that summarizes the conversation in as little as a couple of words.
-Only respond with the lowercase short title and nothing else.
+Only respond with the short title and nothing else.
 
 \`\`\`
 ${historyLines.join('\n')}
@@ -69,6 +69,10 @@ ${historyLines.join('\n')}
       setAutoTitle(conversationId, title);
       return true;
     }
+
+    // no title: clear the '✏️...' placeholder set above, or it stays as the conversation name forever
+    if (forceReplace)
+      setAutoTitle(conversationId, '');
 
   } catch (error: any) {
     // not critical at all

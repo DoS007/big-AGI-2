@@ -15,6 +15,7 @@ import { useChatAutoSuggestAttachmentPrompts, useChatMicTimeoutMsValue } from '.
 import { useAgiAttachmentPrompts } from '~/modules/aifn/agiattachmentprompts/useAgiAttachmentPrompts';
 import { useBrowseCapability } from '~/modules/browse/store-module-browsing';
 
+import type { DComposerPendingPart } from '~/common/chat-overlay/store-perchat-composer_slice';
 import { DLLM, getLLMContextTokens, LLM_IF_OAI_Vision } from '~/common/stores/llms/llms.types';
 import { llmChatPricing_adjusted } from '~/common/stores/llms/llms.pricing';
 import { AudioGenerator } from '~/common/util/audio/AudioGenerator';
@@ -31,21 +32,21 @@ import { animationEnterBelow } from '~/common/util/animUtils';
 import { browserSpeechRecognitionCapability, PLACEHOLDER_INTERIM_TRANSCRIPT, SpeechResult, useSpeechRecognition } from '~/common/components/speechrecognition/useSpeechRecognition';
 import { DConversationId } from '~/common/stores/chat/chat.conversation';
 import { copyToClipboard, supportsClipboardRead } from '~/common/util/clipboardUtils';
-import { createTextContentFragment, DMessageAttachmentFragment, DMessageContentFragment, duplicateDMessageFragments } from '~/common/stores/chat/chat.fragments';
+import { createHostedResourceContentFragment, createTextContentFragment, DMessageAttachmentFragment, DMessageContentFragment, duplicateDMessageFragments } from '~/common/stores/chat/chat.fragments';
 import { glueForMessageTokens, marshallWrapDocFragments } from '~/common/stores/chat/chat.tokens';
 import { isValidConversation, useChatStore } from '~/common/stores/chat/store-chats';
+import { orderedUserFragments } from '~/common/stores/chat/chat.fragment-order';
 import { getModelParameterValueWithFallback } from '~/common/stores/llms/llms.parameters';
 import { launchAppCall, removeQueryParam, useRouterQuery } from '~/common/app.routes';
 import { lineHeightTextareaMd, themeBgAppChatComposer } from '~/common/app.theme';
 import { optimaOpenPreferences } from '~/common/layout/optima/useOptima';
-import { platformAwareKeystrokes } from '~/common/components/KeyStroke';
 import { supportsCameraCapture } from '~/common/components/camera/useCameraCapture';
 import { supportsScreenCapture } from '~/common/util/screenCaptureUtils';
 import { useAttachHandler_CameraOpen, useAttachHandler_Files, useAttachHandler_PasteIntercept, useAttachHandler_ScreenCapture, useAttachHandler_UrlWebLinks } from '~/common/attachment-drafts/attachment-sources/useAttachmentSourceHandlers';
 import { useChatComposerOverlayStore } from '~/common/chat-overlay/store-perchat_vanilla';
 import { useComposerStartupText, useLogicSherpaStore } from '~/common/logic/store-logic-sherpa';
 import { useOverlayComponents } from '~/common/layout/overlays/useOverlayComponents';
-import { useUICounter, useUIPreferencesStore } from '~/common/stores/store-ui';
+import { getUIEnterIsNewline, useUICounter, useUIPreferencesStore } from '~/common/stores/store-ui';
 import { useUXLabsStore } from '~/common/stores/store-ux-labs';
 
 import type { ActileItem } from './actile/ActileProvider';
@@ -55,12 +56,14 @@ import { providerStarredMessages, StarredMessageItem } from './actile/providerSt
 import { useActileManager } from './actile/useActileManager';
 
 import type { AttachmentDraftId, AttachmentDraftsAction } from '~/common/attachment-drafts/attachment.types';
+import { AttachmentInputEnhancersOptions, attachmentEnhancersPlaceholderHints } from '~/common/attachment-drafts/attachment.enhancers';
 import { AttachmentSourcesMemo } from '~/common/attachment-drafts/attachment-sources/AttachmentSources';
 import { useAttachmentDrafts } from '~/common/attachment-drafts/useAttachmentDrafts';
-import { useAttachmentDraftsEnrichment } from '~/common/attachment-drafts/llm-enrichment/useAttachmentDraftsEnrichment';
+import { useLLMImageInputPolicy } from '~/common/attachment-drafts/llm-enrichment/useLLMImageInputPolicy';
 import { useGoogleDrivePicker } from '~/common/attachment-drafts/attachment-sources/useGoogleDrivePicker';
 
 import type { ChatExecuteMode } from '../../execute-mode/execute-mode.types';
+import { getUserMessageFragmentPlacement } from '../../store-app-chat';
 import { chatExecuteModeCanAttach, useChatExecuteMode } from '../../execute-mode/useChatExecuteMode';
 
 import { ButtonBeamMemo } from './buttons/ButtonBeam';
@@ -70,7 +73,10 @@ import { ButtonMicContinuationMemo } from './buttons/ButtonMicContinuation';
 import { ButtonMicMemo } from './buttons/ButtonMic';
 import { ButtonMultiChatMemo } from './buttons/ButtonMultiChat';
 import { ButtonOptionsDraw } from './buttons/ButtonOptionsDraw';
+import { COMPOSER_INPUT_ENHANCERS } from './composer.input-enhancers';
+import { useComposerEnhancerHint } from './useComposerEnhancerHint';
 import { ComposerAttachmentDraftsList } from './llmattachments/ComposerAttachmentDraftsList';
+import { InReferenceToBubble } from '../message/in-reference-to/InReferenceToBubble';
 import { ComposerTextAreaActions } from './textarea/ComposerTextAreaActions';
 import { ComposerTextAreaDrawActions } from './textarea/ComposerTextAreaDrawActions';
 import { StatusBarMemo } from '../StatusBar';
@@ -102,7 +108,7 @@ const minimizedSx: SxProps = {
 export function Composer(props: {
   isMobile: boolean;
   chatLLM: DLLM | null;
-  composerTextAreaRef: React.RefObject<HTMLTextAreaElement | null>;
+  composerTextAreaRef: React.RefObject<HTMLTextAreaElement>;
   targetConversationId: DConversationId | null;
   capabilityHasT2I: boolean;
   capabilityHasT2IEdit: boolean;
@@ -140,8 +146,7 @@ export function Composer(props: {
   })));
   const timeToShowTips = useLogicSherpaStore(state => state.usageCount >= SHOW_TIPS_AFTER_RELOADS);
   const { novel: explainShiftEnter, touch: touchShiftEnter } = useUICounter('composer-shift-enter');
-  const { novel: explainAltEnter, touch: touchAltEnter } = useUICounter('composer-alt-enter');
-  const { novel: explainCtrlEnter, touch: touchCtrlEnter } = useUICounter('composer-ctrl-enter');
+
   const [startupText, setStartupText] = useComposerStartupText();
   const enterIsNewline = useUIPreferencesStore(state => state.enterIsNewline);
   const composerQuickButton = useUIPreferencesStore(state => state.composerQuickButton);
@@ -164,6 +169,9 @@ export function Composer(props: {
   // composer-overlay: for the in-reference-to state, comes from the conversation overlay
   const allowInReferenceTo = chatExecuteMode === 'generate-content';
   const inReferenceTo = useChatComposerOverlayStore(conversationOverlayStore, store => allowInReferenceTo ? store.inReferenceTo : null);
+
+  // composer-overlay: parts added by input enhancers (e.g. pasted video URLs, outside the attachment pipeline)
+  const pendingParts = useChatComposerOverlayStore(conversationOverlayStore, store => store.pendingParts.length ? store.pendingParts : null);
 
   // LLM-derived
   const noLLM = !props.chatLLM;
@@ -191,14 +199,26 @@ export function Composer(props: {
 
   // attachments-overlay: comes from the attachments slice of the conversation overlay
   const showChatAttachments = chatExecuteModeCanAttach(chatExecuteMode, props.capabilityHasT2IEdit);
+
+  // input enhancers: intercept recognized pasted text into pending parts - off in image-only modes
+  const addPendingPart = React.useCallback((part: DComposerPendingPart) => {
+    conversationOverlayStore?.getState().addPendingPart(part);
+  }, [conversationOverlayStore]);
+  const { enhancerHintItem, onEnhancerDisabledMatch, clearEnhancerHint } = useComposerEnhancerHint(conversationOverlayStore, setComposeText, props.targetConversationId);
+  const enhancersOff = !props.chatLLM || showChatAttachments === 'only-images';
+  const enhancersOptions = React.useMemo((): AttachmentInputEnhancersOptions | undefined => {
+    if (enhancersOff || !props.chatLLM) return undefined;
+    return { enhancers: COMPOSER_INPUT_ENHANCERS, enhancerLLM: props.chatLLM, onEnhancerAddPendingPart: addPendingPart, onEnhancerDisabledMatch };
+  }, [enhancersOff, props.chatLLM, addPendingPart, onEnhancerDisabledMatch]);
+
   const {
     /* items */ attachmentDrafts,
     /* append */ attachAppendClipboardItems, attachAppendCloudFile, attachAppendDataTransfer, attachAppendEgoFragments, attachAppendFile, attachAppendUrl,
     /* take */ attachmentsRemoveAll, attachmentsTakeAllFragments, attachmentsTakeFragmentsByType,
-  } = useAttachmentDrafts(conversationOverlayStore, enableLoadURLsInComposer, chatLLMSupportsImages, handleFilterAGIFile, showChatAttachments === 'only-images');
+  } = useAttachmentDrafts(conversationOverlayStore, enableLoadURLsInComposer, chatLLMSupportsImages, handleFilterAGIFile, showChatAttachments === 'only-images', enhancersOptions);
 
   // attachments derived state
-  const { enrichment: attEnrichment, summary: attEnrichSummary } = useAttachmentDraftsEnrichment(attachmentDrafts, props.chatLLM, chatLLMSupportsImages);
+  const { attEnrichment, attEnrichSummary, confirmUnsupportedLLMAttachments } = useLLMImageInputPolicy(props.chatLLM, attachmentDrafts);
 
   // drag/drop
   const { dragContainerSx, dropComponent, handleContainerDragEnter, handleContainerDragStart } = useComposerDragDrop(!props.isMobile, attachAppendDataTransfer);
@@ -241,7 +261,7 @@ export function Composer(props: {
   }, [setComposeText, setStartupText, startupText]);
 
   // Effect: notify the parent of presence/absence of content
-  const isContentful = composeText.length > 0 || !!attachmentDrafts.length;
+  const isContentful = composeText.length > 0 || !!attachmentDrafts.length || !!pendingParts?.length;
   const { onComposerHasContent } = props;
   React.useEffect(() => {
     onComposerHasContent?.(isContentful);
@@ -258,43 +278,31 @@ export function Composer(props: {
     conversationOverlayStore?.getState().clearInReferenceTo();
   }, [conversationOverlayStore]);
 
+  const handleRemovePendingPart = React.useCallback((part: DComposerPendingPart) => {
+    conversationOverlayStore?.getState().removePendingPart(part);
+  }, [conversationOverlayStore]);
+
   React.useEffect(() => {
     if (inReferenceTo?.length)
       setTimeout(() => composerTextAreaRef.current?.focus(), 1 /* prevent focus theft */);
   }, [composerTextAreaRef, inReferenceTo]);
 
 
-  // Confirmation Modals
-
-  const confirmProceedIfAttachmentsNotSupported = React.useCallback(async (): Promise<boolean> => {
-    if (attEnrichSummary.allCompatible) return true;
-    return await showPromisedOverlay('composer-unsupported-attachments', { rejectWithValue: false }, ({ onResolve, onUserReject }) => (
-      <ConfirmationModal
-        open
-        onClose={onUserReject}
-        onPositive={() => onResolve(true)}
-        confirmationText='Some attached files may not be fully compatible with the current AI model. This could affect processing. Would you like to review or proceed?'
-        positiveActionText='Proceed'
-        negativeActionText='Review Attachments'
-        title='Attachment Compatibility Notice'
-      />
-    ));
-  }, [attEnrichSummary.allCompatible, showPromisedOverlay]);
-
-
   // Primary button
 
   const _handleClearText = React.useCallback(() => {
     setComposeText('');
+    clearEnhancerHint();
     attachmentsRemoveAll();
     handleInReferenceToClear();
-  }, [attachmentsRemoveAll, handleInReferenceToClear, setComposeText]);
+    conversationOverlayStore?.getState().clearPendingParts();
+  }, [attachmentsRemoveAll, clearEnhancerHint, conversationOverlayStore, handleInReferenceToClear, setComposeText]);
 
   const _handleSendActionUnguarded = React.useCallback(async (_chatExecuteMode: ChatExecuteMode, composerText: string): Promise<boolean> => {
     if (!isValidConversation(targetConversationId)) return false;
 
     // await user confirmation (or rejection) if attachments are not supported
-    if (!await confirmProceedIfAttachmentsNotSupported()) return false;
+    if (!await confirmUnsupportedLLMAttachments()) return false;
 
     // validate some chat mode inputs
     const isDraw = _chatExecuteMode === 'generate-image';
@@ -311,6 +319,8 @@ export function Composer(props: {
 
     const canAttach = chatExecuteModeCanAttach(_chatExecuteMode, props.capabilityHasT2IEdit);
     if (canAttach) {
+      // Enhancer-pending media and uploaded files join the same send-order policy.
+      fragments.push(...(pendingParts || []).map(part => createHostedResourceContentFragment(part.resource)));
       const attachmentFragments = await attachmentsTakeAllFragments('global', 'app-chat');
       fragments.push(...attachmentFragments);
     }
@@ -324,11 +334,12 @@ export function Composer(props: {
     const metadata = inReferenceTo?.length ? { inReferenceTo: inReferenceTo } : undefined;
 
     // send the message - NOTE: if successful, the ownership of the fragments is transferred to the receiver, so we just clear them
-    const enqueued = onAction(targetConversationId, _chatExecuteMode, fragments, metadata);
+    const sortedUserFragments = orderedUserFragments(fragments, getUserMessageFragmentPlacement());
+    const enqueued = onAction(targetConversationId, _chatExecuteMode, sortedUserFragments, metadata);
     if (enqueued)
       _handleClearText();
     return enqueued;
-  }, [targetConversationId, confirmProceedIfAttachmentsNotSupported, composerTextSuffix, props.capabilityHasT2IEdit, inReferenceTo, onAction, _handleClearText, attachmentsTakeAllFragments]);
+  }, [targetConversationId, confirmUnsupportedLLMAttachments, composerTextSuffix, props.capabilityHasT2IEdit, inReferenceTo, onAction, _handleClearText, attachmentsTakeAllFragments, pendingParts]);
 
   const handleSendAction = React.useCallback(async (chatExecuteMode: ChatExecuteMode, composerText: string): Promise<boolean> => {
     setSendStarted(true);
@@ -524,7 +535,8 @@ export function Composer(props: {
     providerStarredMessages(onActileEmbedMessage),
   ], [conversationOverlayStore, onActileCommandPaste, onActileEmbedMessage]);
 
-  const { actileComponent, actileInterceptKeydown, actileInterceptTextChange } = useActileManager(actileProviders, composerTextAreaRef);
+  const disableActile = chatExecuteMode === 'generate-image';
+  const { actileComponent, actileInterceptKeydown, actileInterceptTextChange } = useActileManager(!disableActile, actileProviders, composerTextAreaRef);
 
 
   // Type...
@@ -548,30 +560,28 @@ export function Composer(props: {
       // Alt (Windows) or Option (Mac) + Enter: append the message instead of sending it
       if (e.altKey && !e.metaKey && !e.ctrlKey) {
         if (await handleSendAction('append-user', composeText)) // 'alt+enter' -> write
-          touchAltEnter();
+          e.stopPropagation();
         return e.preventDefault();
       }
 
       // Ctrl (Windows) or Command (Mac) + Enter: send for beaming
       if (e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (await handleSendAction('beam-content', composeText)) { // 'ctrl+enter' -> beam
-          touchCtrlEnter();
+        if (await handleSendAction('beam-content', composeText)) // 'ctrl+enter' -> beam
           e.stopPropagation();
-        }
         return e.preventDefault();
       }
 
       // Shift: toggles the 'enter is newline'
       if (e.shiftKey)
         touchShiftEnter();
-      if (enterIsNewline ? e.shiftKey : !e.shiftKey) {
+      if (getUIEnterIsNewline() ? e.shiftKey : !e.shiftKey) {
         if (!assistantAbortible)
           await handleSendAction(chatExecuteMode, composeText); // enter -> send
         return e.preventDefault();
       }
     }
 
-  }, [actileInterceptKeydown, assistantAbortible, chatExecuteMode, composeText, enterIsNewline, handleSendAction, touchAltEnter, touchCtrlEnter, touchShiftEnter]);
+  }, [actileInterceptKeydown, assistantAbortible, chatExecuteMode, composeText, handleSendAction, touchShiftEnter]);
 
 
   // Focus mode
@@ -590,7 +600,7 @@ export function Composer(props: {
 
   // Attachments Up
 
-  const handleAttachCtrlV = useAttachHandler_PasteIntercept(attachAppendDataTransfer);
+  const handleAttachCtrlV = useAttachHandler_PasteIntercept(attachAppendDataTransfer, enhancersOptions);
   const handleAttachFiles = useAttachHandler_Files(attachAppendFile);
   const handleOpenCamera = useAttachHandler_CameraOpen(attachAppendFile);
   const handleAttachScreenCapture = useAttachHandler_ScreenCapture(attachAppendFile);
@@ -624,10 +634,10 @@ export function Composer(props: {
   useGlobalShortcuts('ChatComposer', React.useMemo(() => {
     const composerShortcuts: ShortcutObject[] = [];
     if (showChatAttachments) {
-      composerShortcuts.push({ key: 'f', ctrl: true, shift: true, action: () => openFileForAttaching(true, handleAttachFiles), description: 'Attach File' });
+      composerShortcuts.push({ key: 'f', ctrl: true, shift: true, action: () => openFileForAttaching(true, handleAttachFiles), description: 'Attach File' /*, startDecoratorIcon: AddRoundedIcon as ShortcutObject['startDecoratorIcon'] */ });
       composerShortcuts.push({ key: 'l', ctrl: true, shift: true, action: openWebInputDialog, description: 'Attach Link' });
       if (supportsClipboardRead())
-        composerShortcuts.push({ key: 'v', ctrl: true, shift: true, action: attachAppendClipboardItems, description: 'Attach Clipboard' });
+        composerShortcuts.push({ key: 'v', ctrl: true, shift: true, action: attachAppendClipboardItems, description: 'Attach Clipboard' /*, startDecoratorIcon: AddRoundedIcon as ShortcutObject['startDecoratorIcon'] */ });
       // Future: keep reactive state here to support Live Screen Capture and more
       // if (supportsScreenCapture)
       //   composerShortcuts.push({ key: 's', ctrl: true, shift: true, action: openScreenCaptureDialog, description: 'Attach Screen Capture' });
@@ -662,6 +672,7 @@ export function Composer(props: {
 
   const showChatInReferenceTo = !!inReferenceTo?.length;
   const showChatExtras = isText && !showChatInReferenceTo && !assistantAbortible && composerQuickButton !== 'off';
+  const speechMayWork = browserSpeechRecognitionCapability().mayWork;
 
   const sendButtonVariant: VariantProp = (isAppend || (isMobile && isTextBeam)) ? 'outlined' : 'solid';
 
@@ -693,6 +704,9 @@ export function Composer(props: {
     return actions[Math.floor(Math.random() * actions.length)];
   }, [props.capabilityHasT2I]);
 
+  // input-enhancer hints of the current model (e.g. 'paste a video link')
+  const enhancerHints = !enhancersOptions ? [] : attachmentEnhancersPlaceholderHints(COMPOSER_INPUT_ENHANCERS, props.chatLLM);
+
   let textPlaceholder: string =
     isDraw ? 'Describe what you would like to see...'
       : isReAct ? 'Ask a multi-step reasoning question...'
@@ -703,15 +717,12 @@ export function Composer(props: {
             + (isDesktop ? ` · drop ${props.isDeveloperMode ? 'source' : 'files'}` : '')
             + ` · ${placeholderAction}`
             + (recognitionState.isAvailable ? ' · ramble' : '')
+            + enhancerHints.map(hint => ` · ${hint}`).join('')
             + '...';
 
   if (isDesktop && timeToShowTips && !isDraw) {
     if (explainShiftEnter)
       textPlaceholder += !enterIsNewline ? '\n\n⏎ Shift + Enter to add a new line' : '\n\n➤ Shift + Enter to send';
-      // else if (explainAltEnter)
-    //   textPlaceholder += platformAwareKeystrokes('\n\n⭳ Tip: Alt + Enter to just append the message');
-    else if (explainCtrlEnter)
-      textPlaceholder += platformAwareKeystrokes('\n\n⫷ Tip: Ctrl + Enter to beam');
   }
 
   const stableGridSx: SxProps = React.useMemo(() => ({
@@ -810,7 +821,7 @@ export function Composer(props: {
               display: 'flex',
               flexDirection: 'column',
               gap: 1,
-              minWidth: 200, // flex: enable X-scrolling (resetting any possible minWidth due to the attachment drafts)
+              minWidth: 120, // flex: enable X-scrolling (resetting any possible minWidth due to the attachment drafts)
             }}>
 
               {/* Text Edit + Mic buttons + MicOverlay */}
@@ -839,10 +850,37 @@ export function Composer(props: {
                       />
                       : <ComposerTextAreaActions
                         agiAttachmentPrompts={agiAttachmentPrompts}
-                        inReferenceTo={inReferenceTo}
                         onAppendAndSend={handleAppendTextAndSend}
-                        onRemoveReferenceTo={handleRemoveInReferenceTo}
-                      />
+                      >
+                        {(!!inReferenceTo?.length || !!pendingParts?.length || !!enhancerHintItem) && (
+                          <>
+                            {/* In-Reference-To bubbles */}
+                            {inReferenceTo?.map((item, index) => (
+                              <InReferenceToBubble
+                                key={index}
+                                item={item}
+                                onRemove={handleRemoveInReferenceTo}
+                                className='within-composer-focus'
+                              />
+                            ))}
+
+                            {/* Enhancer-pending part chips (e.g. video URLs) - dispatched to the owning enhancer's renderer */}
+                            {pendingParts?.map((part, index) => {
+                              const enhancer = COMPOSER_INPUT_ENHANCERS.find(e => e.ownsPart(part));
+                              if (!enhancer) return null;
+                              const PendingChip = enhancer.PendingChip;
+                              return <PendingChip key={index} part={part} onRemove={() => handleRemovePendingPart(part)} />;
+                            })}
+
+                            {/* Capability hint from a disabled enhancer (e.g. video URL pasted on a non-video model) */}
+                            {!!enhancerHintItem && COMPOSER_INPUT_ENHANCERS.map(enhancer => {
+                              const DisabledMatchHint = enhancer.DisabledMatchHint;
+                              if (!DisabledMatchHint || !enhancer.ownsPart(enhancerHintItem.part)) return null;
+                              return <DisabledMatchHint key={enhancer.id} {...enhancerHintItem} />;
+                            })}
+                          </>
+                        )}
+                      </ComposerTextAreaActions>
                     }
                     slotProps={{
                       textarea: {
@@ -953,6 +991,7 @@ export function Composer(props: {
                   enrichment={attEnrichment}
                   enrichmentSummary={attEnrichSummary}
                   agiAttachmentPrompts={agiAttachmentPrompts}
+                  hasPendingMedia={!!pendingParts?.length}
                   onAttachmentDraftsAction={handleAttachmentDraftsAction}
                 />
               )}
@@ -972,7 +1011,7 @@ export function Composer(props: {
 
                 {/* [mobile] bottom-corner secondary button */}
                 {isMobile && (showChatExtras
-                    ? (composerQuickButton === 'call'
+                    ? (composerQuickButton === 'call' && speechMayWork
                       ? <ButtonCallMemo isMobile disabled={noConversation || noLLM} onClick={handleCallClicked} />
                       : <ButtonBeamMemo isMobile disabled={noConversation /*|| noLLM*/} color={beamButtonColor} hasContent={!!composeText} onClick={handleSendTextBeamClicked} />)
                     : isDraw
@@ -1063,8 +1102,8 @@ export function Composer(props: {
               {/* [desktop] secondary bottom-buttons (aligned to bottom for now, and mutually exclusive) */}
               {isDesktop && <Box sx={{ mt: 'auto', display: 'grid', gap: 1 }}>
 
-                {/* [desktop] Call secondary button */}
-                {showChatExtras && <ButtonCallMemo disabled={noConversation || noLLM || assistantAbortible} onClick={handleCallClicked} />}
+                {/* [desktop] Call secondary button - hidden when speech recognition is not available */}
+                {showChatExtras && speechMayWork && <ButtonCallMemo disabled={noConversation || noLLM || assistantAbortible} onClick={handleCallClicked} />}
 
                 {/* [desktop] Draw Options secondary button */}
                 {isDraw && <ButtonOptionsDraw onClick={handleDrawOptionsClicked} />}

@@ -1,4 +1,4 @@
-import type { DMessageGenerator } from '~/common/stores/chat/chat.message';
+import { delayOrAbort } from '~/common/util/abortUtils';
 
 
 // configuration
@@ -14,8 +14,6 @@ type RetryDecision = false | { strategy: RetryStrategy; delayMs: number; attempt
 type RetryStrategy = 'resume' | 'reconnect';
 type StepResult = 'completed' | 'aborted';
 
-type _ResumeHandle = DMessageGenerator['upstreamHandle'];
-
 
 /**
  * Retry/resume logic for AIX _aixChatGenerateContent_LL.
@@ -25,7 +23,6 @@ type _ResumeHandle = DMessageGenerator['upstreamHandle'];
 export class AixStreamRetry {
 
   private mAttempts = 0;
-  private mResumeHandle: _ResumeHandle;
 
   constructor(
     private readonly maxReconnectAttempts = 0,
@@ -33,24 +30,14 @@ export class AixStreamRetry {
   ) {
   }
 
-  // resume handle management
-
-  get resumeHandle() {
-    return this.mResumeHandle;
-  }
-
-  set resumeHandle(handle: _ResumeHandle | undefined) {
-    if (!handle) return;
-    this.mResumeHandle = handle;
-  }
-
   /**
-   * Determines if error is retryable and returns strategy + delay
+   * Determines if error is retryable and returns strategy + delay.
+   * The resume handle (if any) determines the strategy: resume if available, reconnect otherwise.
    */
-  shallRetry(errorType: 'client-aborted' | 'net-disconnected' | 'request-exceeded' | 'response-captive' | 'net-unknown', maybeStatusCode?: number): RetryDecision {
+  shallRetry(errorType: 'client-aborted' | 'net-disconnected' | 'request-exceeded' | 'response-captive' | 'net-unknown', maybeStatusCode?: number, hasResumeHandle?: boolean): RetryDecision {
 
     // determine strategy - based on availability of resume handle
-    const strategy: RetryStrategy = this.mResumeHandle ? 'resume' : 'reconnect';
+    const strategy: RetryStrategy = hasResumeHandle ? 'resume' : 'reconnect';
     const maxAttempts = strategy === 'resume' ? this.maxResumeAttempts : this.maxReconnectAttempts;
 
     // check if we've exceeded max attempts
@@ -113,19 +100,11 @@ export class AixStreamRetry {
    */
   async delayedStep(delayMs: number, abortSignal: AbortSignal): Promise<StepResult> {
     if (abortSignal.aborted || delayMs <= 0) return delayMs === 0 ? 'completed' : 'aborted';
-    return await new Promise<StepResult>((resolve) => {
-      const onAbort = () => {
-        clearTimeout(timer);
-        resolve('aborted');
-      };
-      const timer = setTimeout(() => {
-        abortSignal.removeEventListener('abort', onAbort);
-        // record the attempt only after successful delay completion
-        this.mAttempts++;
-        resolve('completed');
-      }, delayMs);
-      abortSignal.addEventListener('abort', onAbort, { once: true });
-    });
+    if (await delayOrAbort(delayMs, abortSignal) === 'aborted')
+      return 'aborted';
+    // record the attempt only after successful delay completion
+    this.mAttempts++;
+    return 'completed';
   }
 
 }

@@ -7,8 +7,6 @@ import { estimatePersistentStorageOrThrow, requestPersistentStorageSafe } from '
 import { gcAttachmentDBlobs } from '~/common/attachment-drafts/attachment.dblobs';
 import { isBrowser } from '~/common/util/pwaUtils';
 
-import { reconfigureBackendModels } from './reconfigureBackendModels';
-
 
 // configuration
 const DEBUG_SUCCESS_STORAGE_STATS = false;
@@ -20,7 +18,6 @@ interface SherpaStore {
 
   usageCount: number;
 
-  lastLlmReconfigHash: string;
   lastSeenNewsVersion: number;
 
   chatComposerPrefill: string | null; // if not null, the composer will load this text at startup
@@ -34,7 +31,6 @@ export const useLogicSherpaStore = create<SherpaStore>()(
 
       usageCount: 0,
 
-      lastLlmReconfigHash: '',
       lastSeenNewsVersion: 0,
 
       chatComposerPrefill: null,
@@ -70,17 +66,6 @@ export function shallRedirectToNews() {
 
 export function markNewsAsSeen() {
   useLogicSherpaStore.setState({ lastSeenNewsVersion: Release.Monotonics.NewsVersion });
-}
-
-
-// Reconfigure Backend Models
-
-export async function sherpaReconfigureBackendModels() {
-  return reconfigureBackendModels(
-    useLogicSherpaStore.getState().lastLlmReconfigHash,
-    (hash: string) => useLogicSherpaStore.setState({ lastLlmReconfigHash: hash }),
-    true, true,
-  );
 }
 
 

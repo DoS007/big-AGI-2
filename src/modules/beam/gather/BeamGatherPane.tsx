@@ -11,9 +11,10 @@ import { animationColorBeamGather } from '~/common/util/animUtils';
 import { useLLMSelect } from '~/common/components/forms/useLLMSelect';
 
 import { BeamStoreApi, useBeamStore } from '../store-beam.hooks';
-import { CUSTOM_FACTORY_ID, FFactoryId, FUSION_FACTORIES } from './instructions/beam.gather.factories';
+import { FFactoryId, FUSION_FACTORIES } from './instructions/beam.gather.factories';
 import { BEAM_SHOW_REASONING_ICON, GATHER_COLOR } from '../beam.config';
 import { beamPaneSx } from '../BeamCard';
+import { BeamModelUnavailable } from '../components/BeamCardNotice';
 import { useModuleBeamStore } from '../store-module-beam';
 
 
@@ -123,7 +124,7 @@ export function BeamGatherPane(props: {
         </Typography>
         <Typography level='body-sm' sx={{ whiteSpace: 'nowrap' }}>
           {/* may merge or not (hasInputs) N replies.. put this in pretty messages */}
-          {props.canGather ? `Combine the ${props.raysReady} replies` : /*'Fuse all replies'*/ ''}
+          {props.canGather ? `Combine the ${props.raysReady} responses` : ''}
         </Typography>
       </Box>
 
@@ -162,12 +163,11 @@ export function BeamGatherPane(props: {
       {/* Display a Reasoning LLM */}
       {(BEAM_SHOW_REASONING_ICON && llmShowReasoning) ? '🧠' : null}
 
-      {/* LLM - hidden for Custom since each fusion has its own LLM selector */}
-      {currentFactoryId !== CUSTOM_FACTORY_ID && (
-        <Box sx={{ my: '-0.25rem', minWidth: 190, maxWidth: 300 }}>
-          {gatherLlmComponent}
-        </Box>
-      )}
+      {/* LLM - seeds the model of the next merge added; Custom/persona cards keep their own per-merge override - #1196 */}
+      <Box sx={{ my: '-0.25rem', minWidth: 190, maxWidth: 300 }}>
+        {gatherLlmComponent}
+      </Box>
+      <BeamModelUnavailable llmId={currentGatherLlmId} resolved={!!llmOrNull} />
 
       {/* Add Fusion */}
       {/*<FusionAddButton*/}

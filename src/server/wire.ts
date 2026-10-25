@@ -5,6 +5,7 @@ import { objectDeepCloneWithStringLimit } from '~/common/util/objectUtils';
 
 /// set this to true to see the tRPC and fetch requests made by the server
 export const SERVER_DEBUG_WIRE = false;
+const SERVER_DEBUG_MAX_BYTES = 8192;
 
 
 export class ServerFetchError extends Error {
@@ -73,7 +74,10 @@ export function safeErrorString(error: any): string | null {
   if (error.message) {
     if (error.message === 'AggregateError' && error.stack)
       return `AggregateError: ${safeErrorString(error.stack)}`;
-    return safeErrorString(error.message);
+    const message = safeErrorString(error.message);
+    // [OpenRouter] 'metadata' carries the upstream provider's error - without it the message is just 'Provider returned error'
+    const metadataCause = _openRouterErrorMetadataString(error.metadata);
+    return (message && metadataCause) ? `${message} - ${metadataCause}` : message;
   }
   if (typeof error === 'string')
     return error;
@@ -96,6 +100,44 @@ export function safeErrorString(error: any): string | null {
 
   // unlikely fallback
   return error.toString();
+}
+
+/**
+ * [OpenRouter] error objects may carry the upstream provider's error in 'metadata':
+ * `{ provider_name: 'Alibaba', raw: 'data: {"error":{...}}', is_byok }` - 'raw' is the provider's
+ * response body, SSE-framed on streaming requests. Unwrap it down to the provider's own message.
+ */
+function _openRouterErrorMetadataString(metadata: any): string | null {
+  if (!metadata || typeof metadata !== 'object')
+    return null;
+  const { provider_name: providerName, raw } = metadata;
+  if (typeof providerName !== 'string' || !providerName || raw === undefined)
+    return _compactErrorString(metadata); // other shapes, e.g. moderation: { reasons, flagged_input, ... }
+
+  // unwrap 'raw': strip SSE framing, then descend into the provider's error object
+  let rawString = typeof raw === 'string' ? raw.trim() : (_compactErrorString(raw) ?? '');
+  if (rawString.startsWith('data:'))
+    rawString = rawString.split('\n', 1)[0].slice(5).trim();
+  if (rawString.startsWith('{')) {
+    try {
+      rawString = _compactErrorString(JSON.parse(rawString)) || rawString;
+    } catch {
+      // not JSON - keep as-is
+    }
+  }
+  return rawString ? `[${providerName}] ${rawString}` : `[${providerName}] unknown provider error`;
+}
+
+/** safeErrorString, but the object fallback stays single-line - these strings join a larger message. */
+function _compactErrorString(value: any): string | null {
+  const s = safeErrorString(value);
+  if (s?.includes('\n') && typeof value === 'object')
+    try {
+      return JSON.stringify(value);
+    } catch {
+      // circular/unstringifiable - keep the multi-line form
+    }
+  return s;
 }
 
 export function serverCapitalizeFirstLetter(string: string) {
@@ -138,30 +180,6 @@ export function createEmptyReadableStream<T = Uint8Array>(): ReadableStream<T> {
 
 
 /**
- * Used in retry logic to wait between attempts while respecting abort signals.
- * @returns True if aborted, false if completed normally
- */
-export function abortableDelay(delayMs: number, abortSignal: AbortSignal): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    // pre-check: already aborted or invalid delay
-    if (abortSignal.aborted || delayMs <= 0) {
-      resolve(abortSignal.aborted);
-      return;
-    }
-
-    const timer = setTimeout(() => resolve(false), delayMs);
-
-    const onAbort = () => {
-      clearTimeout(timer);
-      resolve(true);
-    };
-
-    abortSignal.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
-
-/**
  * Debugging utility for logging network I/O with sequence tracking and timing.
  * Used for both server-side and client-side (via CSF) wire debugging.
  *
@@ -186,9 +204,15 @@ export class DebugWireLogger {
     const nowMs = Date.now();
     const elapsedMs = this.lastMs ? nowMs - this.lastMs : 0;
     this.lastMs = nowMs;
+
+    // deep clone the object with a per-string-field limit, and remove the type: 'event' field if present
+    const obectClone = objectDeepCloneWithStringLimit(data, `${this.label}.wire-debug`, SERVER_DEBUG_MAX_BYTES);
+    if (obectClone && typeof obectClone === 'object' && 'type' in obectClone && obectClone.type === 'event')
+      delete (obectClone as any).type;
+
     console.log(
       `\n[${this.label}:${this.distinct}] <- #${this.sequenceNumber} (${elapsedMs} ms):`,
-      objectDeepCloneWithStringLimit(data, `${this.label}.wire-debug`, 8192),
+      obectClone,
       // JSON.stringify(objectDeepCloneWithStringLimit(data, `${this.label}.wire-debug`, 8192), null, 2),
     );
   }

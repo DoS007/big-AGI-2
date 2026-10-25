@@ -3,7 +3,7 @@ import type { StateCreator } from 'zustand/vanilla';
 
 import type { DBlobDBContextId, DBlobDBScopeId } from '~/common/stores/blob/dblobs-portability';
 
-import type { DMessageAttachmentFragment } from '~/common/stores/chat/chat.fragments';
+import { attachmentFragmentDocRename, DMessageAttachmentFragment } from '~/common/stores/chat/chat.fragments';
 
 import type { AttachmentCreationOptions, AttachmentDraft, AttachmentDraftConverter, AttachmentDraftId, AttachmentDraftSource } from './attachment.types';
 import { attachmentCreate, attachmentDefineConverters, attachmentLoadInputAsync, attachmentPerformConversion } from './attachment.pipeline';
@@ -18,12 +18,19 @@ interface AttachmentDraftsState {
 
 }
 
+type AttachmentDraftCreationInfo = {
+  id: AttachmentDraftId;
+  label: string;
+  outputsFragmentsCount: number;
+}
+
 export interface AttachmentsDraftsStore extends AttachmentDraftsState {
 
-  createAttachmentDraft: (source: AttachmentDraftSource, options: AttachmentCreationOptions) => Promise<void>;
+  createAttachmentDraft: (source: AttachmentDraftSource, options: AttachmentCreationOptions) => Promise<null | AttachmentDraftCreationInfo>;
   removeAllAttachmentDrafts: () => void;
   removeAttachmentDraft: (attachmentDraftId: AttachmentDraftId) => void;
   moveAttachmentDraft: (attachmentDraftId: AttachmentDraftId, delta: 1 | -1) => void;
+  renameAttachmentDraft: (attachmentDraftId: AttachmentDraftId, newName: string) => void;
   toggleAttachmentDraftConverterAndConvert: (attachmentDraftId: AttachmentDraftId, converterIdx: number | null) => Promise<void>;
 
   /**
@@ -54,7 +61,7 @@ export const createAttachmentDraftsStoreSlice: StateCreator<AttachmentsDraftsSto
   attachmentDrafts: [],
 
   // actions
-  createAttachmentDraft: async (source: AttachmentDraftSource, options: AttachmentCreationOptions) => {
+  createAttachmentDraft: async (source: AttachmentDraftSource, options: AttachmentCreationOptions): Promise<null | AttachmentDraftCreationInfo> => {
     const { _getAttachment, _editAttachment, toggleAttachmentDraftConverterAndConvert } = _get();
 
     const _attachmentDraft = attachmentCreate(source);
@@ -69,13 +76,13 @@ export const createAttachmentDraftsStoreSlice: StateCreator<AttachmentsDraftsSto
     await attachmentLoadInputAsync(source, editFn);
     const loaded = _getAttachment(attachmentDraftId);
     if (!loaded?.input)
-      return;
+      return null;
 
     // 2. Define the I->O Converters
     attachmentDefineConverters(source, loaded.input, options, editFn);
     const defined = _getAttachment(attachmentDraftId);
     if (!defined?.converters.length)
-      return;
+      return null;
 
     // 3. Select the already active, or the first (non-disabled) Converter
     let cIndex = defined.converters.findIndex(_c => _c.isActive);
@@ -84,6 +91,14 @@ export const createAttachmentDraftsStoreSlice: StateCreator<AttachmentsDraftsSto
     if (cIndex === -1)
       cIndex = 0;
     await toggleAttachmentDraftConverterAndConvert(attachmentDraftId, cIndex);
+
+    // return some select info
+    const converted = _getAttachment(attachmentDraftId);
+    return !converted ? null : {
+      id: converted.id,
+      label: converted.label,
+      outputsFragmentsCount: converted.outputFragments.length,
+    };
   },
 
   removeAllAttachmentDrafts: () =>
@@ -132,6 +147,25 @@ export const createAttachmentDraftsStoreSlice: StateCreator<AttachmentsDraftsSto
       [attachments[currentIdx], attachments[targetIdx]] = [attachments[targetIdx], attachments[currentIdx]];
 
       return { attachmentDrafts: attachments };
+    }),
+
+  renameAttachmentDraft: (attachmentDraftId: AttachmentDraftId, newName: string) =>
+    _set(state => {
+      const name = newName.trim();
+      if (!name) return state;
+      return {
+        attachmentDrafts: state.attachmentDrafts.map((draft): AttachmentDraft =>
+          draft.id !== attachmentDraftId ? draft : {
+            ...draft,
+            label: name,
+            labelUserSet: true,
+            // rename the existing outputs in place (same fIds, same DBlobs - do not route through
+            // _replaceAttachmentOutputFragments, which would remove the DBlobs of the 'replaced' fragments);
+            // future re-conversions derive names from .customName instead
+            outputFragments: draft.outputFragments.map(fragment => attachmentFragmentDocRename(fragment, name)),
+          },
+        ),
+      };
     }),
 
   toggleAttachmentDraftConverterAndConvert: async (attachmentDraftId: AttachmentDraftId, converterIdx: number | null) => {

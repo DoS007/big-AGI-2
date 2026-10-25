@@ -13,7 +13,7 @@ import { enhancedCodePanelTitleTooltipSx, RenderCodePanelFrame } from '~/modules
 import type { ContentScaling } from '~/common/app.theme';
 import type { DMessageRole } from '~/common/stores/chat/chat.message';
 import type { LiveFileId } from '~/common/livefile/liveFile.types';
-import { DMessageAttachmentFragment, DMessageDocPart, DMessageFragmentId, DVMimeType, isDocPart, updateFragmentWithEditedText } from '~/common/stores/chat/chat.fragments';
+import { attachmentFragmentDocRename, attachmentFragmentDocTitle, DMessageAttachmentFragment, DMessageFragmentId, DVMimeType, isDocPart, updateFragmentWithEditedText } from '~/common/stores/chat/chat.fragments';
 import { InlineTextarea } from '~/common/components/InlineTextarea';
 import { useContextWorkspaceId } from '~/common/stores/workspace/WorkspaceIdProvider';
 import { useScrollToBottom } from '~/common/scroll-to-bottom/useScrollToBottom';
@@ -53,7 +53,7 @@ function _inferInitialViewAsCode(attachmentFragment: DMessageAttachmentFragment)
 }
 
 
-export const DocAttachmentFragmentPane = React.memo(function DocAttachmentFragment(props: {
+export const DocAttachmentFragmentPane = React.memo(function DocAttachmentFragmentPane(props: {
   fragment: DMessageAttachmentFragment,
   controlledEditor: boolean,
   editedText?: string,
@@ -61,7 +61,6 @@ export const DocAttachmentFragmentPane = React.memo(function DocAttachmentFragme
   messageRole: DMessageRole,
   contentScaling: ContentScaling,
   isMobile: boolean,
-  zenMode: boolean,
   disableMarkdownText: boolean,
   onFragmentDelete?: (fragmentId: DMessageFragmentId) => void,
   onFragmentReplace?: (fragmentId: DMessageFragmentId, newContent: DMessageAttachmentFragment) => void,
@@ -78,7 +77,7 @@ export const DocAttachmentFragmentPane = React.memo(function DocAttachmentFragme
   const { skipNextAutoScroll } = useScrollToBottom();
 
   // derived state
-  const { editedText, fragment, onFragmentDelete, onFragmentReplace } = props;
+  const { editedText, fragment, onFragmentDelete, onFragmentReplace, setEditedText } = props;
 
 
   const fragmentId = fragment.fId;
@@ -90,7 +89,7 @@ export const DocAttachmentFragmentPane = React.memo(function DocAttachmentFragme
   const fragmentTitle = fragmentDocPart.l1Title || fragment.caption; // what's this for?
   const reverseToolbar = props.messageRole === 'assistant';
 
-  const displayTitle = fragmentDocPart.meta?.srcFileName || fragmentDocPart.l1Title || fragmentDocPart.ref || FALLBACK_NO_TITLE;
+  const displayTitle = attachmentFragmentDocTitle(fragment, FALLBACK_NO_TITLE);
 
   const showDeleteInstead = typeof editedText === 'string' && editedText.length === 0 && !!onFragmentDelete;
 
@@ -127,12 +126,9 @@ export const DocAttachmentFragmentPane = React.memo(function DocAttachmentFragme
     setIsEditingTitle(false);
     if (!newTitle.trim() || newTitle === displayTitle || !onFragmentReplace) return;
 
-    // retitle the fragment, without changing Id
-    const newDocPart: DMessageDocPart = { ...fragmentDocPart, l1Title: newTitle, version: (fragmentDocPart?.version ?? 1) + 1 };
-    const newFragment: DMessageAttachmentFragment = { ...fragment, title: newTitle, part: newDocPart };
-
-    onFragmentReplace(fragment.fId, newFragment);
-  }, [displayTitle, fragment, fragmentDocPart, onFragmentReplace]);
+    // rename the fragment (title + l1Title + LLM-facing ref), without changing Id
+    onFragmentReplace(fragment.fId, attachmentFragmentDocRename(fragment, newTitle));
+  }, [displayTitle, fragment, onFragmentReplace]);
 
 
   // LiveFile sync
@@ -206,6 +202,21 @@ export const DocAttachmentFragmentPane = React.memo(function DocAttachmentFragme
   }, [isEditing, skipNextAutoScroll]);
 
 
+  // replace fragment with the blocks text - e.g. clicking on a checkbox
+
+  const handleSetTextFromBlocks = React.useCallback((newText: string) => {
+    // sync the edit state to this text (for future edits)
+    setEditedText(fragmentId, newText);
+
+    // stops any editing operation
+    setIsEditing(false);
+    setIsEditingTitle(false); // just in case
+
+    // replace the fragment content
+    handleReplaceDocFragmentText(newText);
+  }, [fragmentId, handleReplaceDocFragmentText, setEditedText]);
+
+
   // view as code
 
   const handleToggleViewAsCode = React.useCallback(() => {
@@ -234,7 +245,7 @@ export const DocAttachmentFragmentPane = React.memo(function DocAttachmentFragme
       <div>{fragmentDocPart.data?.mimeType || '(unknown)'}</div>
       <div>Render type</div>
       <div>{fragmentDocPart.vdt}</div>
-      <div>Text Buffer Id</div>
+      <div>Fragment Id</div>
       <div>{fragmentId}</div>
       {!!fragment.caption && <div>Att. Caption</div>}
       {!!fragment.caption && <div>{fragment.caption}</div>}
@@ -347,7 +358,7 @@ export const DocAttachmentFragmentPane = React.memo(function DocAttachmentFragme
               startDecorator={showDeleteInstead ? <DeleteForeverIcon /> : props.controlledEditor ? undefined : <CheckRoundedIcon />}
               sx={_styles.button}
             >
-              {!showDeleteInstead ? 'Save' : 'Delete'}
+              {!showDeleteInstead ? (props.controlledEditor ? 'Ok' : 'Save') : 'Delete'}
             </Button>
           )}
         </Box>
@@ -387,13 +398,18 @@ export const DocAttachmentFragmentPane = React.memo(function DocAttachmentFragme
           <AutoBlocksRenderer
             // text={marshallWrapText(fragmentDocPart.data.text, /*part.meta?.srcFileName || part.ref*/ undefined, 'markdown-code')}
             text={fragmentDocPart.data.text}
-            renderAsCodeWithTitle={viewAsCode ? (fragmentDocPart.data?.mimeType || fragmentDocPart.ref || fragmentTitle) : undefined}
             fromRole={props.messageRole}
             contentScaling={props.contentScaling}
             fitScreen={props.isMobile}
             isMobile={props.isMobile}
-            codeRenderVariant='plain'
+            blocksProcessor={undefined}
+            inputAsCodeWithTitle={viewAsCode ? (fragmentDocPart.data?.mimeType || fragmentDocPart.ref || fragmentTitle) : undefined}
+            inputAsWordsDiff={undefined}
+            codeRenderVariant='embedded-plain' // for embedding in this pane
+            htmlRenderVariant='show-code'
             textRenderVariant={props.disableMarkdownText ? 'text' : 'markdown'}
+            disableTextCollapser // the pane is opened on purpose: show the whole document
+            setText={!props.onFragmentReplace ? undefined : handleSetTextFromBlocks}
           />
         </Box>
       )}

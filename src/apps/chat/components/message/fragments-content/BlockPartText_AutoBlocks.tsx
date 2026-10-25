@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import type { WordsDiff } from '~/modules/blocks/wordsdiff/RenderWordsDiff';
-import { AutoBlocksRenderer } from '~/modules/blocks/AutoBlocksRenderer';
+import { AutoBlocksHtmlRenderVariant, AutoBlocksRenderer } from '~/modules/blocks/AutoBlocksRenderer';
 
 import type { ContentScaling } from '~/common/app.theme';
 import type { DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
@@ -11,28 +11,35 @@ import { InlineError } from '~/common/components/InlineError';
 
 import { explainServiceErrors } from '../explainServiceErrors';
 
+
+/** Settled fragments skip streaming updates elsewhere in the message. */
+export const BlockPartText_AutoBlocksMemo = React.memo(BlockPartText_AutoBlocks);
+
+
 /**
  * The OG part, comprised of text, which can be markdown, have code blocks, etc.
  * Uses BlocksRenderer to render the markdown/code/html/text, etc.
  */
-export function BlockPartText_AutoBlocks(props: {
+function BlockPartText_AutoBlocks(props: {
   // current value
   textPartText: string,
-  setEditedText?: (fragmentId: DMessageFragmentId, value: string, applyNow: boolean) => void,
-
-  fragmentId: DMessageFragmentId,
   messageRole: DMessageRole,
 
+  fragmentId: DMessageFragmentId,
+  setEditedText?: (fragmentId: DMessageFragmentId, value: string, applyNow: boolean) => void,
+
   contentScaling: ContentScaling,
-  isMobile: boolean,
   fitScreen: boolean,
+  isMobile: boolean,
+
+  inputAsWordsDiff?: WordsDiff,
+
   disableMarkdownText: boolean,
-  renderAsWordsDiff?: WordsDiff,
+  htmlRenderVariant?: AutoBlocksHtmlRenderVariant,
 
-  showUnsafeHtmlCode?: boolean,
-  optiAllowSubBlocksMemo: boolean,
+  inFlux: boolean,
 
-  onContextMenu?: (event: React.MouseEvent) => void;
+  onReattachAsFile?: (file: File) => void;
   onDoubleClick?: (event: React.MouseEvent) => void;
 
 }) {
@@ -72,14 +79,16 @@ export function BlockPartText_AutoBlocks(props: {
       contentScaling={props.contentScaling}
       fitScreen={props.fitScreen}
       isMobile={props.isMobile}
-      showUnsafeHtmlCode={props.showUnsafeHtmlCode}
-      renderAsWordsDiff={props.renderAsWordsDiff}
-      codeRenderVariant='enhanced' // was: { props.enhanceCodeBlocks ? 'enhanced' : 'outlined' }
-      textRenderVariant={props.disableMarkdownText ? 'text' : 'markdown'}
-      optiAllowSubBlocksMemo={props.optiAllowSubBlocksMemo}
-      onContextMenu={props.onContextMenu}
+      blocksProcessor={undefined}
+      inputAsCodeWithTitle={undefined}
+      inputAsWordsDiff={props.inputAsWordsDiff}
+      codeRenderVariant='enhanced' // can still be downgraded to 'outlined', e.g. for small snippets or given vnd types
+      htmlRenderVariant={props.htmlRenderVariant}
+      textRenderVariant={props.disableMarkdownText ? 'text' : props.messageRole === 'user' ? 'markdown-user' : 'markdown'}
+      inFlux={props.inFlux}
       onDoubleClick={props.onDoubleClick}
       setText={!props.setEditedText ? undefined : handleSetText}
+      onReattachAsFile={props.onReattachAsFile}
     />
   );
 }

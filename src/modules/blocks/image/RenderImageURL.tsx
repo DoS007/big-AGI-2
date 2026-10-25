@@ -6,7 +6,7 @@ import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
-import ReplayIcon from '@mui/icons-material/Replay';
+import ReplayRoundedIcon from '@mui/icons-material/ReplayRounded';
 
 import type { RenderBlockInputs } from '../blocks.types';
 import { OverlayButton, overlayButtonsActiveSx, overlayButtonsClassName, overlayButtonsTopRightSx } from '../OverlayButton';
@@ -49,9 +49,10 @@ const overlayButtonsGridSx: SxProps = {
   display: 'grid',
   gridTemplateColumns: 'auto auto',
   gap: 0.5,
+  '& svg': { fontSize: '1.25rem' },
 };
 
-export type RenderImageURLVariant = 'content-part' | 'attachment-card' | 'attachment-button';
+export type RenderImageURLVariant = 'content-part' | 'attachment-card' | 'attachment-card-edit' | 'attachment-button';
 
 /**
  * Renders an Image Data URL, or a remote URL.
@@ -81,6 +82,13 @@ export const RenderImageURL = (props: {
     const timeout = setTimeout(() => setLoadingTimeout(true), 2000);
     return () => clearTimeout(timeout);
   }, []);
+
+  // [effect] auto-disarm after timeout
+  React.useEffect(() => {
+    if (!deleteArmed) return;
+    const timer = setTimeout(() => setDeleteArmed(false), 5000);
+    return () => clearTimeout(timer);
+  }, [deleteArmed]);
 
   // handlers
   const { onImageDelete, onImageRegenerate, onViewImage } = props;
@@ -131,7 +139,9 @@ export const RenderImageURL = (props: {
 
 
   // derived state
-  const isCard = props.variant === 'attachment-card';
+  const isEditingAttachment = props.variant === 'attachment-card-edit';
+  const isCard = props.variant === 'attachment-card' || isEditingAttachment;
+  const cardColor = isEditingAttachment ? 'warning' : isCard ? 'primary' : undefined;
   const isImageClickable = !props.disabled && (!!onViewImage || (!!props.imageURL && props.imageURL.startsWith('http')));
 
   // Only show regeneration in modal context (when not showing a viewer button)
@@ -141,7 +151,7 @@ export const RenderImageURL = (props: {
 
   return (
     <Sheet
-      color={isCard ? 'primary' : undefined}
+      color={cardColor}
       variant={isCard ? 'outlined' : 'solid'}
       aria-disabled={props.disabled}
       onClick={props.onClick}
@@ -160,6 +170,8 @@ export const RenderImageURL = (props: {
         '& picture': { display: 'flex', justifyContent: 'center' },
         '& img': { maxWidth: '100%', maxHeight: '100%', filter: props.disabled ? 'grayscale(100%)' : undefined },
         [`&:hover > .${overlayButtonsClassName}`]: overlayButtonsActiveSx,
+        [`&:focus-within > .${overlayButtonsClassName}`]: overlayButtonsActiveSx,
+        ...(isEditingAttachment && { [`& > .${overlayButtonsClassName}`]: overlayButtonsActiveSx }),
         '&:hover .overlay-text': overlayButtonsActiveSx,
 
         // layout
@@ -229,21 +241,21 @@ export const RenderImageURL = (props: {
 
         {/* Info toggle */}
         {!!props.expandableText && (
-          <OverlayButton tooltip={infoOpen ? 'Hide Prompt' : 'Show Prompt'} variant={infoOpen ? 'solid' : 'outlined'} color={isCard ? 'primary' : undefined} onClick={handleToggleInfoOpen} sx={{ gridRow: '1', gridColumn: '1' }}>
+          <OverlayButton tooltip={infoOpen ? 'Hide Prompt' : 'Show Prompt'} variant={infoOpen ? 'solid' : 'outlined'} color={cardColor} onClick={handleToggleInfoOpen} sx={{ gridRow: '1', gridColumn: '1' }}>
             <InfoOutlinedIcon />
           </OverlayButton>
         )}
 
         {/* Delete toggle/cancel */}
         {!!onImageDelete && !regenArmed && (
-          <OverlayButton tooltip={deleteArmed ? 'Cancel Deletion' : 'Delete Image'} placement='bottom' variant={deleteArmed ? 'solid' : 'outlined'} color={isCard ? 'primary' : undefined} onClick={handleToggleDeleteArmed} sx={{ gridRow: '1', gridColumn: '2' }}>
+          <OverlayButton tooltip={deleteArmed ? 'Cancel Deletion' : 'Delete Image'} aria-label={deleteArmed ? 'Cancel Deletion' : 'Delete Image'} placement='bottom' size={isEditingAttachment ? 'sm' : undefined} variant={deleteArmed ? 'solid' : isEditingAttachment ? 'soft' : 'outlined'} color={cardColor} onClick={handleToggleDeleteArmed} sx={{ gridRow: '1', gridColumn: '2' }}>
             {deleteArmed ? <CloseRoundedIcon /> : <DeleteOutlineIcon />}
           </OverlayButton>
         )}
 
         {/* Delete confirm (armed) */}
         {deleteArmed && !regenArmed && (
-          <OverlayButton tooltip='Confirm Deletion' placement='bottom' variant='outlined' color='danger' onClick={onImageDelete} sx={{ gridRow: '2', gridColumn: '2' }}>
+          <OverlayButton tooltip='Confirm Deletion' aria-label='Confirm Deletion' placement='bottom' size={isEditingAttachment ? 'sm' : undefined} variant='outlined' color='danger' onClick={onImageDelete} sx={{ gridRow: '2', gridColumn: '2' }}>
             <DeleteForeverIcon sx={{ color: 'danger.solidBg' }} />
           </OverlayButton>
         )}
@@ -251,14 +263,14 @@ export const RenderImageURL = (props: {
         {/* Regenerate toggle/cancel - only in modal context (click image to view inline) */}
         {showRegenerate && !deleteArmed && (
           <OverlayButton tooltip={regenArmed ? 'Cancel Regeneration' : 'Draw again'} placement='bottom' variant={regenArmed ? 'solid' : 'outlined'} onClick={handleToggleRegenArmed} sx={{ gridRow: onImageDelete ? '2' : '1', gridColumn: onImageDelete ? '1' : '2' }}>
-            {regenArmed ? <CloseRoundedIcon /> : <ReplayIcon />}
+            {regenArmed ? <CloseRoundedIcon /> : <ReplayRoundedIcon />}
           </OverlayButton>
         )}
 
         {/* Regenerate confirm (armed) */}
         {regenArmed && !deleteArmed && (
           <OverlayButton tooltip='Confirm Regeneration' placement='bottom' variant='outlined' color='success' onClick={handleImageRegenerate} sx={{ gridRow: '2', gridColumn: '2' }}>
-            <ReplayIcon sx={{ color: 'success.solidBg' }} />
+            <ReplayRoundedIcon sx={{ color: 'success.solidBg' }} />
           </OverlayButton>
         )}
 

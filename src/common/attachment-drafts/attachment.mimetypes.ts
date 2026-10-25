@@ -30,11 +30,15 @@ const GuessedMimeLookupTable: Record<string, GuessedMimeInfo> = {
   // Code (including various programming languages)
   'text/css': { ext: ['css', 'scss', 'less', 'sass'], dt: 'code' },
   'text/javascript': { ext: ['js', 'mjs', 'jsx'], dt: 'code' },
+  'application/javascript': { ext: null, dt: 'code' }, // [Anthropic 2026-04-09] non-standard variant returned by the Anthropic Files API
   'application/x-javascript': { ext: null, dt: 'code' },
   'text/x-typescript': { ext: ['ts', 'tsx', 'd.ts'], dt: 'code' }, // TypeScript files (recommended is application/typescript, but we standardize to text/x-typescript instead as per Gemini's standard)
   'application/x-typescript': { ext: null, dt: 'code' },
   'text/csv': { ext: ['csv', 'tsv'], dt: 'code' },
+  'text/yaml': { ext: ['yaml', 'yml'], dt: 'code' },
+  'application/toml': { ext: ['toml'], dt: 'code' },
   'text/x-python': { ext: ['py', 'pyw'], dt: 'code' },
+  'text/x-script.python': { ext: null, dt: 'code' }, // [Anthropic 2026-04-09]
   'application/x-python-code': { ext: null, dt: 'code' },
   'application/x-ipynb+json': { ext: ['ipynb'], dt: 'code' },
   'application/json': { ext: ['json', 'jsonld'], dt: 'code' },
@@ -121,6 +125,9 @@ const MdTitleToMimeLookupTable: Record<string, GuessedMimeType> = {
   'shell': 'text/x-sh',
   'csv': 'text/csv',
   'tsv': 'text/csv',
+  'yaml': 'text/yaml',
+  'yml': 'text/yaml',
+  'toml': 'application/toml',
   'xml': 'text/xml',
   'pdf': 'application/pdf',
   'doc': 'application/msword',
@@ -137,6 +144,12 @@ export function reverseLookupMimeType(fileExtension: string): GuessedMimeType | 
       return mimeType;
   }
   return null;
+}
+
+/** Mime type from a filename's extension, null when there is no extension or it is unknown */
+export function guessMimeTypeFromFilename(filename: string): GuessedMimeType | null {
+  const dot = filename.lastIndexOf('.');
+  return dot < 0 ? null : reverseLookupMimeType(filename.slice(dot + 1).toLowerCase());
 }
 
 export function reverseLookupMdTitle(mdTitle: string): { mimeType: GuessedMimeType, extension: string | null } | null {
@@ -226,4 +239,9 @@ export function mimeTypeIsPDF(mimeType: string): boolean {
 // MimeTypes to treat as Word documents for attachment purposes
 export function mimeTypeIsDocX(mimeType: string): boolean {
   return GuessedMimeLookupTable[mimeType]?.dt === 'doc-msw';
+}
+
+// The XLSX mini reader does not support the legacy XLS format.
+export function mimeTypeIsXlsx(mimeType: string): boolean {
+  return mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 }

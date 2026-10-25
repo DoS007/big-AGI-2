@@ -4,6 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 
 import type { DLLMId } from '~/common/stores/llms/llms.types';
 import { Is } from '~/common/util/pwaUtils';
+import { normalizeUserFragmentGroupsOrder, UserMessageFragmentGroup, UserMessageFragmentPlacement } from '~/common/stores/chat/chat.fragment-order';
 
 
 export type ChatAutoSpeakType = 'off' | 'firstLine' | 'all';
@@ -40,11 +41,19 @@ interface AppChatStore {
   autoVndAntBreakpoints: boolean;
   setAutoVndAntBreakpoints: (autoVndAntBreakpoints: boolean) => void;
 
+  // chat Mechanics / Policies
+
   chatThinkingPolicy: ChatThinkingPolicy,
   setChatThinkingPolicy: (chatThinkingPolicy: ChatThinkingPolicy) => void;
 
   tokenCountingMethod: TokenCountingMethod;
   setTokenCountingMethod: (tokenCountingMethod: TokenCountingMethod) => void;
+
+  userMessageFragmentOrder?: UserMessageFragmentGroup[];
+  setUserMessageFragmentOrder: (order: undefined | UserMessageFragmentGroup[]) => void;
+
+  userMessageAttachmentsMarker?: boolean; // a `{{attachments}}` prompt line places the attachments there
+  setUserMessageAttachmentsMarker: (enabled: boolean) => void;
 
   // chat UI
 
@@ -65,6 +74,9 @@ interface AppChatStore {
   filterIsArchived: boolean;
   toggleFilterIsArchived: () => void;
 
+  filterOlderThanDays: number | null;
+  setFilterOlderThanDays: (days: number | null) => void;
+
   micTimeoutMs: number;
   setMicTimeoutMs: (micTimeoutMs: number) => void;
 
@@ -79,6 +91,17 @@ interface AppChatStore {
 
   showSystemMessages: boolean;
   setShowSystemMessages: (showSystemMessages: boolean) => void;
+
+  showToolbarNavigation: boolean;
+  toggleShowToolbarNavigation: () => void;
+
+  // browser-storage disclaimer (warning shown at the bottom of the chat list)
+  storageWarningDismissed: boolean;
+  dismissStorageWarning: () => void;
+
+  // View Options - message timestamps
+  messageTimestampMode: ChatMessageTimestampMode;
+  setMessageTimestampMode: (mode: ChatMessageTimestampMode) => void;
 
   // other chat-specific configuration
 
@@ -121,9 +144,15 @@ const useAppChatStore = create<AppChatStore>()(persist(
     tokenCountingMethod: Is.Desktop ? 'accurate' : 'approximate',
     setTokenCountingMethod: (tokenCountingMethod: TokenCountingMethod) => _set({ tokenCountingMethod }),
 
+    // userMessageFragmentOrder: undefined, // keep the default implicit
+    setUserMessageFragmentOrder: (order) => _set({ userMessageFragmentOrder: !order ? undefined : normalizeUserFragmentGroupsOrder(order) }),
+
+    // userMessageAttachmentsMarker: undefined, // off when omitted
+    setUserMessageAttachmentsMarker: (enabled) => _set({ userMessageAttachmentsMarker: enabled || undefined }),
+
     // Chat UI
 
-    clearFilters: () => _set({ filterIsArchived: false, filterHasBeamOpen: false, filterHasDocFragments: false, filterHasImageAssets: false, filterHasStars: false }),
+    clearFilters: () => _set({ filterIsArchived: false, filterHasBeamOpen: false, filterHasDocFragments: false, filterHasImageAssets: false, filterHasStars: false, filterOlderThanDays: null }),
 
     filterHasBeamOpen: false,
     toggleFilterHasBeamOpen: () => _set(({ filterHasBeamOpen }) => ({ filterHasBeamOpen: !filterHasBeamOpen })),
@@ -139,6 +168,9 @@ const useAppChatStore = create<AppChatStore>()(persist(
 
     filterIsArchived: false,
     toggleFilterIsArchived: () => _set(({ filterIsArchived }) => ({ filterIsArchived: !filterIsArchived })),
+
+    filterOlderThanDays: null,
+    setFilterOlderThanDays: (filterOlderThanDays: number | null) => _set({ filterOlderThanDays }),
 
     micTimeoutMs: 5000,
     setMicTimeoutMs: (micTimeoutMs: number) => _set({ micTimeoutMs }),
@@ -156,6 +188,17 @@ const useAppChatStore = create<AppChatStore>()(persist(
     showSystemMessages: false,
     setShowSystemMessages: (showSystemMessages: boolean) => _set({ showSystemMessages }),
 
+    // on by default; no setting UI on `main` (the breadcrumb shows the chat title in the top bar); `dev` adds the toggle
+    showToolbarNavigation: true,
+    toggleShowToolbarNavigation: () => _set(({ showToolbarNavigation }) => ({ showToolbarNavigation: !showToolbarNavigation })),
+
+    // browser-storage disclaimer: shown until the user acknowledges it (persisted, so it survives reloads but not a cache clear - which is exactly the event it warns about)
+    storageWarningDismissed: false,
+    dismissStorageWarning: () => _set({ storageWarningDismissed: true }),
+
+    messageTimestampMode: 'off',
+    setMessageTimestampMode: (messageTimestampMode: ChatMessageTimestampMode) => _set({ messageTimestampMode }),
+
     // Other chat-specific configuration
 
     notificationEnabledModelIds: [],
@@ -170,19 +213,27 @@ const useAppChatStore = create<AppChatStore>()(persist(
 
   }), {
     name: 'app-app-chat',
-    version: 1,
+    version: 3, // note: v2 is a `dev`-only progressive-disclosure migration (panels not present on `main`); jump 1 -> 3 to stay aligned
 
     onRehydrateStorage: () => (state) => {
       if (!state) return;
 
       // for now, let text diff be off by default
       state.showTextDiff = false;
+
+      // reset the notifications for now, to make sure people don't forget the settings
+      state.notificationEnabledModelIds = [];
     },
 
     migrate: (state: any, fromVersion: number): AppChatStore => {
       // 0 -> 1: autoTitleChat was off by mistake - turn it on [Remove past Dec 1, 2023]
       if (state && fromVersion < 1)
         state.autoTitleChat = true;
+
+      // 1 -> 3: show the conversation title in the top bar by default (v2 is a `dev`-only step)
+      if (state && fromVersion < 3)
+        state.showToolbarNavigation = true;
+
       return state;
     },
   },
@@ -218,17 +269,31 @@ export const getChatAutoAI = (): {
   autoSuggestQuestions: boolean,
   autoTitleChat: boolean,
   autoVndAntBreakpoints: boolean,
-  chatThinkingPolicy: ChatThinkingPolicy,
 } => useAppChatStore.getState();
-
-export const useChatAutoSuggestHTMLUI = (): boolean =>
-  useAppChatStore(state => state.autoSuggestHTMLUI);
 
 export const useChatAutoSuggestAttachmentPrompts = (): boolean =>
   useAppChatStore(state => state.autoSuggestAttachmentPrompts);
 
+export const getChatThinkingPolicy = (): ChatThinkingPolicy =>
+  useAppChatStore.getState().chatThinkingPolicy;
+
 export const getChatTokenCountingMethod = (): TokenCountingMethod =>
   useAppChatStore.getState().tokenCountingMethod;
+
+/** Where the attachments go in a new user message: the group order, and whether a `{{attachments}}` marker places them. */
+export const getUserMessageFragmentPlacement = (): UserMessageFragmentPlacement => {
+  const { userMessageFragmentOrder, userMessageAttachmentsMarker } = useAppChatStore.getState();
+  return { order: userMessageFragmentOrder, splitAtMarker: !!userMessageAttachmentsMarker };
+};
+
+export const setUserMessageFragmentOrder = (order: undefined | UserMessageFragmentGroup[]) =>
+  useAppChatStore.getState().setUserMessageFragmentOrder(order);
+
+export const setUserMessageAttachmentsMarker = (enabled: boolean) =>
+  useAppChatStore.getState().setUserMessageAttachmentsMarker(enabled);
+
+export const useUserMessageFragmentPlacement = () =>
+  useAppChatStore(useShallow(state => ({ order: state.userMessageFragmentOrder, splitAtMarker: !!state.userMessageAttachmentsMarker })));
 
 export const useChatMicTimeoutMsValue = (): number =>
   useAppChatStore(state => state.micTimeoutMs);
@@ -243,9 +308,11 @@ export function useChatDrawerFilters() {
     filterHasImageAssets: state.filterHasImageAssets,
     filterHasStars: state.filterHasStars,
     filterIsArchived: state.filterIsArchived,
+    filterOlderThanDays: state.filterOlderThanDays,
     showPersonaIcons: state.showPersonaIcons2,
     showRelativeSize: state.showRelativeSize,
     clearFilters: state.clearFilters,
+    setFilterOlderThanDays: state.setFilterOlderThanDays,
     toggleFilterHasBeamOpen: state.toggleFilterHasBeamOpen,
     toggleFilterHasDocFragments: state.toggleFilterHasDocFragments,
     toggleFilterHasImageAssets: state.toggleFilterHasImageAssets,
@@ -264,6 +331,19 @@ export const getChatShowSystemMessages = (): boolean =>
 
 export const useChatShowSystemMessages = (): [boolean, (showSystemMessages: boolean) => void] =>
   useAppChatStore(useShallow(state => [state.showSystemMessages, state.setShowSystemMessages]));
+
+export const useChatShowToolbarNavigation = (): boolean =>
+  useAppChatStore(state => state.showToolbarNavigation);
+
+export function useChatStorageWarning(): [boolean, () => void] {
+  return useAppChatStore(useShallow(state => [state.storageWarningDismissed, state.dismissStorageWarning]));
+}
+
+/** Off by default. Auto: first user message and final message. All: every user/assistant message. */
+export type ChatMessageTimestampMode = 'off' | 'auto' | 'all';
+
+export const useChatMessageTimestampMode = (): [ChatMessageTimestampMode, (mode: ChatMessageTimestampMode) => void] =>
+  useAppChatStore(useShallow(state => [state.messageTimestampMode, state.setMessageTimestampMode]));
 
 export const getIsNotificationEnabledForModel = (modelId: DLLMId): boolean =>
   useAppChatStore.getState().isNotificationEnabledForModel(modelId);

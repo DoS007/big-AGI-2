@@ -2,12 +2,15 @@ import { hasGoogleAnalytics, sendGAEvent } from '~/common/components/3rdparty/Go
 
 import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/llms.service.types';
 import { DLLM, DLLMId, DModelInterfaceV1, LLM_IF_HOTFIX_NoTemperature, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn } from '~/common/stores/llms/llms.types';
+import { DModelsChangelogVia, llmsChangelogErrorText } from '~/common/stores/llms/llms.changelog';
+import { abortSignalReason } from '~/common/util/abortUtils';
 import { applyModelParameterSpecsInitialValues, DModelParameterSpecAny, LLMImplicitParametersRuntimeFallback } from '~/common/stores/llms/llms.parameters';
 import { isLLMChatPricingFree } from '~/common/stores/llms/llms.pricing';
 import { llmsStoreActions } from '~/common/stores/llms/store-llms';
 
 import type { ModelDescriptionSchema } from './server/llm.server.types';
 import { findServiceAccessOrThrow } from './vendors/vendor.helpers';
+import { llmsDefsVersionFor } from './llm.client.defs';
 
 
 // configuration
@@ -18,6 +21,12 @@ import { findServiceAccessOrThrow } from './vendors/vendor.helpers';
  */
 export const LLMS_VARIANT_SEPARATOR = '::' as const;
 
+// Cap for the *initial* llmResponseTokens default to avoid runaway defaults on huge-context models.
+// The model's maxOutputTokens is unchanged (vendor-reported cap remains true); users can still raise
+// llmResponseTokens via the slider up to maxOutputTokens. On reset, this capped initial is used.
+const _INITIAL_RESPONSE_TOKENS_CAP = 128_000;
+
+
 function _clientIdWithVariant(id: string, idVariant?: string): string {
   return !idVariant ? id
     : idVariant.startsWith(LLMS_VARIANT_SEPARATOR) ? `${id}${idVariant}`
@@ -27,31 +36,61 @@ function _clientIdWithVariant(id: string, idVariant?: string): string {
 
 // LLM Model Updates Client Functions
 
-export async function llmsUpdateModelsForServiceOrThrow(serviceId: DModelsServiceId, keepUserEdits: true): Promise<{ models: ModelDescriptionSchema[] }> {
+/**
+ * react-query key of one service's model listing. Shared by the per-service hook (menu item,
+ * vendor setups) and the refresh session, so concurrent listings of a service dedupe into one request
+ * and `useIsFetching` reports either. A missing service maps to a sentinel, never to a prefix.
+ */
+export function llmsListServiceModelsQueryKey(serviceId: DModelsServiceId | null | undefined) {
+  return ['list-models', serviceId || 'missing-service'] as const;
+}
+
+/**
+ * Lists one service's models into the store, logging a changelog entry (a failure entry on error) and
+ * stamping the service's defs version on success. A `signal` aborted while the listing is in flight
+ * drops the result: nothing is written, nothing is logged.
+ */
+export async function llmsUpdateModelsForServiceOrThrow(
+  serviceId: DModelsServiceId,
+  changelog: { at: number; via: DModelsChangelogVia },
+  signal?: AbortSignal,
+): Promise<{ models: ModelDescriptionSchema[] }> {
 
   // get the access, assuming there's no client config and the server will do all
   const { service, vendor, transportAccess } = findServiceAccessOrThrow(serviceId);
 
-
-  // [CSF] Pre-load client-side executor if needed
-  let clientSideListModels: typeof import('./llm.client.direct-listModels').clientSideListModels | undefined;
-  if (!!transportAccess && typeof transportAccess === 'object' && (transportAccess as any).clientSideFetch)
-    try {
-      clientSideListModels = (await import('./llm.client.direct-listModels')).clientSideListModels;
-    } catch (error) {
-      throw new Error(`Direct model listing issue: ${(error as any)?.message || 'unknown loading error'}`, { cause: error });
-    }
-
   // fetch models
   let models: ModelDescriptionSchema[];
 
-  // LLMs [CSM] Direct Execution
-  if (clientSideListModels)
-    models = await clientSideListModels(transportAccess);
+  // a listing failure is logged as an entry, then rethrown verbatim (callers match the messages)
+  try {
 
-  // LLMs tRPC Execution
-  else
-    models = (await vendor.rpcUpdateModelsOrThrow(transportAccess)).models;
+    // [CSF] Pre-load client-side executor if needed
+    let clientSideListModels: typeof import('./llm.client.direct-listModels').clientSideListModels | undefined;
+    if (!!transportAccess && typeof transportAccess === 'object' && (transportAccess as any).clientSideFetch)
+      try {
+        clientSideListModels = (await import('./llm.client.direct-listModels')).clientSideListModels;
+      } catch (error) {
+        throw new Error(`Direct model listing issue: ${(error as any)?.message || 'unknown loading error'}`, { cause: error });
+      }
+
+    // LLMs [CSM] Direct Execution
+    if (clientSideListModels)
+      models = await clientSideListModels(transportAccess);
+
+    // LLMs tRPC Execution
+    else
+      models = (await vendor.rpcUpdateModelsOrThrow(transportAccess)).models;
+
+  } catch (error) {
+    if (!signal?.aborted)
+      llmsStoreActions().appendModelsChangelog({ at: changelog.at, sId: serviceId, via: changelog.via, err: llmsChangelogErrorText(error) });
+    throw error;
+  }
+
+  // stopped while in flight: drop the result
+  if (signal?.aborted)
+    throw abortSignalReason(signal);
 
 
   // update the global models store
@@ -61,15 +100,20 @@ export async function llmsUpdateModelsForServiceOrThrow(serviceId: DModelsServic
   llmsStoreActions().setServiceLLMs(
     service.id,
     factoryLLMs,
-    keepUserEdits,
+    true,
     false,
+    changelog,
   );
+
+  // the service is now listed with the current model definitions (see llm.client.defs.ts)
+  llmsStoreActions().stampServiceDefs(service.id, llmsDefsVersionFor(vendor.id, service.setup));
 
   // figure out which vendors are actually used and useful
   hasGoogleAnalytics && sendGAEvent('event', 'app_models_updated', {
     app_models_source_id: service.id,
     app_models_source_label: service.label,
     app_models_updated_count: models.length || 0,
+    app_models_update_via: changelog.via,
     app_models_vendor_id: vendor.id,
     app_models_vendor_label: vendor.name,
   });
@@ -86,8 +130,9 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
   const contextTokens = d.contextWindow || null;
   const maxOutputTokens = d.maxCompletionTokens || (contextTokens ? Math.round(contextTokens / 2) : null); // fallback to half context window
 
-  // initial (user overridable) response tokens setting: equal to the max, if the max is given, or to 1/8th of the context window (when max is set to 1/2 of context)
-  const llmResponseTokens = !maxOutputTokens ? null : !d.maxCompletionTokens ? Math.round(maxOutputTokens / 4) : d.maxCompletionTokens;
+  // initial (user overridable) response tokens setting: equal to the max, if the max is given, or to 1/8th of the context window (when max is set to 1/2 of context); clamped to cap
+  const llmResponseTokens = !maxOutputTokens ? null
+    : Math.min(d.maxCompletionTokens ?? Math.round(maxOutputTokens / 4), _INITIAL_RESPONSE_TOKENS_CAP);
 
 
   // DLLM is a fundamental type in our application
@@ -100,6 +145,7 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
     label: d.label,
     created: d.created || 0,
     updated: d.updated || 0,
+    ...(d.pubDate && { pubDate: d.pubDate }),
     description: d.description,
     hidden: !!d.hidden,
 
@@ -142,14 +188,20 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
   };
 
   // set the pricing
-  if (d.chatPrice && typeof d.chatPrice === 'object')
+  if (d.chatPrice && typeof d.chatPrice === 'object') {
+    // drop the wire-compat cache tag (the server emits it for older clients; not stored) - TODO: delete after 2026-12-03
+    const { cache, ...chatPrice } = d.chatPrice;
+    const cacheNoTag = cache ? { ...cache } : undefined;
+    if (cacheNoTag) delete cacheNoTag.cType;
     dllm.pricing = {
       chat: {
-        ...d.chatPrice,
+        ...chatPrice,
+        ...(cacheNoTag && { cache: cacheNoTag }),
         // compute the free status
         _isFree: isLLMChatPricingFree(d.chatPrice),
       },
     };
+  }
 
   // set other params from spec's initialValues
   if (dllm.parameterSpecs?.length)

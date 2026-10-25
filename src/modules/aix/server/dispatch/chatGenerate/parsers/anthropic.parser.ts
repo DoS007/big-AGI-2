@@ -1,19 +1,21 @@
 import { safeErrorString } from '~/server/wire';
 
-import type { AixWire_Particles } from '../../../api/aix.wiretypes';
-import type { ChatGenerateParseFunction } from '../chatGenerate.dispatch';
+import type { AixAPIChatGenerate_Request, AixWire_Particles } from '../../../api/aix.wiretypes';
+import type { ChatGenerateParseContext, ChatGenerateParseFunction } from '../chatGenerate.dispatch';
 import type { IParticleTransmitter } from './IParticleTransmitter';
 import { IssueSymbols } from '../ChatGenerateTransmitter';
 import { aixResilientUnknownValue } from '../../../api/aix.resilience';
 
-import { AnthropicWire_API_Message_Create } from '../../wiretypes/anthropic.wiretypes';
-import { RequestRetryError } from '../chatGenerate.retrier';
+import { AnthropicWire_API_Message_Create, AnthropicWire_Messages } from '../../wiretypes/anthropic.wiretypes';
+import { DispatchContinuationSignal } from '../chatGenerate.continuation';
+import { OperationRetrySignal } from '../chatGenerate.operation-retry';
 
 
 // configuration
 const ANTHROPIC_DEBUG_EVENT_SEQUENCE = false; // true: shows the sequence of events
 // NOTE: the following weakens protocol validation - remove if possible. testing with web search active to see if blocks come out of order
-const ANTHROPIC_FIX_REUSED_BLOCK_INDEX = true; // [Anthropic, 2026-01-12] Block Start Index issue workaround
+// NOTE: 2026-03-23: disabled, not useful any longer
+const ANTHROPIC_FIX_REUSED_BLOCK_INDEX = false; // [Anthropic, 2026-01-12] Block Start Index issue workaround
 
 /**
  * [Anthropic, Opus-4.6] First text packet is '\n\n' - elide it
@@ -72,24 +74,35 @@ const hotFixAntInjectToolsTextSpacer = true;
  * - Message Deltas will provide a 'stop reason' on the message
  * - Begin/End are explicit
  */
-export function createAnthropicMessageParser(): ChatGenerateParseFunction {
+
+// TODO (tracked, not implemented): Anthropic GA'd "mid-conversation system messages" 2026-05-28 (Opus 4.8 only so far) -
+// a `{role: 'system'}` message can be appended mid-`messages` (must immediately follow a user/tool-result turn, and
+// either end the array or precede an assistant turn) to inject operator-priority instructions without invalidating the
+// cached prefix - unlike editing the top-level `system` field, which busts the cache for everything after it. This is a
+// REQUEST-construction feature (would live in anthropic.messageCreate.ts's per-message content-block generator, not
+// here) - noted in this file as the spot we track Anthropic protocol deltas pending wider model support past Opus 4.8.
+// See: https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
+
+export function createAnthropicMessageParser(thinkingOrigins?: () => AnthropicThinkingOrigins): ChatGenerateParseFunction {
   const parserCreationTimestamp = Date.now();
   let responseMessage: AnthropicWire_API_Message_Create.Response;
   let hasErrored = false;
   let timeToFirstEvent: number;
   let messageStartTime: number | undefined = undefined;
   let chatInTokens: number | undefined = undefined;
+  let lastUsage: Parameters<typeof _fromAnthropicUsage>[0] | undefined = undefined; // the request's final usage, for the pause divider
   let needsTextSeparator = false; // insert text separator when text follows server tool
 
   let elideFirstTextBlock = hotFixAntElideLeadingDoubleNewline;
   const elisionCheck = (fullText: string) => {
+    if (!elideFirstTextBlock) return false;
     elideFirstTextBlock = false;
     if (fullText !== '\n\n') return false;
     console.log('[DEV] Anthropic: 🔷 Eliding leading \\n\\n text block');
     return true;
   };
 
-  return function(pt: IParticleTransmitter, eventData: string, eventName?: string, context?: { retriesAvailable: boolean }): void {
+  return function(pt: IParticleTransmitter, eventData: string, eventName?: string, context?: ChatGenerateParseContext): void {
 
     // Time to first event
     if (timeToFirstEvent === undefined)
@@ -127,34 +140,19 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
         if (isFirstMessage)
           pt.setModelName(responseMessage.model);
 
-        // -> Container metadata (for Skills)
+        // -> Container metadata (for Skills) - propagate to client via svs for cross-turn reuse
         if (responseMessage.container) {
-          // TODO: [PRIORITY] Accumulate in DMessage.sessionMetadata:
-          //   pt.setSessionMetadata('anthropic.container.id', container.id)
-          //   pt.setSessionMetadata('anthropic.container.expiresAt', Date.parse(container.expires_at))
-          // Request builder will find latest values and reuse container across turns for file access.
-
-          console.log('[Anthropic] Container active:', {
-            id: responseMessage.container.id,
-            expires_at: responseMessage.container.expires_at,
-            skills: responseMessage.container.skills,
-          });
+          _emitContainerState(pt, responseMessage.container);
+          if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log(`ant message_start: container=${responseMessage.container.id}`);
         }
+
+        // -> [2026-09-01] Preserved thinking: replayed thinking blocks the API dropped (edited history, or a model switch)
+        if (responseMessage.input_transformations?.length)
+          _sendInputTransforms(pt, responseMessage.input_transformations, thinkingOrigins);
 
         if (responseMessage.usage) {
           chatInTokens = responseMessage.usage.input_tokens;
-          const metricsUpdate: AixWire_Particles.CGSelectMetrics = {
-            TIn: chatInTokens,
-            TOut: responseMessage.usage.output_tokens,
-            dtStart: timeToFirstEvent,
-          };
-          if (responseMessage.usage.cache_read_input_tokens || responseMessage.usage.cache_creation_input_tokens) {
-            if (typeof responseMessage.usage.cache_read_input_tokens === 'number')
-              metricsUpdate.TCacheRead = responseMessage.usage.cache_read_input_tokens;
-            if (typeof responseMessage.usage.cache_creation_input_tokens === 'number')
-              metricsUpdate.TCacheWrite = responseMessage.usage.cache_creation_input_tokens;
-          }
-          pt.updateMetrics(metricsUpdate);
+          pt.updateMetrics({ ..._fromAnthropicUsage(responseMessage.usage), dtStart: timeToFirstEvent });
         }
 
         if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log(`ant message_start: model=${responseMessage.model}, TIn=${chatInTokens || 0}, container=${responseMessage.container?.id || 'none'}`);
@@ -165,7 +163,15 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
         if (!responseMessage)
           throw new Error('Unexpected content_block_start');
 
-        const { index: requestedIndex, content_block } = AnthropicWire_API_Message_Create.event_ContentBlockStart_schema.parse(JSON.parse(eventData));
+        const rawEvent = JSON.parse(eventData);
+        const { index: requestedIndex, content_block: contentBlock } = AnthropicWire_API_Message_Create.event_ContentBlockStart_schema.parse(rawEvent);
+
+        // Echo fidelity: the parse strips fields the schema doesn't declare, but this block is echoed verbatim on a
+        // pause_turn continuation, where preserved thinking binds every later thinking block to the turn's content
+        // as generated - restore the raw fields so the echo is the server's block (deltas still accumulate below).
+        // The stripped fields are also reported (throws in dev, warns in prod) so schema drift is seen, not hidden.
+        _reportStrippedBlockFields(rawEvent.content_block, contentBlock);
+        Object.assign(contentBlock, rawEvent.content_block);
 
         // [Anthropic, 2026-01-12] Block Start Index issue
         let index = requestedIndex;
@@ -177,252 +183,113 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
             console.log(`[Anthropic] ♨️ content_block_start: index ${requestedIndex} occupied, promoting to ${index}`);
           } else
             throw new Error(`Unexpected content block start location (${requestedIndex})`);
-        responseMessage.content[index] = content_block;
+        responseMessage.content[index] = contentBlock;
 
-        if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) {
-          const debugInfo = content_block.type === 'tool_use' ? `tool=${content_block.name}`
-            : content_block.type === 'server_tool_use' ? `server_tool=${content_block.name}`
-              : content_block.type === 'text' ? `text_len=${content_block.text.length}`
-                : content_block.type === 'thinking' ? `thinking_len=${content_block.thinking.length}`
-                  : content_block.type === 'container_upload' ? `file_id=${content_block.file_id}`
-                    : content_block.type;
-          console.log(`ant content_block_start[${index}]: type=${content_block.type}, ${debugInfo}`);
+        // [2026-06-09] Forward-compat: unknown/future block types ('fallback', 'compaction', 'advisor_tool_result', ...) are
+        // stored above (index integrity + pause_turn echo) but not processed - deltas/stop for this index are ignored too
+        if (!AnthropicWire_Messages.isKnownContentBlockOutput(contentBlock)) {
+          aixResilientUnknownValue('Anthropic', 'contentBlockType', contentBlock.type);
+          break;
         }
 
-        switch (content_block.type) { // .content_block_start.type
+        if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) {
+          const debugInfo = contentBlock.type === 'tool_use' ? `tool=${contentBlock.name}`
+            : contentBlock.type === 'server_tool_use' ? `server_tool=${contentBlock.name}`
+              : contentBlock.type === 'text' ? `text_len=${contentBlock.text.length}`
+                : contentBlock.type === 'thinking' ? `thinking_len=${contentBlock.thinking.length}`
+                  : contentBlock.type === 'container_upload' ? `file_id=${contentBlock.file_id}`
+                    : contentBlock.type;
+          console.log(`ant content_block_start[${index}]: type=${contentBlock.type}, ${debugInfo}`);
+        }
+
+        switch (contentBlock.type) { // .content_block_start.type
           case 'text':
             // Hotfix Opus-4.6: elide first text block if it's '\n\n'
-            if (elisionCheck(content_block.text)) break;
+            if (elisionCheck(contentBlock.text)) break;
             // add separator when text follows server tool execution
-            pt.appendText(!needsTextSeparator ? content_block.text : '\n\n' + content_block.text);
+            pt.appendText(!needsTextSeparator ? contentBlock.text : '\n\n' + contentBlock.text);
             needsTextSeparator = false;
             // Note: In streaming mode, citations arrive via citations_delta events, not on content_block_start
             break;
 
           case 'thinking':
-            pt.appendReasoningText(content_block.thinking);
-            if (content_block.signature)
-              pt.setReasoningSignature(content_block.signature);
+            pt.appendReasoningText(contentBlock.thinking);
+            if (contentBlock.signature)
+              pt.setReasoningSignature(contentBlock.signature);
             break;
 
           case 'redacted_thinking':
-            pt.addReasoningRedactedData(content_block.data);
+            pt.addReasoningRedactedData(contentBlock.data);
             break;
 
           case 'tool_use':
-            // [Anthropic] Note: .input={} and is parsed as an object - if that's the case, we zap it to ''
-            if (content_block && typeof content_block.input === 'object' && Object.keys(content_block.input).length === 0)
-              content_block.input = null;
+            // [Anthropic] .input arrives as an object: {} when the args will stream via input_json_delta,
+            // or PRE-POPULATED when the call was made programmatically from code execution (PTC) - the
+            // sandbox computed the args, so the block starts complete. Normalize both to the incremental
+            // string representation. (2026-06-13: a PTC client-tool call used to kill the stream here
+            // with "unexpected argument format: got 'object' instead of 'incr_str'")
+            if (contentBlock && contentBlock.input && typeof contentBlock.input === 'object')
+              contentBlock.input = _antStreamingToolInputToString(contentBlock.input);
 
             // [Anthropic, 2025-11-24] Programmatic Tool Calling - detect if called from code execution
-            const isProgrammaticCall = content_block.caller?.type === 'code_execution_20250825';
+            const isProgrammaticCall = contentBlock.caller?.type === 'code_execution_20250825' || contentBlock.caller?.type === 'code_execution_20260120';
             if (isProgrammaticCall && ANTHROPIC_DEBUG_EVENT_SEQUENCE)
-              console.log(`[Anthropic] Programmatic tool call: ${content_block.name} called from code_execution (tool_id: ${content_block.caller?.type === 'code_execution_20250825' ? content_block.caller.tool_id : 'n/a'})`);
+              console.log(`[Anthropic] Programmatic tool call: ${contentBlock.name} called from ${contentBlock.caller!.type} (tool_id: ${contentBlock.caller!.type !== 'direct' ? contentBlock.caller!.tool_id : 'n/a'})`);
 
-            pt.startFunctionCallInvocation(content_block.id, content_block.name, 'incr_str', content_block.input! ?? null);
+            pt.startFunctionCallInvocation(contentBlock.id, contentBlock.name, 'incr_str', contentBlock.input || null);
             break;
 
           case 'server_tool_use':
-            // Server-side tool execution (e.g., web_search, web_fetch, Skills API tools)
-            // NOTE: We don't create tool invocations for server tools - just show placeholders
-            if (content_block && typeof content_block.input === 'object' && Object.keys(content_block.input).length === 0)
-              content_block.input = null;
+            // Streaming: same normalization as tool_use above ({} streams via input_json_delta;
+            // pre-populated objects are stringified so the += accumulation below stays consistent)
+            if (contentBlock && contentBlock.input && typeof contentBlock.input === 'object')
+              contentBlock.input = _antStreamingToolInputToString(contentBlock.input);
 
-            // Show placeholder for known server tools
-            switch (content_block.name) { // .server_tool_use.name
-              case 'web_search':
-                pt.sendVoidPlaceholder('search-web', 'Searching the web...');
-                break;
-              case 'web_fetch':
-                pt.sendVoidPlaceholder('search-web', 'Fetching web content...');
-                break;
-              // Skills API tools (server-side execution)
-              case 'bash_code_execution':
-                pt.sendVoidPlaceholder('code-exec', '⚡ Running bash script...');
-                break;
-              case 'text_editor_code_execution':
-                pt.sendVoidPlaceholder('code-exec', '⚡ Executing code...');
-                break;
-              // [Anthropic, 2025-11-24] Tool Search Tool
-              case 'tool_search_tool_regex':
-              case 'tool_search_tool_bm25':
-                pt.sendVoidPlaceholder('code-exec', '🔍 Searching available tools...');
-                break;
-              default:
-                // For unknown server tools (e.g., future Skills), show a generic placeholder instead of throwing
-                console.warn(`[Anthropic Parser] Unknown server tool: ${content_block.name}`);
-                pt.sendVoidPlaceholder('code-exec', `⚡ Using ${content_block.name}...`);
-                break;
-            }
-
-            // TODO: Store server tool invocation when we add executedBy:'server' support to DMessage tool_response parts
-            // pt.startFunctionCallInvocation(content_block.id, content_block.name, 'incr_str', content_block.input! ?? null);
+            _handleCBS_ServerToolUse(pt, contentBlock);
             break;
 
           case 'web_search_tool_result':
-            // Web search results arrive fully formed (no deltas)
-            // TODO: Store server tool result when we add executedBy:'server' support to DMessage tool_response parts
-            if (Array.isArray(content_block.content)) {
-              // Success - array of search results
-              // NOTE: We don't add citations for bulk search results (too noisy - could be 20+ URLs)
-              //       Only high-quality citations that appear in text annotations should be shown
-              pt.sendVoidPlaceholder('search-web', `Search completed: ${content_block.content.length} results`);
-            } else if (content_block.content.type === 'web_search_tool_result_error') {
-              // Error during web search
-              pt.sendVoidPlaceholder('search-web', `Search error: ${content_block.content.error_code}`);
-            }
+            _handleCBS_WebSearchToolResult(pt, contentBlock);
             break;
 
           case 'web_fetch_tool_result':
-            // Web fetch results arrive fully formed (no deltas)
-            // TODO: Store server tool result when we add executedBy:'server' support to DMessage tool_response parts
-            if (content_block.content.type === 'web_fetch_result') {
-              // Success - fetched a URL
-              pt.sendVoidPlaceholder('search-web', `Retrieved ${content_block.content.url}`);
-
-              // Add citation for the fetched content
-              const fetchedContent = content_block.content.content;
-              pt.appendUrlCitation(
-                fetchedContent?.title || 'Web Content',
-                content_block.content.url,
-                undefined, // citationNumber
-                undefined, // startIndex
-                undefined, // endIndex
-                undefined, // textSnippet
-                content_block.content.retrieved_at ? Date.parse(content_block.content.retrieved_at) : undefined,
-              );
-            } else if (content_block.content.type === 'web_fetch_tool_result_error') {
-              // Error during web fetch
-              pt.sendVoidPlaceholder('search-web', `Fetch error: ${content_block.content.error_code}`);
-            }
+            _handleCBS_WebFetchToolResult(pt, contentBlock);
             break;
 
           case 'code_execution_tool_result':
-            // Code execution result from Skills container - extract file IDs from output
-            if (content_block.content.type === 'code_execution_result') {
-              // Success - check for generated files in content array
-              const fileIds: string[] = [];
-              if (Array.isArray(content_block.content.content)) {
-                for (const outputBlock of content_block.content.content) {
-                  if (outputBlock.type === 'code_execution_output' && outputBlock.file_id) {
-                    fileIds.push(outputBlock.file_id);
-                  }
-                }
-              }
-
-              // Build text message describing execution result
-              let resultText = '\n\n⚡ Code executed by Skill';
-              if (fileIds.length > 0) {
-                resultText += '\n';
-                for (const fileId of fileIds) {
-                  resultText += `\n📎 File: \`${fileId}\``;
-                }
-              } else {
-                resultText += ' (no files generated)';
-              }
-              resultText += '\n';
-              pt.appendText(resultText);
-
-              // Log for debugging
-              console.log('[Anthropic] Code execution result:', {
-                return_code: content_block.content.return_code,
-                file_count: fileIds.length,
-                file_ids: fileIds,
-              });
-            } else if (content_block.content.type === 'code_execution_tool_result_error') {
-              // Error during code execution
-              pt.appendText(`\n\n⚠️ Skill execution error: ${content_block.content.error_code}\n`);
-            }
+            _handleCBS_CodeExecutionToolResult(pt, contentBlock);
             break;
 
           case 'bash_code_execution_tool_result':
-            // Bash code execution result from Skills container - extract file IDs from output
-            if (content_block.content.type === 'bash_code_execution_result') {
-              // Success - check for generated files in content array
-              const fileIds: string[] = [];
-              if (Array.isArray(content_block.content.content)) {
-                for (const outputBlock of content_block.content.content) {
-                  if (outputBlock.type === 'bash_code_execution_output' && outputBlock.file_id) {
-                    fileIds.push(outputBlock.file_id);
-                  }
-                }
-              }
-
-              // Build text message describing execution result
-              let resultText = '\n\n⚡ Bash executed by Skill';
-              if (fileIds.length > 0) {
-                resultText += '\n';
-                for (const fileId of fileIds) {
-                  resultText += `\n📎 File: \`${fileId}\``;
-                }
-              } else {
-                resultText += ' (no files generated)';
-              }
-              resultText += '\n';
-              pt.appendText(resultText);
-
-              // Log for debugging
-              console.log('[Anthropic] Bash code execution result:', {
-                return_code: content_block.content.return_code,
-                file_count: fileIds.length,
-                file_ids: fileIds,
-              });
-            } else if (content_block.content.type === 'bash_code_execution_tool_result_error') {
-              // Error during bash execution
-              pt.appendText(`\n\n⚠️ Bash execution error: ${content_block.content.error_code}\n`);
-            }
+            _handleCBS_BashCodeExecutionToolResult(pt, contentBlock);
             break;
 
           case 'text_editor_code_execution_tool_result':
-            // Text editor code execution result from Skills container
-            pt.sendVoidPlaceholder('code-exec', '⚡ Text editor code executed by Skill');
-
-            // Log for debugging
-            console.log('[Anthropic] Text editor code execution result from Skills');
+            _handleCBS_TextEditorCodeExecutionToolResult(pt, contentBlock);
             break;
 
           case 'mcp_tool_use':
-            throw new Error(`Server tool type 'mcp_tool_use' is not yet implemented. Please report this to request support.`);
+            throw new Error(`Server tool 'mcp_tool_use' is not yet implemented.`);
 
           case 'mcp_tool_result':
-            throw new Error(`Server tool type 'mcp_tool_result' is not yet implemented. Please report this to request support.`);
+            throw new Error(`Server tool 'mcp_tool_result' is not yet implemented.`);
 
           case 'container_upload':
-            // Container upload - this is when a Skill has generated a file
-            // The file_id can be used with the Files API to download the file
-            pt.sendVoidPlaceholder('code-exec', `📎 File generated (ID: ${content_block.file_id})`);
-
-            // Log for debugging
-            console.log('[Anthropic] Container upload:', {
-              file_id: content_block.file_id,
-              container: responseMessage.container?.id,
-            });
-
-            // TODO: Future enhancement - could trigger automatic file download here
-            // using the Files API with content_block.file_id
+            _handleCBS_ContainerUpload(pt, contentBlock, responseMessage.container?.id);
             break;
 
-          case 'tool_result': // [Anthropic, 2025-11-24] Tool Search Tool - The actual tool definitions are auto-expanded by Anthropic's API
-            if (Array.isArray(content_block.content)) {
-              // success
-              const toolNames = content_block.content.map((ref: { type: string; tool_name: string }) => ref.tool_name);
-              pt.sendVoidPlaceholder('code-exec', `🔍 Discovered ${toolNames.length} tool(s): ${toolNames.join(', ')}`);
-              // Log for future debugging
-              console.log('[Anthropic] Tool search discovered:', { tools: toolNames });
-            } else if (content_block.content?.type === 'tool_search_tool_result_error') {
-              // error during tool search
-              pt.sendVoidPlaceholder('code-exec', `🔍 Tool search error: ${content_block.content.error_code}`);
-            }
+          case 'tool_search_tool_result':
+            _handleCBS_ToolSearchToolResult(pt, contentBlock);
             break;
 
           default:
-            const _exhaustiveCheck: never = content_block;
-            aixResilientUnknownValue('Anthropic', 'contentBlockType', (content_block as any)?.type);
+            const _exhaustiveCheck: never = contentBlock;
+            aixResilientUnknownValue('Anthropic', 'contentBlockType', (contentBlock as any)?.type);
             break;
         }
 
         // set separator flag when server tools complete (text after tools needs visual separation)
-        if (content_block.type.includes('tool_use') || content_block.type.includes('tool_result'))
+        if (contentBlock.type.includes('tool_use') || contentBlock.type.includes('tool_result'))
           needsTextSeparator = hotFixAntInjectToolsTextSpacer;
 
         break;
@@ -437,6 +304,16 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
         const contentBlock = responseMessage.content[index];
         if (contentBlock === undefined)
           throw new Error(`Unexpected content block delta location (${index})`);
+
+        // [2026-06-09] Forward-compat: ignore deltas addressed to unknown block types (already reported at content_block_start)
+        if (!AnthropicWire_Messages.isKnownContentBlockOutput(contentBlock))
+          break;
+
+        // [2026-06-09] Forward-compat: unknown delta types (e.g. 'compaction_delta') are reported and skipped
+        if (!AnthropicWire_API_Message_Create.isKnownContentBlockDelta(delta)) {
+          aixResilientUnknownValue('Anthropic', 'deltaType', delta.type);
+          break;
+        }
 
         if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) {
           const debugInfo = delta.type === 'text_delta' ? `len=${delta.text.length}`
@@ -464,9 +341,10 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
               contentBlock.input += delta.partial_json;
               pt.appendFunctionCallInvocationArgs(contentBlock.id, delta.partial_json);
             } else if (contentBlock.type === 'server_tool_use') {
-              // Server tools also receive input_json_delta for their inputs
+              // Server tools stream their input (e.g., for code_execution, this is the Python code being executed).
+              // For PFC flows (Opus), this contains web_search()/web_fetch() calls that reveal the actual search queries.
               contentBlock.input += delta.partial_json;
-              // TODO: Stream server tool args when we add executedBy:'server' support to DMessage tool_response parts
+              // [ATOL] Will stream code/args to the Tool Execution Graph for live display.
               // pt.appendFunctionCallInvocationArgs(contentBlock.id, delta.partial_json);
             } else
               throw new Error('Unexpected input_json_delta');
@@ -492,6 +370,11 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
             // Citations arrive incrementally during streaming - add to current text block
             if (contentBlock.type === 'text') {
               const citation = delta.citation;
+              // Keep the citation on the accumulated block: a pause_turn continuation echoes this block, and the
+              // preserved-thinking check binds every later thinking block to the turn's content as generated -
+              // a cited text block replayed without its citations reads as an edit and drops all thinking after it
+              // (verified 2026-09-23: 'prefix_binding_mismatch' on the next thinking block; clean with citations kept)
+              (contentBlock.citations ??= []).push(citation);
               if (citation.type === 'web_search_result_location') {
                 // Web search citation from server-side search
                 pt.appendUrlCitation(
@@ -524,10 +407,24 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
         if (!responseMessage) throw new Error('Unexpected content_block_stop');
 
         const { index } = AnthropicWire_API_Message_Create.event_ContentBlockStop_schema.parse(JSON.parse(eventData));
-        if (responseMessage.content[index] === undefined)
+        const stoppedBlock = responseMessage.content[index];
+        if (stoppedBlock === undefined)
           throw new Error(`Unexpected content block stop location (${index})`);
 
-        if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log(`ant content_block_stop[${index}]: type=${responseMessage.content[index].type}`);
+        // [2026-06-09] Forward-compat: unknown block types were never started as message parts - nothing to finalize
+        if (!AnthropicWire_Messages.isKnownContentBlockOutput(stoppedBlock))
+          break;
+
+        if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log(`ant content_block_stop[${index}]: type=${stoppedBlock.type}`);
+
+        // Special cases - we usually do not handle block ends
+        switch (stoppedBlock.type) {
+          // For server_tool_use: decode accumulated input (JSON) from the server tool -> code execution code
+          case 'server_tool_use':
+            // Re-send operation state with fully accumulated input (during streaming, content_block_start had empty input)
+            _handleCBE_ServerToolUse_S(pt, stoppedBlock.id, stoppedBlock.name, stoppedBlock.input);
+            break;
+        }
 
         // Signal that the tool is ready? (if it is...)
         pt.endMessagePart();
@@ -541,25 +438,41 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
         const { delta, usage } = AnthropicWire_API_Message_Create.event_MessageDelta_schema.parse(JSON.parse(eventData));
 
         Object.assign(responseMessage, delta);
+        if (usage)
+          lastUsage = usage;
+
+        // -> Container state update - arrives here when container was created mid-stream
+        if (delta.container)
+          _emitContainerState(pt, delta.container);
 
         // -> Token Stop Reason
-        const tokenStopReason = _fromAnthropicStopReason(delta.stop_reason);
+        const tokenStopReason = _fromAnthropicStopReason(delta.stop_reason, 'message_delta');
         if (tokenStopReason !== null)
-          pt.setTokenStopReason(tokenStopReason);
+          pt.setTokenStopReason(tokenStopReason, _formatAnthropicStopError(delta.stop_details));
 
         // NOTE: we have more fields we're not parsing yet - https://platform.claude.com/docs/en/api/typescript/messages#message_delta_usage
-        if (usage?.output_tokens && messageStartTime) {
+        // Metrics: timing is emitted whenever we have a start reference, independent of upstream usage; token
+        // fields are added only when the usage block carries completion tokens (#1149).
+        if (messageStartTime) {
           const elapsedTimeMilliseconds = Date.now() - messageStartTime;
-          const elapsedTimeSeconds = elapsedTimeMilliseconds / 1000;
-          const chatOutRate = elapsedTimeSeconds > 0 ? usage.output_tokens / elapsedTimeSeconds : 0;
-          pt.updateMetrics({
-            TIn: chatInTokens !== undefined ? chatInTokens : -1,
-            TOut: usage.output_tokens,
-            vTOutInner: Math.round(chatOutRate * 100) / 100, // Round to 2 decimal places
+          const metricsUpdate: AixWire_Particles.CGSelectMetrics = {
             dtStart: timeToFirstEvent,
             dtInner: elapsedTimeMilliseconds,
             dtAll: Date.now() - parserCreationTimestamp,
-          });
+          };
+          if (usage?.output_tokens) {
+            const elapsedTimeSeconds = elapsedTimeMilliseconds / 1000;
+            const chatOutRate = elapsedTimeSeconds > 0 ? usage.output_tokens / elapsedTimeSeconds : 0;
+            // the delta carries the final input side (server tool results land here, not in message_start)
+            Object.assign(metricsUpdate, _fromAnthropicUsage(usage));
+            const nCodeExec = _countCodeExecutions(responseMessage.content);
+            if (nCodeExec)
+              metricsUpdate.nCodeExec = nCodeExec;
+            if (metricsUpdate.TIn === undefined)
+              metricsUpdate.TIn = chatInTokens ?? -1;
+            metricsUpdate.vTOutInner = Math.round(chatOutRate * 100) / 100; // Round to 2 decimal places
+          }
+          pt.updateMetrics(metricsUpdate);
         }
 
         if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log(`ant message_delta: stop_reason=${delta.stop_reason || 'none'}, TOut=${usage?.output_tokens || 'none'}`);
@@ -569,7 +482,14 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
       // We can now close the message
       case 'message_stop':
         AnthropicWire_API_Message_Create.event_MessageStop_schema.parse(JSON.parse(eventData));
-        if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log('ant message_stop');
+        if (ANTHROPIC_DEBUG_EVENT_SEQUENCE) console.log('ant message_stop', { stop_reason: responseMessage.stop_reason });
+
+        // Continuation: when pause_turn, throw to trigger re-dispatch with accumulated content
+        if (responseMessage.stop_reason === 'pause_turn')
+          throw new DispatchContinuationSignal(
+            _createAnthropicPauseTurnContinuation(responseMessage.content, responseMessage.container?.id, lastUsage),
+          );
+
         return pt.setDialectEnded('done-dialect'); // Anthropic: stop message
 
       // UNDOCUMENTED - Occasionally, the server will send errors, such as {'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'Overloaded'}}
@@ -591,20 +511,20 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
         // 500* - api_error (anthropic systems internal unexpected error)
         // 529* - overloaded_error: The API is temporarily overloaded.
         // *: retryable errors
-        const isRetryableError = ['overloaded_error', 'rate_limit_error', 'api_error'].includes(error.type);
+        // map error types to HTTP status codes: selects the retry class (429/529 capacity, 500 transient) and shows in diagnostics
+        const errorTypeToHttpStatus: Record<string, number> = {
+          'rate_limit_error': 429,
+          'api_error': 500,
+          'overloaded_error': 529,
+        };
+        const isRetryableError = error.type in errorTypeToHttpStatus;
 
-        // Throw retryable error to instruct the correct ancestor to restart (only if retries available
+        // Throw retryable error to instruct the correct ancestor to restart (only if retries available for this class)
         if (isRetryableError) {
-          if (context?.retriesAvailable) {
+          if (context?.hasRetriesForHttpStatus(errorTypeToHttpStatus[error.type])) {
             console.log(`[Aix.Anthropic] Can retry error '${errorText}'`);
-            // map error types to HTTP status codes for diagnostics
-            const errorTypeToHttpStatus: Record<string, number> = {
-              'rate_limit_error': 429,
-              'api_error': 500,
-              'overloaded_error': 529,
-            };
             // request a retry by unwinding to the retrier
-            throw new RequestRetryError(`retrying Anthropic: ${errorText}`, {
+            throw new OperationRetrySignal(`Anthropic: ${errorText}`, {
               causeHttp: errorTypeToHttpStatus[error.type],
               causeConn: error.type,
             });
@@ -624,36 +544,62 @@ export function createAnthropicMessageParser(): ChatGenerateParseFunction {
 }
 
 
-export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
+export function createAnthropicMessageParserNS(thinkingOrigins?: () => AnthropicThinkingOrigins): ChatGenerateParseFunction {
   const parserCreationTimestamp = Date.now();
   let needsTextSeparator = false; // insert text separator when text follows server tool
 
   let elideFirstTextBlock = hotFixAntElideLeadingDoubleNewline;
   const elisionCheck = (fullText: string) => {
+    if (!elideFirstTextBlock) return false;
     elideFirstTextBlock = false;
     if (fullText !== '\n\n') return false;
     console.log('[DEV] Anthropic: 🔷 Eliding leading \\n\\n text block');
     return true;
   };
 
-  return function(pt: IParticleTransmitter, fullData: string /*, eventName?: string, context?: { retriesAvailable: boolean } */): void {
+  return function(pt: IParticleTransmitter, fullData: string /*, eventName?: string, context?: ChatGenerateParseContext */): void {
 
     // parse with validation (e.g. type: 'message' && role: 'assistant')
+    const rawResponse = JSON.parse(fullData);
     const {
       model,
       content,
+      container,
       stop_reason,
+      stop_details,
       usage,
-    } = AnthropicWire_API_Message_Create.Response_schema.parse(JSON.parse(fullData));
+      input_transformations,
+    } = AnthropicWire_API_Message_Create.Response_schema.parse(rawResponse);
+
+    // Echo fidelity (see the streaming parser): the blocks are echoed verbatim on a pause_turn continuation
+    content.forEach((block, i) => {
+      _reportStrippedBlockFields(rawResponse.content[i], block);
+      Object.assign(block, rawResponse.content[i]);
+    });
 
     // -> Model
     if (model)
       pt.setModelName(model);
 
+    // -> Container metadata (for Skills) - propagate to client via svs for cross-turn reuse
+    if (container)
+      _emitContainerState(pt, container);
+
+    // -> [2026-09-01] Preserved thinking: dropped replayed thinking blocks
+    if (input_transformations?.length)
+      _sendInputTransforms(pt, input_transformations, thinkingOrigins);
+
     // -> Content Blocks - Non-Streaming
     for (let i = 0; i < content.length; i++) {
       const contentBlock = content[i];
       const isLastBlock = i === content.length - 1;
+
+      // [2026-06-09] Forward-compat: skip unknown/future block types ('fallback', 'compaction', 'advisor_tool_result', ...)
+      if (!AnthropicWire_Messages.isKnownContentBlockOutput(contentBlock)) {
+        aixResilientUnknownValue('Anthropic-NS', 'contentBlockType', contentBlock.type);
+        continue;
+      }
+
       switch (contentBlock.type) { // .content_block (non-streaming)
         case 'text':
           // Hotfix Opus-4.6: elide first text block if it's '\n\n'
@@ -693,194 +639,50 @@ export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
           // NOTE: this gets parsed as an object, not string deltas of a json!
 
           // [Anthropic, 2025-11-24] Programmatic Tool Calling - detect if called from code execution
-          const isProgrammaticCallNS = contentBlock.caller?.type === 'code_execution_20250825';
+          const isProgrammaticCallNS = contentBlock.caller?.type === 'code_execution_20250825' || contentBlock.caller?.type === 'code_execution_20260120';
           if (isProgrammaticCallNS)
-            console.log(`[Anthropic] Programmatic tool call (non-streaming): ${contentBlock.name} called from code_execution (tool_id: ${contentBlock.caller?.type === 'code_execution_20250825' ? contentBlock.caller.tool_id : 'n/a'})`);
+            console.log(`[Anthropic] Programmatic tool call (non-streaming): ${contentBlock.name} called from ${contentBlock.caller!.type} (tool_id: ${contentBlock.caller!.type !== 'direct' ? contentBlock.caller!.tool_id : 'n/a'})`);
 
           pt.startFunctionCallInvocation(contentBlock.id, contentBlock.name, 'json_object', (contentBlock.input as object) || null);
           pt.endMessagePart();
           break;
 
         case 'server_tool_use':
-          // Server tool use in non-streaming mode
-          // NOTE: We don't create tool invocations for server tools - just show placeholders
-          switch (contentBlock.name) { // .server_tool_use.name
-            case 'web_search':
-              pt.sendVoidPlaceholder('search-web', 'Searching the web...');
-              break;
-            case 'web_fetch':
-              pt.sendVoidPlaceholder('search-web', 'Fetching web content...');
-              break;
-            case 'bash_code_execution':
-              pt.sendVoidPlaceholder('code-exec', '⚡ Running bash script...');
-              break;
-            case 'text_editor_code_execution':
-              pt.sendVoidPlaceholder('code-exec', '⚡ Executing code...');
-              break;
-            // [Anthropic, 2025-11-24] Tool Search Tool
-            case 'tool_search_tool_regex':
-            case 'tool_search_tool_bm25':
-              pt.sendVoidPlaceholder('code-exec', '🔍 Searching available tools...');
-              break;
-            default:
-              console.warn(`[Anthropic Parser] Unknown server tool (non-streaming): ${contentBlock.name}`);
-              pt.sendVoidPlaceholder('code-exec', `⚡ Using ${contentBlock.name}...`);
-              break;
-          }
-          // TODO: Store server tool invocation when we add executedBy:'server' support to DMessage tool_response parts
-          // pt.startFunctionCallInvocation(contentBlock.id, contentBlock.name, 'json_object', (contentBlock.input as object) || null);
-          // pt.endMessagePart();
+          _handleCBS_ServerToolUse(pt, contentBlock);
           break;
 
         case 'web_search_tool_result':
-          // Web search results in non-streaming mode
-          // TODO: Store server tool result when we add executedBy:'server' support to DMessage tool_response parts
-          if (Array.isArray(contentBlock.content)) {
-            // Success - array of search results
-            // NOTE: We don't add citations for bulk search results (too noisy - could be 20+ URLs)
-            //       Only high-quality citations that appear in text annotations should be shown
-            pt.sendVoidPlaceholder('search-web', `Search completed: ${contentBlock.content.length} results`);
-          } else if (contentBlock.content.type === 'web_search_tool_result_error') {
-            // Error during web search
-            pt.sendVoidPlaceholder('search-web', `Search error: ${contentBlock.content.error_code}`);
-          }
-          // pt.endMessagePart(); // Not needed for placeholders
+          _handleCBS_WebSearchToolResult(pt, contentBlock);
           break;
 
         case 'web_fetch_tool_result':
-          // Web fetch results in non-streaming mode
-          // TODO: Store server tool result when we add executedBy:'server' support to DMessage tool_response parts
-          if (contentBlock.content.type === 'web_fetch_result') {
-            // Success - fetched a URL
-            pt.sendVoidPlaceholder('search-web', `Retrieved ${contentBlock.content.url}`);
-
-            // Add citation for the fetched content
-            const fetchedContent = contentBlock.content.content;
-            pt.appendUrlCitation(
-              fetchedContent?.title || 'Web Content',
-              contentBlock.content.url,
-              undefined, // citationNumber
-              undefined, // startIndex
-              undefined, // endIndex
-              undefined, // textSnippet
-              contentBlock.content.retrieved_at ? Date.parse(contentBlock.content.retrieved_at) : undefined,
-            );
-          } else if (contentBlock.content.type === 'web_fetch_tool_result_error') {
-            // Error during web fetch
-            pt.sendVoidPlaceholder('search-web', `Fetch error: ${contentBlock.content.error_code}`);
-          }
-          // pt.endMessagePart(); // Not needed for placeholders
+          _handleCBS_WebFetchToolResult(pt, contentBlock);
           break;
 
         case 'code_execution_tool_result':
-          // Code execution result from Skills container (non-streaming)
-          if (contentBlock.content.type === 'code_execution_result') {
-            // Success - check for generated files in content array
-            const fileIds: string[] = [];
-            if (Array.isArray(contentBlock.content.content)) {
-              for (const outputBlock of contentBlock.content.content) {
-                if (outputBlock.type === 'code_execution_output' && outputBlock.file_id) {
-                  fileIds.push(outputBlock.file_id);
-                }
-              }
-            }
-
-            // Build text message describing execution result
-            let resultText = '\n\n⚡ Code executed by Skill';
-            if (fileIds.length > 0) {
-              resultText += '\n';
-              for (const fileId of fileIds) {
-                resultText += `\n📎 File: \`${fileId}\``;
-              }
-            } else {
-              resultText += ' (no files generated)';
-            }
-            resultText += '\n';
-            pt.appendText(resultText);
-
-            // Log for debugging
-            console.log('[Anthropic] Code execution result (non-streaming):', {
-              return_code: contentBlock.content.return_code,
-              file_count: fileIds.length,
-              file_ids: fileIds,
-            });
-          } else if (contentBlock.content.type === 'code_execution_tool_result_error') {
-            // Error during code execution
-            pt.appendText(`\n\n⚠️ Skill execution error: ${contentBlock.content.error_code}\n`);
-          }
+          _handleCBS_CodeExecutionToolResult(pt, contentBlock);
           break;
 
         case 'bash_code_execution_tool_result':
-          // Bash code execution result from Skills container (non-streaming)
-          if (contentBlock.content.type === 'bash_code_execution_result') {
-            // Success - check for generated files in content array
-            const fileIds: string[] = [];
-            if (Array.isArray(contentBlock.content.content)) {
-              for (const outputBlock of contentBlock.content.content) {
-                if (outputBlock.type === 'bash_code_execution_output' && outputBlock.file_id) {
-                  fileIds.push(outputBlock.file_id);
-                }
-              }
-            }
-
-            // Build text message describing execution result
-            let resultText = '\n\n⚡ Bash executed by Skill';
-            if (fileIds.length > 0) {
-              resultText += '\n';
-              for (const fileId of fileIds) {
-                resultText += `\n📎 File: \`${fileId}\``;
-              }
-            } else {
-              resultText += ' (no files generated)';
-            }
-            resultText += '\n';
-            pt.appendText(resultText);
-
-            // Log for debugging
-            console.log('[Anthropic] Bash code execution result (non-streaming):', {
-              return_code: contentBlock.content.return_code,
-              file_count: fileIds.length,
-              file_ids: fileIds,
-            });
-          } else if (contentBlock.content.type === 'bash_code_execution_tool_result_error') {
-            // Error during bash execution
-            pt.appendText(`\n\n⚠️ Bash execution error: ${contentBlock.content.error_code}\n`);
-          }
+          _handleCBS_BashCodeExecutionToolResult(pt, contentBlock);
           break;
 
         case 'text_editor_code_execution_tool_result':
-          // Text editor code execution result from Skills container (non-streaming)
-          pt.sendVoidPlaceholder('code-exec', '⚡ Text editor code executed by Skill');
-          console.log('[Anthropic] Text editor code execution result from Skills (non-streaming)');
+          _handleCBS_TextEditorCodeExecutionToolResult(pt, contentBlock);
           break;
 
         case 'mcp_tool_use':
-          throw new Error(`Server tool 'mcp_tool_use' is not yet implemented. Please report this issue to request support.`);
+          throw new Error(`Server tool 'mcp_tool_use' is not yet implemented.`);
 
         case 'mcp_tool_result':
-          throw new Error(`Server tool 'mcp_tool_result' is not yet implemented. Please report this issue to request support.`);
+          throw new Error(`Server tool 'mcp_tool_result' is not yet implemented.`);
 
         case 'container_upload':
-          // Container upload - this is when a Skill has generated a file
-          pt.sendVoidPlaceholder('code-exec', `📎 File generated (ID: ${contentBlock.file_id})`);
-
-          // Log for debugging
-          console.log('[Anthropic] Container upload (non-streaming):', {
-            file_id: contentBlock.file_id,
-          });
+          _handleCBS_ContainerUpload(pt, contentBlock, container?.id);
           break;
 
-        case 'tool_result': // [Anthropic, 2025-11-24] Tool Search Tool - The actual tool definitions are auto-expanded by Anthropic's API
-          if (Array.isArray(contentBlock.content)) {
-            // success
-            const toolNames = contentBlock.content.map((ref: { type: string; tool_name: string }) => ref.tool_name);
-            pt.sendVoidPlaceholder('code-exec', `🔍 Discovered ${toolNames.length} tool(s): ${toolNames.join(', ')}`);
-            // Log for future debugging
-            console.log('[Anthropic] Tool search discovered (non-streaming):', { tools: toolNames });
-          } else if ((contentBlock.content as any)?.type === 'tool_search_tool_result_error') {
-            // error during tool search
-            pt.sendVoidPlaceholder('code-exec', `🔍 Tool search error: ${(contentBlock.content as any).error_code}`);
-          }
+        case 'tool_search_tool_result':
+          _handleCBS_ToolSearchToolResult(pt, contentBlock);
           break;
 
         default:
@@ -894,37 +696,693 @@ export function createAnthropicMessageParserNS(): ChatGenerateParseFunction {
         needsTextSeparator = hotFixAntInjectToolsTextSpacer;
     }
 
-    // -> Token Stop Reason
-    const tokenStopReason = _fromAnthropicStopReason(stop_reason);
-    if (tokenStopReason !== null)
-      pt.setTokenStopReason(tokenStopReason);
+    // -> Stats: timing always (measured locally); token/cache fields only when the usage block is present (#1149)
+    const nCodeExec = _countCodeExecutions(content);
+    pt.updateMetrics({
+      ...(usage ? _fromAnthropicUsage(usage) : {}),
+      ...(nCodeExec ? { nCodeExec } : {}),
+      // vTOutInner: // we don't know the server-side rate
+      // dtStart / dtInner: // we don't know
+      dtAll: Date.now() - parserCreationTimestamp,
+    });
 
-    // -> Stats
-    if (usage) {
-      const elapsedTimeMilliseconds = Date.now() - parserCreationTimestamp;
-      // const elapsedTimeSeconds = elapsedTimeMilliseconds / 1000;
-      // const chatOutRate = elapsedTimeSeconds > 0 ? usage.output_tokens / elapsedTimeSeconds : 0;
-      const metricsUpdate: AixWire_Particles.CGSelectMetrics = {
-        TIn: usage.input_tokens,
-        TOut: usage.output_tokens,
-        // vTOutInner: Math.round(chatOutRate * 100) / 100, // Round to 2 decimal places
-        // dtStart: // we don't know
-        // dtInner: // we don't know
-        dtAll: elapsedTimeMilliseconds,
-      };
-      if (usage.cache_read_input_tokens || usage.cache_creation_input_tokens) {
-        if (typeof usage.cache_read_input_tokens === 'number')
-          metricsUpdate.TCacheRead = usage.cache_read_input_tokens;
-        if (typeof usage.cache_creation_input_tokens === 'number')
-          metricsUpdate.TCacheWrite = usage.cache_creation_input_tokens;
-      }
-      pt.updateMetrics(metricsUpdate);
-    }
+    // Continuation: when pause_turn, throw to trigger re-dispatch with accumulated content
+    if (stop_reason === 'pause_turn')
+      throw new DispatchContinuationSignal(
+        _createAnthropicPauseTurnContinuation(content, container?.id, usage ?? undefined),
+      );
+
+    // -> Token Stop Reason (pause_turn already thrown above)
+    const tokenStopReason = _fromAnthropicStopReason(stop_reason, 'parser_NS');
+    if (tokenStopReason !== null)
+      pt.setTokenStopReason(tokenStopReason, _formatAnthropicStopError(stop_details));
   };
 }
 
 
-function _fromAnthropicStopReason(stopReason: AnthropicWire_API_Message_Create.Response['stop_reason']) {
+// --- Shared helpers (used by both S and NS parsers) ---
+
+/**
+ * [Anthropic streaming] Normalize a tool_use/server_tool_use `input` from content_block_start to the
+ * string that input_json_delta appends to: `{}` -> '' (args stream as deltas); a pre-populated
+ * object -> its JSON string (PTC: code execution computed the full args, no deltas follow).
+ * NS instead keeps the object and lets the transmitter ('json_object') do the stringify.
+ */
+function _antStreamingToolInputToString(input: object): string {
+  return Object.keys(input).length === 0 ? '' : JSON.stringify(input);
+}
+
+/** Ellipsize long strings for iTexts/oTexts display (keeps start + end, shows byte count in the middle) */
+function _ellipsizeContext(text: string, maxBytes = 512): string {
+  if (text.length <= maxBytes) return text;
+  const ellipsis = `...[${(text.length - maxBytes).toLocaleString()} chars]...`;
+  const half = Math.floor((maxBytes - ellipsis.length) / 2);
+  return text.slice(0, half) + ellipsis + text.slice(-half);
+}
+
+/**
+ * Emit container state via svs particle - reassembler promotes this to generator.upstreamContainer.
+ * NOTE: DMessage.sessionMetadata was designed for this (see chat.message.ts) but we use generator
+ * fields instead - simpler plumbing, no new persistence/migration, and ephemeral containers fit well.
+ */
+function _emitContainerState(pt: IParticleTransmitter, container: { id: string; expires_at: string }): void {
+  pt.sendSetVendorState({
+    p: 'svs',
+    vendor: 'anthropic',
+    state: { container: { id: container.id, expiresAt: container.expires_at } },
+  });
+}
+
+/**
+ * Schema drift detector: fields the response carried (non-null) that the wire schema stripped. The echo restores
+ * them regardless; this makes the drift visible through the resilience channel (throws in dev, warns in prod).
+ */
+function _reportStrippedBlockFields(rawBlock: unknown, parsedBlock: { type: string, name?: string }): void {
+  const stripped = _collectStrippedPaths(rawBlock, parsedBlock, '', []);
+  if (stripped.length)
+    aixResilientUnknownValue('Anthropic', 'contentBlockFields', { type: parsedBlock.type, ...(parsedBlock.name ? { name: parsedBlock.name } : {}), stripped });
+}
+
+function _collectStrippedPaths(raw: unknown, parsed: unknown, path: string, out: string[]): string[] {
+  if (Array.isArray(raw)) {
+    if (Array.isArray(parsed))
+      raw.forEach((item, i) => _collectStrippedPaths(item, parsed[i], `${path}[${i}]`, out));
+    return out;
+  }
+  if (raw && typeof raw === 'object') {
+    const parsedObject: Record<string, unknown> = (parsed && typeof parsed === 'object') ? parsed as Record<string, unknown> : {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (value === null || value === undefined) continue; // a stripped null carries nothing (verified: not an edit for the API either)
+      const keyPath = path ? `${path}.${key}` : key;
+      if (!(key in parsedObject))
+        out.push(keyPath);
+      else
+        _collectStrippedPaths(value, parsedObject[key], keyPath, out);
+    }
+  }
+  return out;
+}
+
+/**
+ * Where each replayed thinking block of the request came from, in wire order: wire path ('messages.1.content.0') -> the 1-based
+ * reply (model message of the chat sequence) it replays, matched by signature, and that reply's opening text. Wire positions alone
+ * don't point at chat messages: a tool loop spans many wire messages, and replies with no user message between them merge into one.
+ */
+export type AnthropicThinkingOrigins = Map<string, { reply: number, opening: string }>;
+
+export function anthropicThinkingOrigins(chatSequence: AixAPIChatGenerate_Request['chatSequence'], wireMessages: AnthropicWire_API_Message_Create.Request['messages']): AnthropicThinkingOrigins {
+  const replyByHandle = new Map<string, number>();
+  const openings: string[] = [];
+  let reply = 0;
+  for (const message of chatSequence) {
+    if (message.role !== 'model') continue;
+    reply++;
+    for (const part of message.parts) {
+      if (part.pt === 'text')
+        openings[reply] ??= part.text;
+      else if (part.pt === 'ma') {
+        if (part.textSignature) replyByHandle.set(part.textSignature, reply);
+        for (const data of part.redactedData ?? []) replyByHandle.set(data, reply);
+      }
+    }
+  }
+  const origins: AnthropicThinkingOrigins = new Map();
+  wireMessages.forEach((message, m) => message.content.forEach((block, b) => {
+    const handle = block.type === 'thinking' ? block.signature : block.type === 'redacted_thinking' ? block.data : undefined;
+    const reply = handle ? replyByHandle.get(handle) : undefined;
+    if (reply) origins.set(`messages.${m}.content.${b}`, { reply, opening: openings[reply] ?? '' });
+  }));
+  return origins;
+}
+
+/** [2026-09-01] Preserved thinking: relay the replayed thinking blocks the API dropped, as one void notice per vendor reason (normalized to an AIX cause). */
+function _sendInputTransforms(pt: IParticleTransmitter, transforms: NonNullable<AnthropicWire_API_Message_Create.Response['input_transformations']>, thinkingOrigins: (() => AnthropicThinkingOrigins) | undefined): void {
+  const pathsByReason = new Map<string, string[]>();
+  for (const { type, path, reason } of transforms) {
+    // 'thinking_mismatch_allowed' (observed 2026-09-24): the block failed the binding check but was kept, because the
+    // request set no block_binding (thinking left to the model's default) - informational, nothing was dropped
+    if (type === 'thinking_mismatch_allowed')
+      continue;
+    if (type !== 'thinking_dropped') {
+      aixResilientUnknownValue('Anthropic', 'inputTransformationType', type);
+      continue;
+    }
+    pathsByReason.set(reason, [...(pathsByReason.get(reason) ?? []), path]);
+  }
+  const origins = pathsByReason.size ? thinkingOrigins?.() : undefined;
+  for (const [reason, paths] of pathsByReason) {
+    // NOTE: Anthropic's 'prefix_binding_mismatch' fires identically for an edited/deleted message, a changed
+    // tool selection, or a changed system prompt (e.g. our own {{LocaleNow}} ticking to a new hour) - it does
+    // NOT tell us which. Empirically verified live (2026-09-21): a pure tool toggle and a pure system-prompt
+    // change both return this exact reason with zero message edits. Don't claim "History edited" here, it's
+    // provably wrong in those cases - stay cause-neutral instead.
+    const cause = reason === 'prefix_binding_mismatch' ? 'prefix-changed' : reason === 'model_binding_mismatch' ? 'model-switch' : reason;
+    const why = cause === 'prefix-changed' ? 'Reasoning reset' : cause === 'model-switch' ? 'Model changed' : cause;
+    const replies = origins && _describeDroppedReplies(paths, origins, cause === 'prefix-changed');
+    const what = replies?.what ?? (paths.length > 1 ? `ignored ${paths.length} reasoning blocks` : 'ignored 1 reasoning block');
+    const where = paths.map(p => p.replace(/^messages\.(\d+)\.content\.(\d+).*$/, '$1.$2')).join(', '); // wire positions: message.block
+    const harmless = cause !== 'prefix-changed' ? '**Harmless**: the model rethinks from the messages as they are now.'
+      : replies ? '**Harmless**: reasoning is reused only while everything before it is unchanged, otherwise the model reasons again.'
+        : '**Harmless**: the model reasoned again instead of reusing earlier reasoning. This happens when a message, the tool selection, or the instructions changed since that reasoning was generated.';
+    pt.appendVoidNotice({
+      p: 'vnt', nt: 'input-transform', itt: 'thinking-dropped', cause, reason, paths,
+      text: `${why}: ${what}`,
+      detail: [...replies?.paragraphs ?? [], harmless, `Ignored indices: \`${where}\` (zero-based)`].join('\n\n'), // indices last: the continuation's warning keeps only the last line
+    });
+  }
+}
+
+/**
+ * Names the replies whose reasoning was dropped. For prefix changes it also brackets the earliest change: a block is dropped when
+ * anything before it differs from when it was generated, so the difference lies before the first dropped block and after the
+ * kept block just before it (measured: system, tool set and tool-result edits drop every later block; moved cache_control, a
+ * changed effort and omitted earlier thinking drop none; a deleted user message drops only the blocks after it).
+ */
+function _describeDroppedReplies(paths: string[], origins: AnthropicThinkingOrigins, bracketChange: boolean): { what: string, paragraphs: string[] } | undefined {
+  if (!paths.every(p => origins.has(p))) return undefined; // e.g. a block of a paused turn sent back by the continuation: plain notice
+  const dropped = new Set(paths);
+  const perReply = new Map<number, { opening: string, dropped: number, total: number }>();
+  for (const [path, { reply, opening }] of origins) {
+    const r = perReply.get(reply) ?? { opening, dropped: 0, total: 0 };
+    r.total++;
+    if (dropped.has(path)) r.dropped++;
+    perReply.set(reply, r);
+  }
+  const droppedReplies = [...perReply].filter(([, r]) => r.dropped);
+  const keptReplies = [...perReply].filter(([, r]) => !r.dropped).map(([reply]) => reply); // partly kept replies show their counts in the list
+
+  // the detail is the notice markdown subset (see RenderNoticeDetail): '- ' bullets, **label**, *excerpt*, `code`
+  const list = ['**Ignored reasoning**'];
+  for (const [reply, { opening, dropped, total }] of droppedReplies.slice(0, 8)) {
+    const excerpt = opening.replace(/[#*`>]+/g, '').replace(/\s+/g, ' ').trim();
+    list.push(`- **Reply ${reply}** (${dropped} of ${total} block${total > 1 ? 's' : ''})${!excerpt ? '' : ` *${excerpt.length > 48 ? `${excerpt.slice(0, 48).trimEnd()}…` : excerpt}*`}`);
+  }
+  if (droppedReplies.length > 8)
+    list.push(`- **Replies ${_numberRanges(droppedReplies.slice(8).map(([reply]) => reply))}**`);
+  if (keptReplies.length)
+    list.push(`**Kept**: repl${keptReplies.length > 1 ? 'ies' : 'y'} ${_numberRanges(keptReplies)}`);
+  const paragraphs = [list.join('\n')];
+
+  if (bracketChange) {
+    const order = [...origins.keys()];
+    const firstIndex = order.findIndex(p => dropped.has(p));
+    const firstReply = origins.get(order[firstIndex])?.reply;
+    const keptReply = firstIndex > 0 ? origins.get(order[firstIndex - 1])?.reply : undefined;
+    paragraphs.push(keptReply === undefined ? `**Changed**: something before reply ${firstReply}'s first reasoning - the instructions (e.g. a date or time in them), the tools, or an earlier message.`
+      : keptReply === firstReply ? `**Changed**: something inside reply ${firstReply}, after its kept reasoning (e.g. a tool result that changed or was not sent back).`
+        : `**Changed**: something between reply ${keptReply} and reply ${firstReply} (e.g. an edited or deleted message).`);
+  }
+
+  return { what: `${droppedReplies.length} earlier repl${droppedReplies.length > 1 ? 'ies' : 'y'}`, paragraphs };
+}
+
+/** [1, 2, 3, 5, 7, 8] -> '1-3, 5, 7-8' */
+function _numberRanges(sorted: number[]): string {
+  const ranges: string[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    let j = i;
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++;
+    ranges.push(j > i ? `${sorted[i]}-${sorted[j]}` : `${sorted[i]}`);
+    i = j;
+  }
+  return ranges.join(', ');
+}
+
+/** Compose a human-readable error string from Anthropic's stop_details. Returns undefined when nothing useful to surface. */
+function _formatAnthropicStopError(stopDetails: { type: string; category?: string | null; explanation?: string | null; recommended_model?: string | null } | null | undefined): string | undefined {
+  if (!stopDetails) return undefined;
+  if (stopDetails.type !== 'refusal') {
+    aixResilientUnknownValue('Anthropic', 'stopDetailsType', stopDetails.type);
+    return undefined;
+  }
+  const parts: string[] = [];
+  if (stopDetails.category) parts.push(`[${stopDetails.category}]`);
+  if (stopDetails.explanation) parts.push(stopDetails.explanation);
+  if (stopDetails.recommended_model) parts.push(`(consider retrying with ${stopDetails.recommended_model})`);
+  return parts.length ? `Refusal: ${parts.join(' ')}` : undefined;
+}
+
+
+// --- Shared server tool result handlers (used by both S and NS parsers) ---
+
+type _ContentBlock = AnthropicWire_API_Message_Create.Response['content'][number];
+
+function _handleCBS_ServerToolUse(pt: IParticleTransmitter, block: Extract<_ContentBlock, { type: 'server_tool_use' }>): void {
+  // Server-side tool execution (e.g., web_search, web_fetch, Skills API tools)
+  // NOTE: We don't create tool invocations for server tools - just show operation state
+
+  // Extract input fields when available (non-streaming has the full object; streaming starts empty and accumulates via input_json_delta)
+  const inputObj = typeof block.input === 'object' ? block.input as Record<string, any> : undefined;
+  const srvOp: Parameters<typeof pt.sendOperationState>[2] = {
+    opId: block.id,
+    ...((block.caller?.type && block.caller.type !== 'direct') && { parentOpId: block.caller.tool_id }),
+  };
+
+  switch (block.name) { // .server_tool_use.name
+    case 'web_search':
+      // start input: { query: string } - dynamically extracted
+      const searchQuery = typeof inputObj?.query === 'string' ? inputObj.query : undefined;
+      pt.sendOperationState('search-web', 'Searching the web...', { ...srvOp, ...(searchQuery ? { iTexts: [`Search query: "${searchQuery}"`] } : undefined) });
+      break;
+    case 'web_fetch':
+      // start input: { url: string } - dynamically extracted
+      const fetchUrl = typeof inputObj?.url === 'string' ? inputObj.url : undefined;
+      pt.sendOperationState('search-web', `Fetching ${fetchUrl || 'web content'}...`, { ...srvOp, ...(fetchUrl ? { iTexts: [`URL: ${fetchUrl}`] } : undefined) });
+      break;
+    case 'code_execution':
+      // input: { code: string } - Python code for sandbox execution
+      const pyCode = typeof inputObj?.code === 'string' ? inputObj.code : undefined;
+      pt.sendOperationState('code-exec', !pyCode ? 'Writing code...' : 'Running code...', { ...srvOp, ...(pyCode ? { iTexts: [_ellipsizeContext(pyCode)] } : undefined) });
+      break;
+    case 'bash_code_execution':
+      // input: { command: string } - bash command for sandbox execution
+      const bashCmd = typeof inputObj?.command === 'string' ? inputObj.command : undefined;
+      pt.sendOperationState('code-exec', !bashCmd ? 'Writing bash...' : 'Running bash...', { ...srvOp, ...(bashCmd ? { iTexts: [_ellipsizeContext(bashCmd)] } : undefined) });
+      break;
+    case 'text_editor_code_execution':
+      // input: { command: 'view'|'create'|'str_replace'|'insert'|'undo_edit', path: string, file_text?: string, old_str?: string, new_str?: string, ... }
+      const teCommand = typeof inputObj?.command === 'string' ? inputObj.command : undefined;
+      const tePath = typeof inputObj?.path === 'string' ? inputObj.path : undefined;
+      const iTexts: string[] = [];
+      if (tePath)
+        iTexts.push(tePath);
+      switch (teCommand) {
+        default:
+          console.log('[DEV] Anthropic: server_tool_use(content_block_start): unrecognized text editor command', { teCommand, inputObj });
+        // fallthrough
+        case undefined: // EXPECTED in Streaming: we don't know the command yet, the input object is empty - in NS, we have the details upfront (cases below)
+          pt.sendOperationState('code-exec', `Editor: ${teCommand || 'working'}...`, { ...srvOp, ...iTexts.length ? { iTexts } : undefined });
+          break;
+        case 'create':
+          if (typeof inputObj?.file_text === 'string') iTexts.push(_ellipsizeContext(inputObj.file_text));
+          pt.sendOperationState('code-exec', `Creating ${tePath || 'file'}...`, { ...srvOp, ...iTexts.length ? { iTexts } : undefined });
+          break;
+        case 'view':
+          if (inputObj?.view_range) iTexts.push(`lines: ${JSON.stringify(inputObj.view_range)}`);
+          pt.sendOperationState('code-exec', `Viewing ${tePath || 'file'}...`, { ...srvOp, ...iTexts.length ? { iTexts } : undefined });
+          break;
+        case 'str_replace':
+          if (typeof inputObj?.old_str === 'string') iTexts.push(`- ${_ellipsizeContext(inputObj.old_str, 256)}`);
+          if (typeof inputObj?.new_str === 'string') iTexts.push(`+ ${_ellipsizeContext(inputObj.new_str, 256)}`);
+          pt.sendOperationState('code-exec', `Editing ${tePath || 'file'}...`, { ...srvOp, ...iTexts.length ? { iTexts } : undefined });
+          break;
+        case 'insert':
+          if (typeof inputObj?.insert_text === 'string') iTexts.push(_ellipsizeContext(inputObj.insert_text, 256));
+          pt.sendOperationState('code-exec', `Inserting in ${tePath || 'file'}...`, { ...srvOp, ...iTexts.length ? { iTexts } : undefined });
+          break;
+        case 'undo_edit':
+          pt.sendOperationState('code-exec', `Undoing edit in ${tePath || 'file'}...`, { ...srvOp, ...iTexts.length ? { iTexts } : undefined });
+          break;
+      }
+      break;
+    // [Anthropic, 2025-11-24] Tool Search Tool
+    case 'tool_search_tool_regex':
+      const pattern = typeof inputObj?.pattern === 'string' ? inputObj.pattern : undefined;
+      pt.sendOperationState('code-exec', 'Searching tools...', { ...srvOp, ...(pattern ? { iTexts: [`pattern: ${pattern}`] } : undefined) });
+      break;
+    case 'tool_search_tool_bm25':
+      const query = typeof inputObj?.query === 'string' ? inputObj.query : undefined;
+      pt.sendOperationState('code-exec', 'Searching tools...', { ...srvOp, ...(query ? { iTexts: [`query: "${query}"`] } : undefined) });
+      break;
+    default:
+      // For unknown server tools (e.g., future Skills), show a generic placeholder instead of throwing
+      console.warn(`[Anthropic Parser] Unknown server tool ${block.name}`, { input: block.input });
+      pt.sendOperationState('code-exec', `Using ${block.name}...`, srvOp);
+      break;
+  }
+
+  // [ATOL] Server tool invocations will be captured by the Tool Execution Graph.
+  // Key data available here: block.id (srvtoolu_*), block.name, block.input (streamed via input_json_delta),
+  // block.caller?.type ('direct' | 'code_execution_*') - indicates nesting (e.g., code_execution orchestrating web_search via PFC).
+  // For PFC (Programmatic Function Calling): Opus uses code_execution to write Python that calls web_search()/web_fetch() - the streamed
+  // input contains the actual code being executed, and caller.type on nested tool_use blocks shows the call chain.
+  // Nesting -> opLog level (inferred by the reassembler from the presence of a parent op)
+}
+
+/** Streaming only: called at content_block_stop to re-send the operation state with the fully accumulated input JSON */
+function _handleCBE_ServerToolUse_S(pt: IParticleTransmitter, opId: string, name: string, inputStr: string | object): void {
+  let input: Record<string, any> | undefined;
+  try {
+    input = typeof inputStr === 'string' ? JSON.parse(inputStr) : inputStr;
+  } catch { /* ignore parse errors */
+  }
+  if (typeof input !== 'object') {
+    // No parseable input - still update state so UI doesn't stay on "Writing..."
+    pt.sendOperationState('code-exec', 'Executing...', { opId });
+    return;
+  }
+
+  switch (name) {
+    case 'code_execution': {
+      const code = typeof input.code === 'string' ? input.code : undefined;
+      pt.sendOperationState('code-exec', 'Executing code...', { opId, ...code && { iTexts: [_ellipsizeContext('input code:\n' + code)] } });
+      break;
+    }
+    case 'bash_code_execution': {
+      const cmd = typeof input.command === 'string' ? input.command : undefined;
+      pt.sendOperationState('code-exec', 'Executing bash...', { opId, ...cmd && { iTexts: [_ellipsizeContext('bash command:\n' + cmd)] } });
+      break;
+    }
+    case 'text_editor_code_execution': {
+      const path = typeof input.path === 'string' ? input.path : 'file';
+      const iTexts: string[] = [];
+      if (path !== 'file') iTexts.push(`path: ${path}`);
+      switch (input.command) {
+        default: // not expected: the input shall be valid here
+          console.log('[DEV] Anthropic: server_tool_use(content_block_stop): unrecognized text editor command', { command: input.command, input });
+          pt.sendOperationState('code-exec', `Editor: ${input.command || 'working'}...`, { opId, ...iTexts.length ? { iTexts } : undefined });
+          break;
+        case 'create':
+          if (typeof input.file_text === 'string') iTexts.push(_ellipsizeContext('file contents:\n' + input.file_text));
+          pt.sendOperationState('code-exec', `Creating ${path}...`, { opId, ...iTexts.length ? { iTexts } : undefined });
+          break;
+        case 'view':
+          if (input.view_range) iTexts.push(`lines: ${JSON.stringify(input.view_range)}`);
+          pt.sendOperationState('code-exec', `Viewing ${path}...`, { opId, ...iTexts.length ? { iTexts } : undefined });
+          break;
+        case 'str_replace':
+          if (typeof input.old_str === 'string') iTexts.push(`- ${_ellipsizeContext(input.old_str, 256)}`);
+          if (typeof input.new_str === 'string') iTexts.push(`+ ${_ellipsizeContext(input.new_str, 256)}`);
+          pt.sendOperationState('code-exec', `Editing ${path}...`, { opId, ...iTexts.length ? { iTexts } : undefined });
+          break;
+        case 'insert':
+          if (typeof input.insert_text === 'string') iTexts.push(_ellipsizeContext(input.insert_text, 256));
+          pt.sendOperationState('code-exec', `Inserting in ${path}...`, { opId, ...iTexts.length ? { iTexts } : undefined });
+          break;
+        case 'undo_edit':
+          pt.sendOperationState('code-exec', `Undoing edit in ${path}...`, { opId, ...iTexts.length ? { iTexts } : undefined });
+          break;
+      }
+      break;
+    }
+    default:
+      // we silently ignore the updates for unknown tools (unknown input structures), or tools that have the full
+      // input object at the start event (e.g., web_search with query in input)
+      break;
+  }
+}
+
+function _handleCBS_WebSearchToolResult(pt: IParticleTransmitter, block: Extract<_ContentBlock, { type: 'web_search_tool_result' }>): void {
+  // Web search results arrive fully formed (no deltas)
+  // NOTE: We don't add citations for bulk search results (too noisy - could be 20+ URLs)
+  //       Only high-quality citations that appear in text annotations should be shown
+  const opId = block.tool_use_id;
+  if (Array.isArray(block.content)) {
+    // Success - array of search results
+    const oTexts = block.content.map((r: any) => r.url).filter(Boolean);
+    pt.sendOperationState('search-web', `Search completed: ${block.content.length} results`, { opId, state: 'done', ...oTexts.length ? { oTexts } : undefined });
+  } else if (block.content.type === 'web_search_tool_result_error') {
+    // Error during web search
+    pt.sendOperationState('search-web', `Search error: ${block.content.error_code}`, { opId, state: 'error' });
+  }
+}
+
+function _handleCBS_WebFetchToolResult(pt: IParticleTransmitter, block: Extract<_ContentBlock, { type: 'web_fetch_tool_result' }>): void {
+  // Web fetch results arrive fully formed (no deltas)
+  const opId = block.tool_use_id;
+  switch (block.content.type) {
+    case 'web_fetch_result':
+      // Success - fetched a URL
+      const content = block.content.content;
+      const fetchedText = (content?.type === 'document' && content.source?.type === 'text' && content.source.data)
+        ? _ellipsizeContext(content.source.data, 280) : undefined;
+      pt.sendOperationState('search-web', `Retrieved ${block.content.url}`, { opId, state: 'done', ...fetchedText && { oTexts: [fetchedText] } });
+
+      // Add citation for the fetched content
+      const fetchedContent = block.content.content;
+      pt.appendUrlCitation(
+        fetchedContent?.title || 'Web Content',
+        block.content.url,
+        undefined, // citationNumber
+        undefined, // startIndex
+        undefined, // endIndex
+        undefined, // textSnippet
+        block.content.retrieved_at ? Date.parse(block.content.retrieved_at) : undefined,
+      );
+      break;
+
+    case 'web_fetch_tool_result_error':
+      // Error - URL is already captured as iTexts on the invocation entry
+      pt.sendOperationState('search-web', `Fetch error: ${block.content.error_code}`, { opId, state: 'error' });
+      break;
+
+    default:
+      const _exhaustiveCheck: never = block.content;
+  }
+}
+
+function _handleCBS_CodeExecutionToolResult(pt: IParticleTransmitter, block: Extract<_ContentBlock, { type: 'code_execution_tool_result' }>): void {
+  // Code execution result from container (Skill or traditional, such as dynamic web search)
+  const opId = block.tool_use_id;
+  switch (block.content.type) {
+    case 'code_execution_result':
+    case 'encrypted_code_execution_result': {
+      // encrypted variant (PFC + web_search): stdout is encrypted, only stderr is readable
+      const oTexts: string[] = [];
+      if (block.content.return_code !== 0)
+        oTexts.push(`exit code: ${block.content.return_code}`);
+      if (block.content.type === 'code_execution_result' && block.content.stdout)
+        oTexts.push(_ellipsizeContext(block.content.stdout));
+      else if (block.content.type === 'encrypted_code_execution_result')
+        oTexts.push(`[Anthropic encrypted output, ${block.content.encrypted_stdout.length.toLocaleString()} bytes]`);
+      if (block.content.stderr)
+        oTexts.push('stderr: ' + _ellipsizeContext(block.content.stderr));
+      const codeExecFailed = block.content.return_code !== 0;
+      pt.sendOperationState('code-exec', codeExecFailed ? `Code executed` /* was: failed */ : 'Code executed', { opId, state: codeExecFailed ? 'error' : 'done', ...oTexts.length ? { oTexts } : undefined });
+
+      // emit structured hosted resource references for generated files (e.g. from a skill)
+      if (Array.isArray(block.content?.content))
+        for (const ob of block.content.content)
+          if (ob.type === 'code_execution_output' && ob.file_id)
+            pt.appendHostedResource({ p: 'hres', kind: 'vnd.ant.file', fileId: ob.file_id });
+      break;
+    }
+
+    case 'code_execution_tool_result_error':
+      pt.sendOperationState('code-exec', `Execution error: ${block.content.error_code}`, { opId, state: 'error' });
+      break;
+
+    default:
+      const _exhaustiveCheck: never = block.content;
+  }
+}
+
+function _handleCBS_BashCodeExecutionToolResult(pt: IParticleTransmitter, block: Extract<_ContentBlock, { type: 'bash_code_execution_tool_result' }>): void {
+  // Bash code execution result from container
+  const opId = block.tool_use_id;
+  switch (block.content.type) {
+    case 'bash_code_execution_result':
+      const oTexts: string[] = [];
+      if (block.content.return_code !== 0)
+        oTexts.push(`exit code: ${block.content.return_code}`);
+      if (block.content.stdout)
+        oTexts.push(_ellipsizeContext(block.content.stdout));
+      if (block.content.stderr)
+        oTexts.push('stderr: ' + _ellipsizeContext(block.content.stderr));
+      const bashFailed = block.content.return_code !== 0;
+      pt.sendOperationState('code-exec', bashFailed ? `Bash executed` /* was: failed */ : 'Bash executed', { opId, state: bashFailed ? 'error' : 'done', ...oTexts.length ? { oTexts } : undefined });
+
+      // emit structured hosted resource references for generated files
+      if (Array.isArray(block.content.content))
+        for (const ob of block.content.content)
+          if (ob.type === 'bash_code_execution_output' && ob.file_id)
+            pt.appendHostedResource({ p: 'hres', kind: 'vnd.ant.file', fileId: ob.file_id });
+      break;
+
+    case 'bash_code_execution_tool_result_error':
+      pt.sendOperationState('code-exec', `Bash error: ${block.content.error_code}`, { opId, state: 'error' });
+      break;
+
+    default:
+      const _exhaustiveCheck: never = block.content;
+  }
+}
+
+function _handleCBS_TextEditorCodeExecutionToolResult(pt: IParticleTransmitter, block: Extract<_ContentBlock, { type: 'text_editor_code_execution_tool_result' }>): void {
+  // Text editor code execution result from Skills container
+  const opId = block.tool_use_id;
+  const oTexts: string[] = [];
+  switch (block.content.type) {
+    case 'text_editor_code_execution_create_result':
+      pt.sendOperationState('code-exec', block.content.is_file_update ? 'File updated' : 'File created', { opId, state: 'done' });
+      break;
+    case 'text_editor_code_execution_view_result':
+      if (block.content.total_lines != null) oTexts.push(`${block.content.total_lines} lines total`);
+      // only include text content in oTexts - image/pdf would be base64 noise
+      if (block.content.file_type === 'text')
+        oTexts.push(_ellipsizeContext(block.content.content || 'content: (not provided)'));
+      pt.sendOperationState('code-exec', `Viewed file${block.content.file_type !== 'text' ? ` (${block.content.file_type})` : ''}`, { opId, state: 'done', ...oTexts.length ? { oTexts } : undefined });
+      break;
+    case 'text_editor_code_execution_str_replace_result':
+      if (block.content.old_start != null && block.content.old_lines != null)
+        oTexts.push(`replaced lines ${block.content.old_start}-${block.content.old_start + block.content.old_lines}`);
+      if (block.content.lines?.length)
+        oTexts.push(_ellipsizeContext(block.content.lines.join('\n'), 256));
+      pt.sendOperationState('code-exec', 'Edit applied', { opId, state: 'done', ...oTexts.length ? { oTexts } : undefined });
+      break;
+    case 'text_editor_code_execution_tool_result_error':
+      pt.sendOperationState('code-exec', `Editor error: ${block.content.error_code}${block.content.error_message ? ' - ' + block.content.error_message : ''}`, { opId, state: 'error' });
+      break;
+    default:
+      const _exhaustiveCheck: never = block.content;
+  }
+}
+
+function _handleCBS_ContainerUpload(pt: IParticleTransmitter, block: Extract<_ContentBlock, { type: 'container_upload' }>, containerId: string | undefined): void {
+  // Container upload - Skill has generated a file, emit as a downloadable hosted resource
+  pt.appendHostedResource({ p: 'hres', kind: 'vnd.ant.file', fileId: block.file_id, ...(containerId ? { containerId } : {}) });
+}
+
+function _handleCBS_ToolSearchToolResult(pt: IParticleTransmitter, block: Extract<_ContentBlock, { type: 'tool_search_tool_result' }>): void {
+  // [Anthropic, 2025-11-24] Tool Search Tool
+  const opId = block.tool_use_id;
+  if (block.content?.type === 'tool_search_tool_search_result') {
+    // success
+    const toolNames = block.content.tool_references.map(ref => ref.tool_name);
+    pt.sendOperationState('code-exec', `Discovered ${toolNames.length} tool(s): ${toolNames.join(', ')}`, { opId, state: 'done' });
+  } else if (block.content?.type === 'tool_search_tool_result_error') {
+    // error during tool search
+    pt.sendOperationState('code-exec', `Tool search error: ${block.content.error_code}`, { opId, state: 'error' });
+  }
+}
+
+
+// --- Anthropic pause_turn continuation ---
+
+/**
+ * Creates a DispatchContinuation for Anthropic's pause_turn stop reason.
+ * Appends accumulated content blocks as an assistant message for the next turn.
+ * On subsequent turns, detects the trailing assistant message and extends its content.
+ */
+function _createAnthropicPauseTurnContinuation(
+  accumulatedContent: AnthropicWire_API_Message_Create.Response['content'],
+  containerId: string | undefined,
+  usage: Parameters<typeof _fromAnthropicUsage>[0] | undefined,
+): DispatchContinuationSignal['continuation'] {
+  return {
+    reason: 'pause_turn',
+    notice: {
+      kind: 'vnd.ant.pause_turn',
+      text: 'Anthropic `pause_turn`',
+      detail: _describePausedTurn(accumulatedContent, usage),
+    },
+    mutateBody(body: Record<string, unknown>): Record<string, unknown> {
+      const messages = [...(body.messages as { role: string; content: unknown }[])];
+
+      // Streaming accumulates tool_use/server_tool_use `input` as a JSON string via input_json_delta.
+      // The API expects `input` as a parsed object when sent back in messages - we convert it here
+      const fixedContent = accumulatedContent.map(block => {
+        if (('type' in block) && (block.type === 'tool_use' || block.type === 'server_tool_use') && typeof block.input === 'string') {
+          try {
+            return { ...block, input: JSON.parse(block.input) };
+          } catch {
+            return block;
+          }
+        }
+        return block;
+      });
+
+      // Detect trailing assistant message from a prior continuation turn
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage?.role === 'assistant' && Array.isArray(lastMessage.content)) {
+        // Extend existing assistant message with new content blocks
+        messages[messages.length - 1] = {
+          ...lastMessage,
+          content: [...lastMessage.content, ...fixedContent],
+        };
+      } else {
+        // First continuation: append new assistant message with accumulated content
+        messages.push({ role: 'assistant', content: [...fixedContent] });
+      }
+
+      return {
+        ...body,
+        messages,
+        // Pass container ID as string to reuse the existing container
+        ...(containerId ? { container: containerId } : {}),
+      };
+    },
+  };
+}
+
+
+/** The pause divider's detail: what the paused request did (hosted calls by tool, direct vs from code), its size, and its own token usage. */
+function _describePausedTurn(content: AnthropicWire_API_Message_Create.Response['content'], usage: Parameters<typeof _fromAnthropicUsage>[0] | undefined): string {
+  const calls = new Map<string, { direct: number, nested: number }>();
+  let reasoning = 0;
+  for (const block of content) {
+    if (!block || !AnthropicWire_Messages.isKnownContentBlockOutput(block)) continue; // sparse slot, or a future block type
+    if (block.type === 'thinking' || block.type === 'redacted_thinking')
+      reasoning++;
+    else if (block.type === 'server_tool_use') {
+      const count = calls.get(block.name) ?? { direct: 0, nested: 0 };
+      if (block.caller && block.caller.type !== 'direct') count.nested++;
+      else count.direct++;
+      calls.set(block.name, count);
+    }
+  }
+  const n = (v: number | null | undefined) => (v ?? 0).toLocaleString('en-US');
+  const total = [...calls.values()].reduce((acc, c) => acc + c.direct + c.nested, 0);
+  const byTool = [...calls].map(([name, c]) => `${name} ${c.direct + c.nested}${c.nested ? ` (${c.nested} from code)` : ''}`).join(', ');
+  return `Anthropic paused its hosted-tool loop after ${total} tool call${total === 1 ? '' : 's'} in this request${byTool ? ` (${byTool})` : ''}: ${content.length} blocks, ${reasoning} reasoning.`
+    + `\nThe partial turn was sent back unchanged and the model continued in a new request.`
+    + (usage ? `\nTokens this request: ${n(usage.input_tokens)} in, ${n(usage.cache_read_input_tokens)} cached, ${n(usage.output_tokens)} out.` : '');
+}
+
+/** Usage -> counts, tool calls, served tier. One mapper for message_start, message_delta (final) and the non-streaming response. input_tokens excludes the cache classes. */
+function _fromAnthropicUsage(usage: {
+  input_tokens?: number | null,
+  output_tokens: number,
+  output_tokens_details?: { thinking_tokens: number } | null,
+  cache_read_input_tokens?: number | null,
+  cache_creation_input_tokens?: number | null,
+  server_tool_use?: { web_search_requests?: number, web_fetch_requests?: number } | null,
+  service_tier?: string | null,
+  inference_geo?: string | null,
+  speed?: string | null,
+}): AixWire_Particles.CGSelectMetrics {
+  const metrics: AixWire_Particles.CGSelectMetrics = { TOut: usage.output_tokens };
+  if (typeof usage.input_tokens === 'number')
+    metrics.TIn = usage.input_tokens;
+  if (usage.cache_read_input_tokens)
+    metrics.TCacheRead = usage.cache_read_input_tokens;
+  if (usage.cache_creation_input_tokens)
+    metrics.TCacheWrite = usage.cache_creation_input_tokens;
+  // reasoning tokens are a subset of output_tokens (already in TOut) - surfaced as a breakdown, like OpenAI/Gemini
+  if (typeof usage.output_tokens_details?.thinking_tokens === 'number')
+    metrics.TOutR = usage.output_tokens_details.thinking_tokens;
+  // per-call billed server tools
+  if (usage.server_tool_use?.web_search_requests)
+    metrics.nWebSearch = usage.server_tool_use.web_search_requests;
+  if (usage.server_tool_use?.web_fetch_requests)
+    metrics.nWebFetch = usage.server_tool_use.web_fetch_requests;
+  // served tier/geo (not on the delta)
+  const $xPrice = _antPriceMultiplier(usage);
+  if ($xPrice !== undefined)
+    metrics.$xPrice = $xPrice;
+  return metrics;
+}
+
+/** The code_execution container and its sub-tools: one kind of call, billed by container time, so usage carries no count and we count the blocks. */
+const _CODE_EXEC_TOOL_NAMES = new Set(['code_execution', 'bash_code_execution', 'text_editor_code_execution']);
+
+function _countCodeExecutions(content: AnthropicWire_API_Message_Create.Response['content']): number {
+  let n = 0;
+  for (const block of content)
+    if (block && AnthropicWire_Messages.isKnownContentBlockOutput(block) && block.type === 'server_tool_use' && _CODE_EXEC_TOOL_NAMES.has(block.name))
+      n++;
+  return n;
+}
+
+/** Served tags -> confirmed multiplier: batch 0.5x, US residency 1.1x. A served 'fast' is per-model priced and stays on the parameter side; 'standard' confirms plain rates. */
+function _antPriceMultiplier(usage: { service_tier?: string | null, inference_geo?: string | null, speed?: string | null }): number | undefined {
+  if (usage.speed === 'fast') return undefined;
+  const multiplier = (usage.service_tier === 'batch' ? 0.5 : 1) * (usage.inference_geo === 'us' ? 1.1 : 1);
+  if (multiplier === 1 && usage.speed !== 'standard') return undefined; // nothing confirmed
+  return Math.round(multiplier * 1000) / 1000;
+}
+
+function _fromAnthropicStopReason(stopReason: AnthropicWire_API_Message_Create.Response['stop_reason'], debugCaller: string) {
   switch (stopReason) {
 
     case 'end_turn':
@@ -933,13 +1391,6 @@ function _fromAnthropicStopReason(stopReason: AnthropicWire_API_Message_Create.R
 
     case 'tool_use':
       return 'ok-tool_invocations';
-
-    /**
-     * https://docs.claude.com/en/api/handling-stop-reasons#pause-turn
-     * Used with server tools like web search when Claude needs to pause a long-running operation.
-     */
-    case 'pause_turn':
-      return 'ok-pause_continue';
 
     case 'max_tokens':
       return 'out-of-tokens';
@@ -950,8 +1401,19 @@ function _fromAnthropicStopReason(stopReason: AnthropicWire_API_Message_Create.R
     case 'refusal':
       return 'filter-refusal'; // Safety concerns - refusal to answer
 
+    case 'pause_turn':
+      // pause_turn hits this function from message_delta, but the return is irrelevant -
+      // message_stop will throw DispatchContinuationSignal before the tokenStopReason matters
+      // https://docs.claude.com/en/api/handling-stop-reasons#pause-turn
+      return null;
+
+    case null:
+      console.warn(`_fromAnthropicStopReason(${debugCaller}): unexpected stop_reason: ${stopReason}`);
+      return null;
+
     default:
-      console.warn(`_fromAnthropicStopReason: unknown stop reason: ${stopReason}`);
+      // [2026-06-09] Forward-compat: unknown stop reasons (e.g. 'compaction' from the compact beta) must not kill the stream
+      aixResilientUnknownValue('Anthropic', 'stopReason', stopReason);
       return null;
   }
 }

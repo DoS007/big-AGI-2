@@ -3,9 +3,9 @@ import * as React from 'react';
 import { Box, IconButton, ListItemButton, ListItemDecorator } from '@mui/joy';
 import ArrowForwardRoundedIcon from '@mui/icons-material/ArrowForwardRounded';
 import BuildCircleIcon from '@mui/icons-material/BuildCircle';
-import SettingsIcon from '@mui/icons-material/Settings';
 
 import { findModelVendor } from '~/modules/llms/vendors/vendors.registry';
+import { openModelsForLLM } from '~/modules/llms/llms.optima';
 
 import type { DModelsServiceId } from '~/common/stores/llms/llms.service.types';
 import { DLLM, DLLMId, getLLMLabel, isLLMVisible } from '~/common/stores/llms/llms.types';
@@ -13,11 +13,13 @@ import { DebouncedInputMemo } from '~/common/components/DebouncedInput';
 import { GoodTooltip } from '~/common/components/GoodTooltip';
 import { KeyStroke } from '~/common/components/KeyStroke';
 import { OptimaBarControlMethods, OptimaBarDropdownMemo, OptimaDropdownItems } from '~/common/layout/optima/bar/OptimaBarDropdown';
+import { PhGearSixIcon } from '~/common/components/icons/phosphor/PhGearSixIcon';
 import { findModelsServiceOrNull } from '~/common/stores/llms/store-llms';
 import { isDeepEqual } from '~/common/util/hooks/useDeep';
-import { optimaActions, optimaOpenModels } from '~/common/layout/optima/useOptima';
+import { sortLLMsByServiceLabel } from '~/common/stores/llms/components/llms.dropdown.utils';
+import { optimaActions } from '~/common/layout/optima/useOptima';
 import { useAllLLMs } from '~/common/stores/llms/hooks/useAllLLMs';
-import { useModelDomain } from '~/common/stores/llms/hooks/useModelDomain';
+import { setPrimaryChatModelId, useModelDomain } from '~/common/stores/llms/hooks/useModelDomain';
 import { useUIComplexityMode } from '~/common/stores/store-ui';
 
 
@@ -25,7 +27,7 @@ function LLMDropdown(props: {
   dropdownRef: React.Ref<OptimaBarControlMethods>,
   llms: ReadonlyArray<DLLM>,
   chatLlmId: undefined | DLLMId | null,
-  setChatLlmId: (llmId: DLLMId | null) => void,
+  setChatLlmId: (llmId: DLLMId) => void,
   placeholder?: string,
 }) {
 
@@ -72,7 +74,10 @@ function LLMDropdown(props: {
       return lcFilterString ? true : isLLMVisible(llm);
     });
 
-    for (const llm of filteredLLMs) {
+    // sort by service label so vendor groups appear alphabetically (groups remain contiguous because sort is stable on equal keys)
+    const sortedLLMs = sortLLMsByServiceLabel(filteredLLMs);
+
+    for (const llm of sortedLLMs) {
       // add separators when changing services
       if (!prevServiceId || llm.sId !== prevServiceId) {
         const vendor = findModelVendor(llm.vId);
@@ -123,17 +128,17 @@ function LLMDropdown(props: {
       </Box>
     }>
       <IconButton
-        variant='outlined' color='neutral'
+        size='sm'
         onClick={handleOpenLLMOptions}
         sx={{
           ml: 'auto',
           // mr: -0.5,
           my: '-0.25rem' /* absorb the menuItem padding */,
-          backgroundColor: 'background.surface',
+          backgroundColor: 'background.popup',
           boxShadow: 'xs',
         }}
       >
-        <SettingsIcon sx={{ fontSize: 'xl' }} />
+        <PhGearSixIcon />
       </IconButton>
     </GoodTooltip>
   ), [handleOpenLLMOptions]);
@@ -144,7 +149,7 @@ function LLMDropdown(props: {
     !showFilter ? undefined : (
       <Box sx={{ p: 1 }}>
         <DebouncedInputMemo
-          aggressiveRefocus
+          retainFocus
           debounceTimeout={300}
           onDebounce={setfilterString}
           placeholder={`Search ${llmsCount} models...`}
@@ -178,7 +183,7 @@ function LLMDropdown(props: {
     {/*  </ListItemButton>*/}
     {/*)}*/}
 
-    <ListItemButton key='menu-llms' onClick={optimaOpenModels} sx={{ backgroundColor: 'background.surface', py: 'calc(2 * var(--ListDivider-gap))' }}>
+    <ListItemButton key='menu-llms' onClick={() => openModelsForLLM(chatLlmId)} sx={{ backgroundColor: 'background.surface', py: 'calc(2 * var(--ListDivider-gap))' }}>
       <ListItemDecorator>{!hasDropdownOptions ? '⚠️' : <BuildCircleIcon color='success' />}</ListItemDecorator>
       <Box sx={{ flexGrow: 1, display: 'flex', justifyContent: 'space-between', gap: 1, alignItems: 'center' }}>
         {!hasDropdownOptions ? 'Add Models' : 'Models'}
@@ -189,7 +194,7 @@ function LLMDropdown(props: {
       </Box>
     </ListItemButton>
 
-  </>, [hasDropdownOptions]);
+  </>, [chatLlmId, hasDropdownOptions]);
 
 
   return (
@@ -212,11 +217,11 @@ export function useChatLLMDropdown(dropdownRef: React.Ref<OptimaBarControlMethod
 
   // external state
   const llms = useAllLLMs();
-  const { domainModelId: chatLLMId, assignDomainModelId: setChatLLMId } = useModelDomain('primaryChat');
+  const { domainModelId: chatLLMId } = useModelDomain('primaryChat');
 
   const chatLLMDropdown = React.useMemo(() => {
-    return <LLMDropdown dropdownRef={dropdownRef} llms={llms} chatLlmId={chatLLMId} setChatLlmId={setChatLLMId} />;
-  }, [chatLLMId, dropdownRef, llms, setChatLLMId]);
+    return <LLMDropdown dropdownRef={dropdownRef} llms={llms} chatLlmId={chatLLMId} setChatLlmId={setPrimaryChatModelId} />;
+  }, [chatLLMId, dropdownRef, llms]);
 
   return { chatLLMId, chatLLMDropdown };
 }

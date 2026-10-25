@@ -25,6 +25,8 @@ function FusionControls(props: {
   fusion: BFusion,
   factory: FusionFactorySpec,
   isFusing: boolean,
+  isWaiting: boolean,
+  cardTitle: string, // the factory's, or counted with the next or the last run's replies
   isInterrupted: boolean,
   isMobile: boolean,
   isUsable: boolean,
@@ -90,7 +92,7 @@ function FusionControls(props: {
         >
 
           {/* [progress] Spinner | Factory Icon */}
-          {props.fusion.fusingProgressComponent ? (
+          {(props.fusion.fusingProgressComponent || props.isWaiting) ? (
             <CircularProgress color='neutral' size='sm' sx={{ '--CircularProgress-size': '16px', '--CircularProgress-trackThickness': '2px' }} />
           ) : (
             !!props.factory.Icon && <props.factory.Icon sx={{ fontSize: 'lg' }} />
@@ -102,14 +104,14 @@ function FusionControls(props: {
             ? props.fusion.fusingProgressComponent
             : (
               <Box sx={{ fontSize: 'sm', fontWeight: 'md' }}>
-                {props.factory.cardTitle} {props.isInterrupted && <em> - Interrupted</em>}
+                {props.cardTitle}{props.isInterrupted && <em> - Interrupted</em>}
               </Box>
             )}
         </Sheet>
       )}
 
-      {/* Generate / Stop Button */}
-      {!props.isFusing ? (
+      {/* Generate / Stop Button - Stop also gives up a start that is waiting for replies */}
+      {!(props.isFusing || props.isWaiting) ? (
         <GoodTooltip title={!props.isUsable ? 'Start Merge' : 'Retry'}>
           <IconButton size='sm' variant='plain' color='success' onClick={props.onToggleGenerate}>
             {!props.isUsable ? <PlayArrowRoundedIcon sx={{ fontSize: 'xl2' }} /> : <ReplayRoundedIcon />}

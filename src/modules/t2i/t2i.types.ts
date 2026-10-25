@@ -1,0 +1,135 @@
+import type { DModelParameterValue } from '~/common/stores/llms/llms.parameters';
+import type { DModelsServiceId } from '~/common/stores/llms/llms.service.types';
+
+
+// T2I generation context - which surface is requesting the generation (for logging/analytics)
+
+export const T2I_CONTEXT_NAMES = [
+  'persona-icon-generation',  // Persona profile picture generation
+  'chat-draw-command', // Draw command in chat
+  'draw-app-queue',  // Draw/Imagine app background queue
+  'image-regenerate', // Regenerate existing image in message
+] as const;
+
+export type T2iContextName = typeof T2I_CONTEXT_NAMES[number];
+
+
+// --- Data Types for persisted Engine setups ---
+
+// T2I Vendor Types (supported image generation providers)
+
+export type DT2IVendorType = 'openai' | 'azure' | 'localai' | 'openrouter' | 'googleai';
+
+
+// T2I Engines - instances of T2I Vendor Types - persisted in store-module-t2i
+
+export type DT2IEngineAny = { [TVt in DT2IVendorType]: DT2IEngine<TVt> }[DT2IVendorType];
+
+export interface DT2IEngine<TVt extends DT2IVendorType> {
+  engineId: DT2IEngineId;
+  vendorType: TVt;
+  label: string;
+  isAutoDetected: boolean;
+  isAutoLinked: boolean;
+  isDeleted: boolean;
+  credentials: DT2ICredentials<TVt>;
+  profile: DT2IProfile<TVt>;
+  // timestamps for sorting and ZYNC sync
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type DT2IEngineId = string; // agiUuidV4('t2i.engine.instance')
+
+// helper for mapping credentials and profile types to the engine type
+interface _TypeMap extends Record<DT2IVendorType, { profile: unknown; credentials: unknown }> {
+  'openai': { profile: DProfileDalle; credentials: DCredentialsLLMSService };
+  'azure': { profile: DProfileDalle; credentials: DCredentialsLLMSService };
+  'localai': { profile: DProfileDalle; credentials: DCredentialsLLMSService };
+  'openrouter': { profile: DProfileOpenRouterImages; credentials: DCredentialsLLMSService };
+  'googleai': { profile: DProfileGeminiImages; credentials: DCredentialsLLMSService };
+}
+
+
+// Profiles - a vendor-specific image generation configuration (model + output
+// options), analogous to DASRxProfile* for ASR. Discriminated union on `dialect`.
+
+export type DT2IProfileAny = { [TVt in DT2IVendorType]: DT2IProfile<TVt> }[DT2IVendorType];
+
+export type DT2IProfile<TVt extends DT2IVendorType> = _TypeMap[TVt]['profile'];
+
+/**
+ * OpenAI/DALL·E-protocol profile - shared by the openai, azure and localai
+ * vendors, which all generate through the OpenAI images path.
+ * NOTE: keep the model/size/quality types in sync with the server-side router
+ *       schemas in `openai.router.ts` (strict subset of OpenAIWire_API_Images_Generations.Request).
+ */
+export interface DProfileDalle {
+  dialect: 'dalle';
+  dalleModelId: DalleModelSelection; // null = auto-select latest
+  dalleSizeGI: DalleSizeGI;
+  dalleQualityGI: DalleImageQualityGI;
+  dalleBackgroundGI: DalleBackgroundGI;
+  dalleOutputFormatGI: DalleOutputFormatGI;
+  dalleOutputCompressionGI: number;
+  dalleModerationGI: DalleModerationGI;
+}
+
+export interface DProfileOpenRouterImages {
+  dialect: 'openrouter';
+  imageModelId: string | null; // null = auto = first model in the curated list
+}
+
+/**
+ * Gemini (Nano Banana) profile - the models are the linked service's image-output LLMs, so the
+ * catalog and the per-model aspect ratio / size support come from the Gemini model definitions.
+ * Unsupported selections are dropped at generation time (the model then picks its default).
+ */
+export interface DProfileGeminiImages {
+  dialect: 'gemini';
+  imageModelRef: string | null; // vendor model id (e.g. 'models/gemini-nano-banana-2.1'); null = auto = the service's first image model
+  aspectRatio?: GeminiImageAspectRatio; // undefined = model decides
+  imageSize?: GeminiImageSize;           // undefined = model default (1K)
+}
+
+export type GeminiImageAspectRatio = DModelParameterValue<'llmVndGeminiAspectRatio'>;
+export type GeminiImageSize = DModelParameterValue<'llmVndGeminiImageSize'>;
+
+
+// OpenAI/DALL·E-protocol model and output types - GPT Image family only: DALL·E 2/3 left the OpenAI API on 2026-05-12 (Azure and OpenRouter too)
+
+// Shutdowns: gpt-image-1 2026-10-23 (OpenAI and Azure); gpt-image-1.5, gpt-image-1-mini and chatgpt-image-latest 2026-12-01 on OpenAI, 2027 on Azure
+export type GPTImageModelId = 'gpt-image-2.5-flare' | 'gpt-image-2.5-sunburst' | 'gpt-image-2' | 'gpt-image-1.5' | 'gpt-image-1' | 'gpt-image-1-mini';
+export type DalleModelId = GPTImageModelId;
+export type DalleModelSelection = DalleModelId | null; // null = auto-select latest
+
+export type DalleImageQualityGI = 'max' | 'xhigh' | 'high' | 'medium' | 'low'; // 'xhigh' and 'max' are gpt-image-2.5 only
+export type DalleBackgroundGI = 'auto' | 'transparent' | 'opaque';
+export type DalleOutputFormatGI = 'png' | 'jpeg' | 'webp';
+export type DalleModerationGI = 'auto' | 'low';
+export type DalleSizeGI = '1024x1024' | '1536x1024' | '1024x1536'; // 'auto': would force w/h inference in the server, so we remove it
+
+
+// Credentials
+
+export type DT2ICredentialsAny = { [TVt in DT2IVendorType]: DT2ICredentials<TVt> }[DT2IVendorType];
+
+export type DT2ICredentials<TVt extends DT2IVendorType> = _TypeMap[TVt]['credentials'];
+
+// future: manual (api-key) engines, as in DASRxCredentials
+export interface DCredentialsApiKey {
+  type: 'api-key';
+  apiKey: string;
+  apiHost?: string;
+}
+
+export interface DCredentialsLLMSService {
+  type: 'llms-service';
+  serviceId: DModelsServiceId;
+}
+
+// future: system-provided engines - nothing is stored client-side; any
+// authorization is handled server-side
+export interface DCredentialsNone {
+  type: 'none';
+}

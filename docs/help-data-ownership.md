@@ -30,6 +30,12 @@ You can see your data in your browser's local storage and IndexedDB - try it you
 
 ![Browser local storage showing API keys and chat data](pixels/data_ownership_local_storage.png)
 
+### Sync for Authenticated Users
+
+Users with accounts on big-agi.com who opt into Sync (a Pro feature) have their entity data - such as conversations and personas - replicated to the server for multi-device access.
+Server-side data is isolated per-user using Row Level Security (RLS), ensuring that no other user can access your synced data.
+Sync is entirely optional; without it, all data remains local to your browser.
+
 ### What This Means For You
 
 Storing data in your browser means:
@@ -39,16 +45,18 @@ Storing data in your browser means:
 - Anyone using your browser can see your chats and keys
 - Running your own server needs technical skills
 
-### Local Device Identifier
+### Device Identifier
 
-Big-AGI generates a _device identifier_ that combines timestamp and random components, stored only on your device. This identifier:
+When you sign in, Big-AGI keeps a _device identifier_ so your devices can be told apart for optional Sync and listed under your account.
+It is **server-issued** (a random UUID) and stored in a durable, first-party **httpOnly cookie** (`agi.client-token`) - not created by,
+or readable from, page scripts. This identifier:
 
-- Is used only for the **optional sync functionality** between your devices (not yet ready)
-- Helps maintain data consistency when using Big-AGI across multiple devices
-- Remains completely local unless you explicitly enable sync
-- Is not used for tracking, analytics, or telemetry
-- Can be deleted anytime by clearing local storage
-- Is fully transparent - see the implementation in `src/common/stores/store-client.ts`
+- Identifies your **client** - one per browser, so a second browser or an installed app on the same machine is a separate device
+- Replaces a former localStorage mechanism, see `src/common/stores/store-client.ts` if available in the source code
+- Is **not** set for signed-out visitors, and is never used for tracking, advertising, analytics, or telemetry
+- Is scoped to your account via Row Level Security, so no other user can see it
+- Is a server-set cookie; it resets only if you clear **cookies/site data**
+
 
 ## How Data Flows
 
@@ -73,6 +81,27 @@ and chats pass through Big-AGI's edge network to reach the AI services on a per-
 and then are send to the upstream AI services.
 
 ![data_ownership_hosted.png](pixels/data_ownership_hosted.png)
+
+### Direct Connection (Browser → AI Service)
+
+Most AI services offer a **Direct Connection** toggle (under a service's Advanced settings). When enabled, the browser calls the AI provider's API directly, skipping the Big-AGI server entirely.
+
+Benefits:
+
+- **No 4.5 MB upload limit** - the Vercel body-size cap does not apply, so larger attachments and long prompts go through.
+- **No 300-second timeout** - the Vercel function timeout does not apply, so long-running generations keep streaming.
+- **More privacy** - connection metadata (IP, timestamp, edge region, Vercel telemetry) is not observable by the Big-AGI edge server.
+
+Tradeoff:
+
+- **Slightly more downlink bandwidth**: when traffic passes through the Big-AGI edge, repetitive streaming frames are compacted; direct streams arrive verbatim from the provider.
+
+Availability requires both:
+
+1. The API key is set in your browser (client-side), not via server environment variables. Server-key deployments cannot use Direct Connection because the browser has no credential to send.
+2. The AI service allows CORS (browser-origin requests). Most major providers do; Big-AGI sets any extra headers they require.
+
+Direct Connection is a net win on speed, limits, and privacy whenever the provider permits it.
 
 ## Security Best Practices
 

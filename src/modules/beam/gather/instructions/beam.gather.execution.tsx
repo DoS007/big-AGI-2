@@ -2,7 +2,9 @@ import * as React from 'react';
 import { Typography } from '@mui/joy';
 
 import type { DLLMId } from '~/common/stores/llms/llms.types';
-import { createDMessageEmpty, DMessage } from '~/common/stores/chat/chat.message';
+import { abortWithReason } from '~/common/util/errorUtils';
+import { createDMessageEmpty, DMessage, messageSetGeneratorNamed } from '~/common/stores/chat/chat.message';
+import { messageTerminalOutcome } from '~/common/stores/chat/chat.message.outcome';
 import { createPlaceholderVoidFragment } from '~/common/stores/chat/chat.fragments';
 
 import type { BFusion, FusionUpdateOrFn } from '../beam.gather';
@@ -30,6 +32,8 @@ export interface ExecutionInputState {
   readonly updateInstructionComponent: (component: React.ReactNode) => void;
   // output1 -> input2
   readonly intermediateDMessage: DMessage;
+  // snapshot of the intermediate into BFusion.outputDMessage - the card header (timer, live metrics) and body follow the merge as they follow a ray
+  readonly publishIntermediateToOutput: (hideFragments?: boolean) => void;
 }
 
 export type Instruction = GatherInstruction | UserInputChecklistInstruction;
@@ -44,11 +48,11 @@ export function gatherStartFusion(
 
   // abort any current fusion
   const { instructions } = initialFusion;
-  initialFusion.fusingAbortController?.abort('Merge Stopped');
+  abortWithReason(initialFusion.fusingAbortController, 'Merge Stopped');
 
   // validate preconditions
   const onError = (errorText: string) => onUpdateBFusion({
-    stage: 'error',
+    stage: 'failed',
     errorText: errorText,
     fusingAbortController: undefined,
   });
@@ -57,7 +61,7 @@ export function gatherStartFusion(
   if (chatMessages.length < 1)
     return onError('No conversation history available');
   if (rayMessages.length <= 1)
-    return onError('No responses available');
+    return onError('Needs two responses at least');
   if (!initialFusion.llmId)
     return onError('No Merge model selected');
 
@@ -75,13 +79,21 @@ export function gatherStartFusion(
     updateInstructionComponent: (component: React.ReactNode) => onUpdateBFusion({ fusingInstructionComponent: component }),
     // output1 -> input2
     intermediateDMessage: createDMessageEmpty('assistant'), // [state] assistant:Fusion_pending
+    publishIntermediateToOutput: (hideFragments) => onUpdateBFusion({
+      outputDMessage: {
+        ...inputState.intermediateDMessage,
+        ...(hideFragments && { fragments: [] }),
+      },
+    }),
   };
+  messageSetGeneratorNamed(inputState.intermediateDMessage, 'Merge');
 
 
   // BFusion: startup full status reset
   onUpdateBFusion({
     // status
-    stage: 'fusing',
+    stage: 'running',
+    fusedInputsCount: rayMessages.length,
     errorText: undefined,
     outputDMessage: undefined,
 
@@ -113,6 +125,7 @@ export function gatherStartFusion(
       inputState.intermediateDMessage.fragments = [createPlaceholderVoidFragment(GATHER_PLACEHOLDER)];
       inputState.intermediateDMessage.pendingIncomplete = true;
       inputState.intermediateDMessage.updated = null;
+      inputState.updateInstructionComponent(undefined); // every step starts with a clean instruction slot
 
       // return the promise from the instruction
       switch (instruction.type) {
@@ -129,8 +142,9 @@ export function gatherStartFusion(
   // Chain completion handlers
   promiseChain
     .then(() => {
+      // the last instruction's output decides the stage, with the one outcome function
       onUpdateBFusion({
-        stage: 'success',
+        stage: messageTerminalOutcome(inputState.intermediateDMessage),
         errorText: undefined,
         fusingProgressComponent: undefined,
       });
@@ -139,7 +153,7 @@ export function gatherStartFusion(
       // User abort: no need to show an error
       if (inputState.chainAbortController.signal.aborted) {
         return onUpdateBFusion({
-          stage: 'stopped',
+          stage: 'aborted',
           // errorText: 'Merge Canceled.',
           fusingProgressComponent: undefined,
         });
@@ -147,8 +161,9 @@ export function gatherStartFusion(
 
       // Error handling
       onUpdateBFusion({
-        stage: 'error',
+        stage: 'failed',
         errorText: 'Issue: ' + (error?.message || error?.toString() || 'Unknown error'),
+        fusingProgressComponent: undefined, // stops the spinner
       });
     })
     .finally(() => onUpdateBFusion({
@@ -161,10 +176,12 @@ export function gatherStartFusion(
 
 
 export function gatherStopFusion(fusion: BFusion): BFusion {
-  fusion.fusingAbortController?.abort('Merge Stopped');
+  fusion.inputsWait?.cancel(); // not started yet: the stage is untouched
+  abortWithReason(fusion.fusingAbortController, 'Merge Stopped');
   return {
     ...fusion,
-    ...(fusion.stage === 'fusing' ? { stage: 'stopped' /* optimistic as the abort shall do the same */ } : {}),
+    ...(fusion.stage === 'running' ? { stage: 'aborted' /* optimistic as the abort shall do the same */ } : {}),
+    inputsWait: undefined,
     fusingAbortController: undefined,
   };
 }

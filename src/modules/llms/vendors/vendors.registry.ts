@@ -4,18 +4,23 @@ import { ModelVendorAlibaba } from './alibaba/alibaba.vendor';
 import { ModelVendorAnthropic } from './anthropic/anthropic.vendor';
 import { ModelVendorAzure } from './azure/azure.vendor';
 import { ModelVendorBedrock } from './bedrock/bedrock.vendor';
+import { ModelVendorCerebras } from './cerebras/cerebras.vendor';
+import { ModelVendorCohere } from './cohere/cohere.vendor';
 import { ModelVendorDeepseek } from './deepseek/deepseekai.vendor';
 import { ModelVendorGemini } from './gemini/gemini.vendor';
 import { ModelVendorGroq } from './groq/groq.vendor';
 import { ModelVendorLMStudio } from './lmstudio/lmstudio.vendor';
 import { ModelVendorLocalAI } from './localai/localai.vendor';
+import { ModelVendorMetaAI } from './metaai/metaai.vendor';
 import { ModelVendorMistral } from './mistral/mistral.vendor';
+import { ModelVendorModular } from './modular/modular.vendor';
 import { ModelVendorMoonshot } from './moonshot/moonshot.vendor';
+import { ModelVendorNvidiaNIM } from './nvidianim/nvidianim.vendor';
 import { ModelVendorOllama } from './ollama/ollama.vendor';
 import { ModelVendorOpenAI } from './openai/openai.vendor';
-import { ModelVendorOpenPipe } from './openpipe/openpipe.vendor';
 import { ModelVendorOpenRouter } from './openrouter/openrouter.vendor';
 import { ModelVendorPerplexity } from './perplexity/perplexity.vendor';
+import { ModelVendorSakanaAI } from './sakanaai/sakanaai.vendor';
 import { ModelVendorTogetherAI } from './togetherai/togetherai.vendor';
 import { ModelVendorXAI } from './xai/xai.vendor';
 import { ModelVendorZAI } from './zai/zai.vendor';
@@ -28,45 +33,61 @@ export type ModelVendorId =
   | 'anthropic'
   | 'azure'
   | 'bedrock'
+  | 'cerebras'
+  | 'cohere'
   | 'deepseek'
   | 'googleai'
   | 'groq'
   | 'lmstudio'
   | 'localai'
+  | 'metaai'
   | 'mistral'
+  | 'modular'
   | 'moonshot'
+  | 'nvidianim'
   | 'ollama'
   | 'openai'
-  | 'openpipe'
   | 'openrouter'
   | 'perplexity'
+  | 'sakanaai'
   | 'togetherai'
   | 'xai'
   | 'zai'
   ;
 
-/** Global: Vendor Instances Registry **/
-const MODEL_VENDOR_REGISTRY: Record<ModelVendorId, IModelVendor> = {
+/** Global: Vendor Instances Registry (`satisfies` validates keys, TS preserves specific vendor types) **/
+const MODEL_VENDOR_REGISTRY = {
   alibaba: ModelVendorAlibaba,
   anthropic: ModelVendorAnthropic,
   azure: ModelVendorAzure,
   bedrock: ModelVendorBedrock,
+  cerebras: ModelVendorCerebras,
+  cohere: ModelVendorCohere,
   deepseek: ModelVendorDeepseek,
   googleai: ModelVendorGemini,
   groq: ModelVendorGroq,
   lmstudio: ModelVendorLMStudio,
   localai: ModelVendorLocalAI,
+  metaai: ModelVendorMetaAI,
   mistral: ModelVendorMistral,
+  modular: ModelVendorModular,
   moonshot: ModelVendorMoonshot,
+  nvidianim: ModelVendorNvidiaNIM,
   ollama: ModelVendorOllama,
   openai: ModelVendorOpenAI,
-  openpipe: ModelVendorOpenPipe,
   openrouter: ModelVendorOpenRouter,
   perplexity: ModelVendorPerplexity,
+  sakanaai: ModelVendorSakanaAI,
   togetherai: ModelVendorTogetherAI,
   xai: ModelVendorXAI,
   zai: ModelVendorZAI,
-} as Record<string, IModelVendor>;
+} as const satisfies Record<ModelVendorId, IModelVendor>;
+
+
+// --- Type Helpers - for Id -> concrete type mappings ---
+// NOTE: we haven't ported the full system to type inference, this is just a way forward
+export type ModelVendorOf<V extends ModelVendorId> = (typeof MODEL_VENDOR_REGISTRY)[V];
+export type ModelVendorAccessOf<V extends ModelVendorId> = ModelVendorOf<V> extends IModelVendor<any, infer TAccess> ? TAccess : never;
 
 
 export function findAllModelVendors(): IModelVendor[] {

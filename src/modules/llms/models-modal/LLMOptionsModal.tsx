@@ -1,7 +1,7 @@
 import * as React from 'react';
 import TimeAgo from 'react-timeago';
 
-import { Box, Button, ButtonGroup, Checkbox, Divider, Dropdown, FormControl, Grid, IconButton, Input, Link, ListDivider, ListItemDecorator, Menu, MenuButton, MenuItem, Switch, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, ButtonGroup, Checkbox, Chip, Divider, Dropdown, FormControl, Grid, IconButton, Input, Link, ListDivider, ListItemDecorator, Menu, MenuButton, MenuItem, Switch, Tooltip, Typography } from '@mui/joy';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import ArrowForwardRoundedIcon from '@mui/icons-material/ArrowForwardRounded';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -15,7 +15,7 @@ import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
 
 import { type DPricingChatGenerate, isLLMChatFree_cached, llmChatPricing_adjusted } from '~/common/stores/llms/llms.pricing';
 import type { ModelOptionsContext } from '~/common/layout/optima/store-layout-optima';
-import { DLLMId, DModelInterfaceV1, getLLMContextTokens, getLLMLabel, getLLMMaxOutputTokens, isLLMVisible, LLM_IF_HOTFIX_NoStream, LLM_IF_HOTFIX_NoTemperature, LLM_IF_OAI_Reasoning } from '~/common/stores/llms/llms.types';
+import { DLLMId, DModelInterfaceV1, getLLMContextTokens, getLLMLabel, getLLMMaxOutputTokens, getLLMPubDate, isLLMVisible, LLM_IF_HOTFIX_NoStream, LLM_IF_HOTFIX_NoTemperature, LLM_IF_OAI_Reasoning } from '~/common/stores/llms/llms.types';
 import { FormLabelStart } from '~/common/components/forms/FormLabelStart';
 import { GoodModal } from '~/common/components/modals/GoodModal';
 import { LLMImplicitParametersRuntimeFallback } from '~/common/stores/llms/llms.parameters';
@@ -73,23 +73,10 @@ function prettyPricingComponent(pricingChatGenerate: DPricingChatGenerate): Reac
   const inputPrice = formatPrice(pricingChatGenerate.input);
   const outputPrice = formatPrice(pricingChatGenerate.output);
 
-  let cacheInfo = '';
-  if (pricingChatGenerate.cache) {
-    switch (pricingChatGenerate.cache.cType) {
-      case 'ant-bp': {
-        const { read, write, duration } = pricingChatGenerate.cache;
-        cacheInfo = `Cache: Read ${formatPrice(read)}, Write ${formatPrice(write)}, Duration: ${duration}s`;
-        break;
-      }
-      case 'oai-ac': {
-        const { read } = pricingChatGenerate.cache;
-        cacheInfo = `Cache: Read ${formatPrice(read)}`;
-        break;
-      }
-      default:
-        throw new Error('LLMOptionsModal: Unknown cache type');
-    }
-  }
+  const cache = pricingChatGenerate.cache;
+  const cacheInfo = !cache ? '' : `Cache: Read ${formatPrice(cache.read)}`
+    + (cache.write !== undefined ? `, Write ${formatPrice(cache.write)}` : '')
+    + (cache.duration !== undefined ? `, Duration: ${cache.duration}s` : '');
 
   return (
     <div>
@@ -117,7 +104,7 @@ export function LLMOptionsModal(props: { id: DLLMId, context?: ModelOptionsConte
   const [showOverrides, setshowOverrides] = React.useState(!!llm?.userPricing || llm?.userContextTokens !== undefined || llm?.userMaxOutputTokens !== undefined);
   const [cloneDialogOpen, setCloneDialogOpen] = React.useState(false);
   const domainAssignments = useModelDomains();
-  const { removeLLM, updateLLM, assignDomainModelId, resetLLMUserParameters } = llmsStoreActions();
+  const { removeLLM, updateLLM, assignDomainModelId, assignDomainModelAuto, resetLLMUserParameters } = llmsStoreActions();
 
   const handleResetParameters = React.useCallback(() => {
     llm?.id && resetLLMUserParameters(llm?.id);
@@ -263,15 +250,27 @@ export function LLMOptionsModal(props: { id: DLLMId, context?: ModelOptionsConte
 
   const hasUserParameters = llm.userParameters && Object.keys(llm.userParameters).length > 0;
   const resetButton = !hasUserParameters ? null : (
-    <Link
-      component='button'
-      color='neutral'
-      level='body-sm'
+    <Chip
+      variant='soft'
       onClick={handleResetParameters}
-      // sx={{ mt: 0.125 }}
+      sx={{
+        px: 1.5,
+        mr: 0.5, // desktop outline not cropped
+        ml: 'auto', // mobile to the right
+        my: 0.5, // mobile some more spacing (desktop not influenced)
+    }}
     >
-      Reset to defaults ...
-    </Link>
+      Reset to defaults...
+    </Chip>
+    // <Link
+    //   component='button'
+    //   color='neutral'
+    //   level='body-sm'
+    //   onClick={handleResetParameters}
+    //   // sx={{ mt: 0.125 }}
+    // >
+    //   Reset to defaults...
+    // </Link>
   );
 
 
@@ -280,6 +279,7 @@ export function LLMOptionsModal(props: { id: DLLMId, context?: ModelOptionsConte
 
   // cache
   const adjChatPricing = llmChatPricing_adjusted(llm);
+  const pubDate = getLLMPubDate(llm);
 
 
   return (
@@ -302,7 +302,7 @@ export function LLMOptionsModal(props: { id: DLLMId, context?: ModelOptionsConte
                 {visible ? <VisibilityIcon sx={{ fontSize: 'xl' }} /> : <VisibilityOffIcon />}
               </IconButton>
             </TooltipOutlined>}
-            <div>{getLLMLabel(llm)} <span style={{ opacity: 0.5 }}>options</span></div>
+            <div>{getLLMLabel(llm)}{/*<span style={{ opacity: 0.5 }}>options</span>*/}</div>
           </Box>
 
           {/* [Desktop] Reset to default - show only when user has customized parameters */}
@@ -419,14 +419,19 @@ export function LLMOptionsModal(props: { id: DLLMId, context?: ModelOptionsConte
           <ButtonGroup orientation='horizontal' size='sm' variant='outlined'>
             {ModelDomainsList.filter(dId => !['imageCaption'].includes(dId)).map(domainId => {
               const domainSpec = ModelDomainsRegistry[domainId];
-              const domainModelId = domainAssignments[domainId]?.modelId;
-              const isActive = domainModelId === llm.id;
+              const domainEntry = domainAssignments[domainId];
+              const isActive = domainEntry?.resolvedModelId === llm.id;
+              const isAuto = domainEntry?.resolvedModelIsAuto;
               return (
                 // Note: use Tooltip instead of GoodTooltip here, because GoodTooltip is not working well with ButtonGroup
-                <Tooltip arrow placement='top' key={domainId} title={domainSpec.confTooltip}>
+                <Tooltip arrow placement='top' key={domainId} title={isActive && isAuto ? `${domainSpec.confTooltip} (currently Auto - click to pin this model)` : domainSpec.confTooltip}>
                   <Button
-                    variant={isActive ? 'solid' : undefined}
-                    onClick={() => assignDomainModelId(domainId, isActive ? null : llm.id)}
+                    variant={!isActive ? undefined : isAuto ? 'outlined' : 'solid'}
+                    onClick={() => {
+                      // not active OR active-via-Auto -> pin (materialize); active-and-pinned -> back to Auto
+                      if (!isActive || isAuto) assignDomainModelId(domainId, llm.id);
+                      else assignDomainModelAuto(domainId);
+                    }}
                     sx={isActive ? undefined : _styles.multiSelectButton}
                   >
                     {domainSpec.confLabel}
@@ -502,7 +507,8 @@ export function LLMOptionsModal(props: { id: DLLMId, context?: ModelOptionsConte
             id: {llm.id}<br />
             context: <b>{getLLMContextTokens(llm)?.toLocaleString() ?? 'not provided'}</b> tokens{` · `}
             max output: <b>{getLLMMaxOutputTokens(llm)?.toLocaleString() ?? 'not provided'}</b><br />
-            {!!llm.created && <>created: <TimeAgo date={new Date(llm.created * 1000)} /><br /></>}
+            {!!pubDate && <>published: <b>{pubDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}</b> · <TimeAgo date={pubDate} /><br /></>}
+            {!!llm.created && <>indexed: <TimeAgo date={new Date(llm.created * 1000)} /><br /></>}
             {/*· tags: {llm.tags.join(', ')}*/}
             {!!adjChatPricing && prettyPricingComponent(adjChatPricing)}
             {/*{!!llm.benchmark && <>benchmark: <b>{llm.benchmark.cbaElo?.toLocaleString() || '(unk) '}</b> CBA Elo<br /></>}*/}

@@ -7,7 +7,7 @@ import TelegramIcon from '@mui/icons-material/Telegram';
 import { ChatMessageMemo } from '../chat/components/message/ChatMessage';
 import { useChatShowSystemMessages } from '../chat/store-app-chat';
 
-import type { DMessageFragment, DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
+import type { DMessageFragment } from '~/common/stores/chat/chat.fragments';
 import type { DMessageId } from '~/common/stores/chat/chat.message';
 import { Brand } from '~/common/app.config';
 import { ScrollToBottom } from '~/common/scroll-to-bottom/ScrollToBottom';
@@ -27,6 +27,7 @@ export function LinkChatViewer(props: { conversation: DConversation, storedAt: D
 
   // state
   const [cloning, setCloning] = React.useState<boolean>(false);
+  const [messages, setMessages] = React.useState(props.conversation.messages); // edits stay local to the viewer, and go along when cloning
   const listBottomRef = React.useRef<HTMLDivElement>(null);
 
   // external state
@@ -35,9 +36,12 @@ export function LinkChatViewer(props: { conversation: DConversation, storedAt: D
   const hasExistingChat = useChatStore(state => state.conversations.some(c => c.id === props.conversation.id));
 
   // derived state
-  const messages = props.conversation.messages;
   const filteredMessages = excludeSystemMessages(messages, showSystemMessages);
   const hasMessages = filteredMessages.length > 0;
+
+  const handleMessageFragmentsReplace = React.useCallback((messageId: DMessageId, fragments: DMessageFragment[]) => {
+    setMessages(messages => messages.map(message => message.id !== messageId ? message : { ...message, fragments, updated: Date.now() }));
+  }, []);
 
   // Effect: Scroll to bottom of list when messages change
 
@@ -51,7 +55,7 @@ export function LinkChatViewer(props: { conversation: DConversation, storedAt: D
 
   const handleClone = async (canOverwrite: boolean) => {
     setCloning(true);
-    const importedId = useChatStore.getState().importConversation({ ...props.conversation }, !canOverwrite);
+    const importedId = useChatStore.getState().importConversation({ ...props.conversation, messages }, !canOverwrite);
     void launchAppChat(importedId);
     setCloning(false);
   };
@@ -128,9 +132,7 @@ export function LinkChatViewer(props: { conversation: DConversation, storedAt: D
                   fitScreen={isMobile}
                   isMobile={isMobile}
                   showBlocksDate={idx === 0 || idx === filteredMessages.length - 1 /* first and last message */}
-                  onMessageFragmentReplace={(_messageId: DMessageId, fragmentId: DMessageFragmentId, newFragment: DMessageFragment) => {
-                    message.fragments = message.fragments.map(f => (f.fId === fragmentId) ? newFragment : f);
-                  }}
+                  onMessageFragmentsReplace={handleMessageFragmentsReplace}
                 />,
               )}
 

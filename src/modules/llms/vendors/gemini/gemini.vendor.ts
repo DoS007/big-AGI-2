@@ -6,7 +6,7 @@ import type { GeminiAccessSchema } from '../../server/gemini/gemini.access';
 import type { IModelVendor } from '../IModelVendor';
 
 
-interface DGeminiServiceSettings {
+export interface DGeminiServiceSettings {
   geminiKey: string;
   geminiHost: string;
   csf?: boolean;
@@ -30,7 +30,7 @@ export const ModelVendorGemini: IModelVendor<DGeminiServiceSettings, GeminiAcces
   displayRank: 14,
   displayGroup: 'popular',
   location: 'cloud',
-  instanceLimit: 1,
+  instanceLimit: 2,
   hasServerConfigKey: 'hasLlmGemini',
 
   /// client-side-fetch ///

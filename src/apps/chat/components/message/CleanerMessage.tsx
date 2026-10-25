@@ -1,17 +1,20 @@
 import * as React from 'react';
 
-import { Box, Button, Checkbox, Chip, IconButton, ListItem, Sheet } from '@mui/joy';
+import { Box, Button, Checkbox, Chip, IconButton, ListItem, Sheet, Tooltip } from '@mui/joy';
 import AttachFileRoundedIcon from '@mui/icons-material/AttachFileRounded';
 import ClearIcon from '@mui/icons-material/Clear';
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ErrorIcon from '@mui/icons-material/ErrorRounded';
-import ImageIcon from '@mui/icons-material/ImageRounded';
 import TextFieldsIcon from '@mui/icons-material/TextFieldsRounded';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 
 import { DMessage, MESSAGE_FLAG_AIX_SKIP, messageFragmentsReduceText, messageHasUserFlag } from '~/common/stores/chat/chat.message';
-import { DMessageAttachmentFragment, DMessageFragment, isAttachmentFragment, isContentFragment, isImageRefPart, isZyncAssetImageReferencePart } from '~/common/stores/chat/chat.fragments';
+import { messageOutcome, messageOutcomeColor } from '~/common/stores/chat/chat.message.outcome';
+import { DMessageAttachmentFragment, DMessageFragment, isAttachmentFragment, isContentFragment, isImagePart, isImageRefPart, isZyncAssetImageReferencePart } from '~/common/stores/chat/chat.fragments';
+import { PhImageSquare } from '~/common/components/icons/phosphor/PhImageSquare';
 import { makeMessageAvatarIcon, messageBackground } from '~/common/util/dMessageUtils';
 
 import { TokenBadgeMemo } from '../composer/tokens/TokenBadge';
@@ -75,7 +78,7 @@ function analyzeMessageFragments(messageFragments: ReadonlyArray<DMessageFragmen
           break;
       }
     } else if (isAttachmentFragment(fragment)) {
-      if (isZyncAssetImageReferencePart(fragment.part) || isImageRefPart(fragment.part)) {
+      if (isImagePart(fragment.part)) {
         result.imageCount++;
       } else {
         result.attachmentCount++;
@@ -174,7 +177,16 @@ export const MessagesSelectionHeader = (props: {
  *
  * Shall look similarly to the main ChatMessage, for consistency, but just allow a simple checkbox selection
  */
-export function CleanerMessage(props: { message: DMessage, selected: boolean, remainingTokens?: number, onToggleSelected?: (messageId: string, selected: boolean) => void }) {
+export function CleanerMessage(props: {
+  message: DMessage,
+  selected: boolean,
+  remainingTokens?: number,
+  onDeleteMessage?: (messageId: string) => void,
+  onToggleSelected?: (messageId: string, selected: boolean) => void,
+}) {
+
+  // state
+  const [deleteArmed, setDeleteArmed] = React.useState(false);
 
   // derived state
   const {
@@ -187,6 +199,23 @@ export function CleanerMessage(props: { message: DMessage, selected: boolean, re
     tokenCount: messageTokenCount,
     updated: messageUpdated,
   } = props.message;
+
+  // delete handlers (arming pattern)
+  const handleDeleteArm = React.useCallback((event: React.MouseEvent) => {
+    event.stopPropagation();
+    setDeleteArmed(true);
+  }, []);
+
+  const handleDeleteCancel = React.useCallback((event: React.MouseEvent) => {
+    event.stopPropagation();
+    setDeleteArmed(false);
+  }, []);
+
+  const handleDeleteConfirm = React.useCallback((event: React.MouseEvent) => {
+    event.stopPropagation();
+    setDeleteArmed(false);
+    props.onDeleteMessage?.(messageId);
+  }, [messageId, props]);
 
   const analysis = React.useMemo(() => analyzeMessageFragments(messageFragments), [messageFragments]);
 
@@ -207,7 +236,7 @@ export function CleanerMessage(props: { message: DMessage, selected: boolean, re
       : messageText.startsWith('/react ') ? 'react'
         : false;
 
-  const backgroundColor = messageBackground(messageRole, userCommandApprox, !!messageUpdated, isAssistantError);
+  const backgroundColor = messageBackground(messageRole, userCommandApprox, !!messageUpdated, isAssistantError ? 'danger' : messageOutcomeColor[messageOutcome(props.message)] === 'warning' ? 'warning' : undefined /* truncation only, as in chat */);
 
   const avatarIconEl: React.JSX.Element | null = React.useMemo(() => {
     return makeMessageAvatarIcon('pro', messageRole, messageGeneratorName, messagePurposeId, !!messagePendingIncomplete, isUserMessageSkipped, false, false);
@@ -273,7 +302,7 @@ export function CleanerMessage(props: { message: DMessage, selected: boolean, re
               </Chip>
             )}
             {analysis.imageCount > 0 && (
-              <Chip size='sm' variant='solid' color='success' startDecorator={<ImageIcon />} sx={{ px: 1 }}>
+              <Chip size='sm' variant='solid' color='success' startDecorator={<PhImageSquare />} sx={{ px: 1 }}>
                 {analysis.imageCount} image{analysis.imageCount > 1 ? 's' : ''}
               </Chip>
             )}
@@ -297,6 +326,24 @@ export function CleanerMessage(props: { message: DMessage, selected: boolean, re
         )}
 
       </Box>
+
+      {/* Delete button (desktop only, arming pattern) */}
+      {!!props.onDeleteMessage && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, ml: 'auto' }}>
+          {deleteArmed && (
+            <Tooltip title='Confirm Delete' color='danger' arrow>
+              <IconButton aria-label='Confirm delete message' size='sm' variant='soft' color='danger' onClick={handleDeleteConfirm}>
+                <DeleteForeverIcon />
+              </IconButton>
+            </Tooltip>
+          )}
+          <Tooltip title={deleteArmed ? 'Cancel' : 'Delete'} arrow>
+            <IconButton aria-label={deleteArmed ? 'Cancel delete message' : 'Delete message'} size='sm' variant='plain' color={deleteArmed ? 'neutral' : 'danger'} onClick={deleteArmed ? handleDeleteCancel : handleDeleteArm}>
+              {deleteArmed ? <CloseRoundedIcon /> : <DeleteOutlineIcon />}
+            </IconButton>
+          </Tooltip>
+        </Box>
+      )}
     </ListItem>
   );
 }

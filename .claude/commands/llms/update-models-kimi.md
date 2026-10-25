@@ -6,11 +6,23 @@ Update `src/modules/llms/server/openai/models/moonshot.models.ts` with latest mo
 
 Reference `src/modules/llms/server/llm.server.types.ts` and `src/modules/llms/server/models.mappings.ts` for context only. Focus on the model file, do not descend into other code.
 
-**Primary Sources (fetch directly, no search needed):**
-- Pricing: https://platform.moonshot.ai/docs/pricing/chat
-- API Reference: https://platform.moonshot.ai/docs/api/chat
+**Primary Sources (fetch directly, no search needed):** platform.kimi.ai (was platform.moonshot.ai - now 301 redirect).
+Append `.md` to any docs URL for clean prose, but its pricing/parameter tables render empty (`<table><tbody /></table>`, since 2026-10).
+For table data, `curl -sL <url>` (no `.md`) and read the rows from the page's embedded payload; WebFetch drops them.
+- Model list + deprecation/sunset notices: https://platform.kimi.ai/docs/models.md
+- Pricing: https://platform.kimi.ai/docs/pricing/chat.md (the per-model pricing pages now redirect here)
+- Kimi Code subscription catalog ('sk-kimi-' keys): https://www.kimi.com/code/docs/en/kimi-code/models.html and its What's New page
+- Skip https://platform.kimi.ai/docs/platform-changelog.md - abandoned, last entry 2025-04-07
+- Per-model parameter matrix (thinking vs reasoning_effort, temperature/top_p/n locks, tool_choice): https://platform.kimi.ai/docs/api/models-overview.md
+- API reference: https://platform.kimi.ai/docs/api/chat.md; machine-readable: https://platform.kimi.ai/docs/openapi.json (per-model request schemas)
+- Full doc index: https://platform.kimi.ai/docs/llms.txt
 
 **Do NOT use web search.** Fetch the URLs directly, or ask the user to provide data, if unaccessible.
+
+**Live endpoint (extra signal):** If `.env.api-keys` has `MOONSHOT_API_KEY`, scan the served model list as ground-truth for what's new/available and cross-check the docs above: `curl https://api.moonshot.ai/v1/models -H "Authorization: Bearer $MOONSHOT_API_KEY"`. Never commit or echo the key.
+Each entry carries capability flags worth diffing against the file: `supports_image_in`, `supports_video_in`, `supports_reasoning`, `supports_dynamic_tools`, `supports_thinking_type`, `think_efforts`/`reasoning_efforts` (valid list + default), `context_length`.
+
+**Probing tips:** request validation runs before engine dispatch, so `invalid_request_error` vs `engine_overloaded_error` already tells you whether a param is accepted (K3 capacity is often tight - retry with backoff). Note `reasoning_effort` is NOT strictly validated (bogus values pass), so confirm effort levels with a reasoning-token differential, not with an error probe.
 
 **Important:**
 - Review the full model list for additions, removals, and price changes

@@ -1,5 +1,6 @@
 import * as React from 'react';
 
+import type { SxProps } from '@mui/joy/styles/types';
 import { Box, BoxProps, styled } from '@mui/joy';
 
 
@@ -16,7 +17,7 @@ import { Box, BoxProps, styled } from '@mui/joy';
  * Note that the issue of 'BoxCollapsee' having a different height than the FR implies remains, but we
  * basically just use the Collapsee to ignore the layout and clip all on the parent instead.
  */
-const BoxCollapser = styled(Box)({
+const BoxCollapser = styled(Box, { name: 'BoxCollapser' })({
   display: 'grid',
   alignItems: 'start',
   gridTemplateRows: '1fr',
@@ -28,7 +29,21 @@ const BoxCollapser = styled(Box)({
   contain: 'layout',
 });
 
-const BoxCollapsee = styled(Box)({
+// Fix for RenderCode losing fixed OverlayButtons positioning system: drops the `contain` which would create a
+// containing block for fixed-positioned descendants and trap things like position:fixed sticky overlays inside this collapser).
+// `overflow: clip` alone keeps the collapse animation clipping without the trap.
+const collapserNoContainSx = {
+  contain: 'none',
+} as const satisfies SxProps;
+
+// Collapsed content is unreachable: `inert` blurs any focused descendant (otherwise the browser refuses
+// the `aria-hidden` and warns), drops the subtree from the tab order and hides it from assistive tech.
+// React 18 has no `inert` property: the empty string sets the attribute, a boolean is dropped with a
+// warning; the experimental React types already declare the React 19 boolean, hence the cast.
+// React 19 warns on the empty string: switch to `true` then.
+const collapsedInertProps = { inert: '' as unknown as boolean };
+
+const BoxCollapsee = styled(Box, { name: 'BoxCollapsee' })({
   /**
    * FIX: the absence of this made the ChatPanelModelParameters content overflow on the horizontal
    */
@@ -37,9 +52,29 @@ const BoxCollapsee = styled(Box)({
 });
 
 
-export function ExpanderControlledBox({ expanded, children, ...rest }: BoxProps & { expanded: boolean }) {
+export function ExpanderControlledBox({ expanded, noContain, children, ...rest }: BoxProps & { expanded: boolean, noContain?: boolean, sx?: never }) {
+
+  const collapserRef = React.useRef<HTMLDivElement>(null);
+
+  // On collapse, drop focus held inside right away, within this commit. `inert` alone releases it a task
+  // after the next layout, and the browser's accessibility pass in between still sees the focused
+  // descendant, refuses the `aria-hidden` and warns (e.g. a switch that collapses its own row).
+  React.useLayoutEffect(() => {
+    if (expanded) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && collapserRef.current?.contains(active))
+      active.blur();
+  }, [expanded]);
+
   return (
-    <BoxCollapser aria-hidden={!expanded ? true : undefined} data-agi-no-copy={!expanded || undefined} {...rest}>
+    <BoxCollapser
+      aria-hidden={!expanded ? true : undefined}
+      data-agi-no-copy={!expanded || undefined}
+      {...(!expanded ? collapsedInertProps : undefined)}
+      {...rest}
+      ref={collapserRef}
+      sx={noContain ? collapserNoContainSx : undefined}
+    >
       <BoxCollapsee>
         {children}
       </BoxCollapsee>

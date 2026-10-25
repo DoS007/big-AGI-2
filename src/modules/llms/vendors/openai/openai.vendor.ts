@@ -12,7 +12,6 @@ export interface DOpenAIServiceSettings {
   oaiOrg: string;
   oaiHost: string;  // use OpenAI-compatible non-default hosts (full origin path)
   csf?: boolean;
-  heliKey: string;  // helicone key (works in conjunction with oaiHost)
 
   // Note: `moderationCheck: boolean` was removed from UI/new clients;
   // old stored data may still contain it and is passed through to server (which ignores it)
@@ -36,8 +35,8 @@ export const ModelVendorOpenAI: IModelVendor<DOpenAIServiceSettings, OpenAIAcces
     clientSideFetch: _csfOpenAIAvailable(partialSetup) && !!partialSetup?.csf,
     oaiKey: partialSetup?.oaiKey || '',
     oaiOrg: partialSetup?.oaiOrg || '',
-    oaiHost: partialSetup?.oaiHost || '',
-    heliKey: partialSetup?.heliKey || '',
+    // ignore leftover Helicone proxy hosts (integration removed 2026-07): substring is fine, as a false positive falls back to the official host
+    oaiHost: partialSetup?.oaiHost?.includes('hconeai.com') ? '' : partialSetup?.oaiHost || '',
   }),
 
   // List Models

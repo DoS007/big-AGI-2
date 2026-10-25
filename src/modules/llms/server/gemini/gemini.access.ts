@@ -5,7 +5,7 @@
  * that works identically on server and client environments.
  *
  * Server: Uses header-based auth (x-goog-api-key) with package version
- * Client: Uses query param auth (?key=) for CORS compatibility
+ * Client (browser only, with the user's own key): query param auth (?key=) for CORS compatibility; the server never honors the flag
  */
 import * as z from 'zod/v4';
 import { TRPCError } from '@trpc/server';
@@ -13,10 +13,12 @@ import { TRPCError } from '@trpc/server';
 import packageJson from '../../../../../package.json';
 
 import { env } from '~/server/env.server';
+import { isBrowser } from '~/common/util/pwaUtils';
 
 import { GeminiWire_Safety } from '~/modules/aix/server/dispatch/wiretypes/gemini.wiretypes';
 
-import { llmsFixupHost, llmsRandomKeyFromMultiKey } from '../openai/openai.access';
+import { llmsFixupHost, llmsIsNativeGeminiHost } from '../../shared/llm.isomorphic';
+import { llmsRandomKeyFromMultiKey } from '../openai/openai.access';
 
 
 // configuration
@@ -37,15 +39,21 @@ export const geminiAccessSchema = z.object({
 
 export function geminiAccess(access: GeminiAccessSchema, modelRefId: string | null, apiPath: string, useV1Alpha: boolean): { headers: HeadersInit, url: string } {
 
-  const geminiHost = llmsFixupHost(access.geminiHost || DEFAULT_GEMINI_HOST, apiPath);
-  let geminiKey = access.geminiKey || env.GEMINI_API_KEY || '';
+  // Credential resolution, as in openai.access: the server key only ever goes to Google. A client-set
+  // non-Google host (e.g. a proxy) owns the whole request and must bring its own key - otherwise any
+  // caller could point geminiHost at its own server and receive the deployment's GEMINI_API_KEY.
+  const clientHost = access.geminiHost?.trim() || '';
+  const isGoogleHost = llmsIsNativeGeminiHost(clientHost);
+  const geminiHost = llmsFixupHost(isGoogleHost ? DEFAULT_GEMINI_HOST : clientHost, apiPath);
+  const clientKey = access.geminiKey || '';
+  let geminiKey = clientKey || (isGoogleHost ? env.GEMINI_API_KEY : '') || '';
 
   // multi-key with random selection - https://github.com/enricoros/big-AGI/issues/653
   geminiKey = llmsRandomKeyFromMultiKey(geminiKey);
 
   // validate key
   if (!geminiKey)
-    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing Gemini API Key' });
+    throw new TRPCError({ code: 'BAD_REQUEST', message: isGoogleHost ? 'Missing Gemini API Key' : 'Missing Gemini API Key (required with a custom Gemini host)' });
 
   // update model-dependent paths
   if (apiPath.includes('{model=models/*}')) {
@@ -58,12 +66,18 @@ export function geminiAccess(access: GeminiAccessSchema, modelRefId: string | nu
   if (useV1Alpha)
     apiPath = apiPath.replaceAll('v1beta', 'v1alpha');
 
-  // [CSF] build headers and URL
-  if (access.clientSideFetch) {
+  // [CSF] query-parameter auth, browser only and with the user's own key: the server never honors the client-side-fetch
+  // flag (a crafted request can carry it), so no server fetch ever puts a key in a URL - URLs are echoed to the AIX
+  // inspector and logged on fetch errors. The one consumer of the flag enforces this; routers need no stripping.
+  if (isBrowser && access.clientSideFetch && clientKey) {
     const separator = apiPath.includes('?') ? '&' : '?';
     return {
       headers: {
         'Content-Type': 'application/json',
+        // Google asks integrations for 'x-goog-api-client', and it does work here (allowlisted, and the
+        // JSON content-type already preflights) - but the server path already identifies us, and a
+        // user-set geminiHost may run a stricter allowlist. Kept minimal:
+        // 'x-goog-api-client': `big-agi/${packageJson['version'] || '1.0.0'}`,
       },
       url: `${geminiHost}${apiPath}${separator}key=${geminiKey}`,
     };

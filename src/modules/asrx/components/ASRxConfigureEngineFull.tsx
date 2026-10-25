@@ -1,0 +1,612 @@
+import * as React from 'react';
+
+import { Box, Button, FormControl, Link, Textarea, Typography } from '@mui/joy';
+import KeyIcon from '@mui/icons-material/Key';
+import LinkIcon from '@mui/icons-material/Link';
+
+import { ExpanderSection } from '~/common/components/ExpanderSection';
+import { FormChipControl } from '~/common/components/forms/FormChipControl';
+import { FormChipModelControl, FormChipModelLabels } from '~/common/components/forms/FormChipModelControl';
+import { FormLabelStart } from '~/common/components/forms/FormLabelStart';
+import { FormSecretField } from '~/common/components/forms/FormSecretField';
+import { FormSliderControl } from '~/common/components/forms/FormSliderControl';
+import { FormSwitchControl } from '~/common/components/forms/FormSwitchControl';
+import { FormTextField } from '~/common/components/forms/FormTextField';
+import { GoodModal } from '~/common/components/modals/GoodModal';
+import { modelPickOrAuto } from '~/common/util/modelPickUtils';
+import { useToggleableBoolean } from '~/common/util/hooks/useToggleableBoolean';
+
+import type { DASRxEngine, DASRxEngineAny, DASRxVendorType, DCredentialsApiKey, DProfileDeepgram, DProfileGemini, DProfileOpenAI } from '../asrx.types';
+import { ASRX_DEFAULTS, ASRX_MODELS } from '../asrx.config';
+import { ASRxVendorDeepgram } from '../vendors/deepgram.vendor';
+import { ASRxVendorGemini } from '../vendors/gemini.vendor';
+import { ASRxVendorOpenAI } from '../vendors/openai.vendor';
+import { asrxAreCredentialsValid } from '../store-module-asrx';
+
+
+// --- Public component ---
+
+export function ASRxConfigureEngineFull(props: {
+  engine: DASRxEngineAny;
+  isMobile: boolean;
+  onUpdate: (updates: Partial<DASRxEngineAny>) => void;
+}) {
+  const { engine, isMobile, onUpdate } = props;
+
+  const isLinked = engine.isAutoLinked;
+  const isSystem = engine.isAutoDetected && !engine.isAutoLinked;
+  const isManual = !isLinked && !isSystem;
+  const isInvalid = !asrxAreCredentialsValid(engine.credentials);
+
+  // Advanced toggle (manual only) lifted here so it can share the bottom row with Delete
+  // off-default values stay visible even with the toggle closed (see ManualCredentials)
+  const manualHasHost = isManual && engine.credentials.type === 'api-key' && !!engine.credentials.apiHost;
+  const advanced = useToggleableBoolean();
+
+
+  // Service-access title reflects the engine's source + validity
+  const accessTitle =
+    isLinked ? 'Linked to AI Service'
+      : isSystem ? 'System'
+        : isInvalid ? 'Credentials (required)'
+          : 'Credentials';
+
+  // Access decorator (icon)
+  const accessIcon =
+    isLinked ? <LinkIcon fontSize='small' sx={{ opacity: 0.5 }} />
+      : isInvalid ? <KeyIcon fontSize='small' sx={{ color: 'danger.solidBg' }} />
+        : <KeyIcon fontSize='small' sx={{ opacity: 0.5 }}/>;
+
+  return <>
+
+    {/* 1. Transcription Parameters - defaults OPEN, user can collapse */}
+    {/* Box wrap collapses the ExpanderSection fragment (header + content) into a single
+        parent-grid cell so the Topic's grid gap only applies between sections. */}
+    <div>
+      <ExpanderSection
+        title={`${engine.label} transcription`}
+        initialExpanded={true}
+        persistentDivider
+      >
+        <Box sx={_styles.sectionBody}>
+          {engine.vendorType === 'deepgram' ? (
+            <DeepgramParameters engine={engine} onUpdate={onUpdate} />
+          ) : engine.vendorType === 'gemini' ? (
+            <GeminiParameters engine={engine} onUpdate={onUpdate} isMobile={isMobile} />
+          ) : engine.vendorType === 'openai' ? (
+            <OpenAIParameters engine={engine} onUpdate={onUpdate} isMobile={isMobile} />
+          ) : (
+            <Typography level='body-sm' color='warning'>Unknown engine type {(engine as any)?.vendorType}</Typography>
+          )}
+        </Box>
+      </ExpanderSection>
+    </div>
+
+    {/* 2. Service Access - defaults CLOSED, auto-opens when credentials invalid */}
+    <Box>
+      <ExpanderSection
+        title={accessTitle}
+        initialExpanded={isInvalid}
+        expandRequest={isInvalid ? true : undefined}
+        startDecorator={accessIcon}
+        persistentDivider
+      >
+        <Box sx={_styles.sectionBody}>
+
+          {isLinked && (
+            <Typography level='body-xs'>
+              Credentials inherited from your {engine.label} LLM service. Manage in Chat &gt; AI Services.
+            </Typography>
+          )}
+
+          {isSystem && (
+            <Typography level='body-xs'>
+              System-provided engine. No configuration needed.
+            </Typography>
+          )}
+
+          {isManual && engine.credentials.type === 'api-key' && (
+            <ManualCredentials
+              engine={engine}
+              credentials={engine.credentials}
+              onUpdate={onUpdate}
+              advancedOn={advanced.on || manualHasHost}
+            />
+          )}
+
+          {/* Advanced toggle (manual only) */}
+          {isManual && (
+            <Box sx={_styles.bottomRow}>
+              <Typography
+                level='body-xs'
+                onClick={advanced.toggle}
+                sx={_styles.advancedToggle}
+              >
+                {advanced.on ? 'Hide Advanced' : 'Advanced'}
+              </Typography>
+            </Box>
+          )}
+
+        </Box>
+      </ExpanderSection>
+    </Box>
+
+  </>;
+}
+
+
+// --- styles ---
+
+const _styles = {
+  sectionBody: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 1.5,
+    pt: 1,
+    pb: 1,
+  },
+  bottomRow: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+  },
+  advancedToggle: {
+    lineHeight: 2, // makes the whole line be 24px
+    textDecoration: 'underline',
+    cursor: 'pointer',
+    color: 'text.tertiary',
+  },
+} as const;
+
+
+// --- Manual credentials (api-key + optional host) ---
+
+function ManualCredentials({ engine, credentials, onUpdate, advancedOn }: {
+  engine: DASRxEngineAny;
+  credentials: DCredentialsApiKey;
+  onUpdate: (updates: Partial<DASRxEngineAny>) => void;
+  advancedOn: boolean;
+}) {
+
+  const vendorType: DASRxVendorType = engine.vendorType;
+
+  const handleCredentialsUpdate = React.useCallback((patch: Partial<DCredentialsApiKey>) => {
+    onUpdate({ credentials: { ...credentials, ...patch } as DCredentialsApiKey });
+  }, [credentials, onUpdate]);
+
+  // const keyDescription = vendorType === 'deepgram' ? 'Deepgram' : 'OpenAI';
+  const hostDefault =
+    vendorType === 'deepgram' ? 'https://api.deepgram.com'
+      : vendorType === 'gemini' ? 'https://generativelanguage.googleapis.com'
+        : 'https://api.openai.com';
+
+  return <>
+
+    <FormSecretField
+      autoCompleteId={`asrx-${vendorType}-key`}
+      title='API Key'
+      // description={keyDescription}
+      value={credentials.apiKey}
+      onChange={value => handleCredentialsUpdate({ apiKey: value })}
+      required
+      startDecorator={credentials.apiKey ? false : undefined}
+      inputSx={{ maxWidth: 210 }}
+    />
+
+    {advancedOn && (
+      <FormTextField
+        autoCompleteId={`asrx-${vendorType}-host`}
+        title='API Host'
+        description='Optional'
+        value={credentials.apiHost ?? ''}
+        onChange={text => handleCredentialsUpdate({ apiHost: text || undefined })}
+        placeholder={hostDefault}
+        inputSx={{ maxWidth: 210 }}
+      />
+    )}
+
+  </>;
+}
+
+
+// --- Shared panel chrome ---
+
+/** Bottom row shared by every vendor panel: 'Advanced...' toggle left, 'Reset to defaults' right when off-default. */
+function PanelFooter({ advanced, showReset, onReset }: {
+  advanced: { on: boolean; toggle: () => void };
+  showReset: boolean;
+  onReset: () => void;
+}) {
+  return (
+    <Box sx={_styles.bottomRow}>
+      <Typography
+        level='body-xs'
+        onClick={advanced.toggle}
+        sx={{ ..._styles.advancedToggle, mr: 'auto' }}
+      >
+        {advanced.on ? 'Hide Advanced' : 'Advanced...'}
+      </Typography>
+      {showReset && (
+        <Link
+          component='button'
+          color='neutral'
+          level='body-xs'
+          onClick={onReset}
+        >
+          Reset to defaults ...
+        </Link>
+      )}
+    </Box>
+  );
+}
+
+/**
+ * 'Personal Dictionary' row + editor modal, shared by every vendor panel.
+ * Terms are data, not a parameter: each panel's reset handler preserves them.
+ */
+function PersonalDictionaryRow({ show, terms, description, onSave }: {
+  show: boolean;
+  terms: string[];
+  description?: string; // default 'Fix names & jargon'
+  onSave: (terms: string[]) => void;
+}) {
+
+  const [open, setOpen] = React.useState(false);
+
+  if (!show) return null;
+
+  return <>
+    <FormControl orientation='horizontal' sx={{ flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center' }}>
+      <FormLabelStart title='Personal Dictionary' description={description ?? 'Fix names & jargon'} />
+      <Button variant='outlined' color='neutral' onClick={() => setOpen(true)}>
+        {terms.length ? `${terms.length} term${terms.length === 1 ? '' : 's'}` : 'Add terms...'}
+      </Button>
+    </FormControl>
+    {open && (
+      <DictionaryModal
+        terms={terms}
+        onSave={saved => {
+          onSave(saved);
+          setOpen(false);
+        }}
+        onClose={() => setOpen(false)}
+      />
+    )}
+  </>;
+}
+
+
+// --- Deepgram parameters ---
+
+const _DEEPGRAM_MODEL_LABELS: FormChipModelLabels<typeof ASRX_MODELS.deepgram[number]> = {
+  'nova-3': { label: 'Nova 3', description: 'Latest' },
+  'nova-2': { label: 'Nova 2', description: 'Stable' },
+};
+
+function DeepgramParameters({ engine, onUpdate }: {
+  engine: DASRxEngine<'deepgram'>;
+  onUpdate: (updates: Partial<DASRxEngine<'deepgram'>>) => void;
+}) {
+
+  const { profile } = engine;
+
+  // advanced starts closed; features off their default stay visible individually below
+  const advanced = useToggleableBoolean();
+
+
+  const handleProfileUpdate = React.useCallback((patch: Partial<DProfileDeepgram>) => {
+    onUpdate({ profile: { ...profile, ...patch } });
+  }, [onUpdate, profile]);
+
+  // any parameter off its default
+  const hasUserParameters =
+    (profile.asrModel !== undefined && profile.asrModel !== ASRX_DEFAULTS.DEEPGRAM_MODEL)
+    || (profile.language !== undefined && profile.language !== ASRX_DEFAULTS.DEEPGRAM_LANGUAGE)
+    || profile.smartFormat === false
+    || !!profile.diarize || !!profile.utterances || !!profile.topics || !!profile.sentiment;
+
+  const handleResetParameters = React.useCallback(() => {
+    onUpdate({ profile: { ...ASRxVendorDeepgram.getDefaultProfile(), ...(profile.keyterms?.length && { keyterms: profile.keyterms }) } });
+  }, [onUpdate, profile.keyterms]);
+
+  const termsCount = profile.keyterms?.length ?? 0;
+
+  return <>
+
+    {/* Model */}
+    <FormChipModelControl
+      catalog={ASRX_MODELS.deepgram}
+      labels={_DEEPGRAM_MODEL_LABELS}
+      autoModel={ASRX_DEFAULTS.DEEPGRAM_MODEL}
+      value={profile.asrModel}
+      onChange={asrModel => handleProfileUpdate({ asrModel })}
+    />
+
+    {/* Language */}
+    <FormTextField
+      autoCompleteId='asrx-deepgram-language'
+      title='Language'
+      description={
+        <Link level='inherit' color='neutral' href='https://developers.deepgram.com/docs/models-languages-overview' target='_blank' rel='noopener' sx={{ textDecoration: 'underline' }}>
+          multi, en, es, ..
+        </Link>
+      }
+      placeholder={ASRX_DEFAULTS.DEEPGRAM_LANGUAGE}
+      value={profile.language ?? ''}
+      onChange={text => handleProfileUpdate({ language: text || undefined })}
+      inputSx={{ maxWidth: 80 }}
+    />
+
+    {/* Processing features */}
+    <FormSwitchControl
+      title='Smart Format'
+      description='Punctuation, paragraphs'
+      checked={profile.smartFormat !== false}
+      onChange={checked => handleProfileUpdate({ smartFormat: checked })}
+    />
+
+    {(advanced.on || !!profile.topics) && (
+      <FormSwitchControl
+        title='Label Topics'
+        description='Detects subject changes'
+        checked={!!profile.topics}
+        onChange={checked => handleProfileUpdate({ topics: checked || undefined })}
+      />
+    )}
+
+    {(advanced.on || !!profile.sentiment) && (
+      <FormSwitchControl
+        title='Label Sentiment'
+        description='Overall tone'
+        checked={!!profile.sentiment}
+        onChange={checked => handleProfileUpdate({ sentiment: checked || undefined })}
+      />
+    )}
+
+    {(advanced.on || !!profile.diarize) && (
+      <FormSwitchControl
+        title='Label Speakers'
+        description='Speaker 0: Hi...'
+        checked={!!profile.diarize}
+        onChange={checked => handleProfileUpdate({ diarize: checked || undefined })}
+      />
+    )}
+
+    <PersonalDictionaryRow
+      show={advanced.on || termsCount > 0}
+      terms={profile.keyterms ?? []}
+      onSave={terms => handleProfileUpdate({ keyterms: terms.length ? terms : undefined })}
+    />
+
+    <PanelFooter advanced={advanced} showReset={hasUserParameters} onReset={handleResetParameters} />
+
+  </>;
+}
+
+
+/** Minimal one-term-per-line editor for the user dictionary (Deepgram keyterms; OpenAI/Gemini keywords). */
+function DictionaryModal(props: {
+  terms: string[];
+  onSave: (terms: string[]) => void;
+  onClose: () => void;
+}) {
+
+  // state
+  const [text, setText] = React.useState(() => props.terms.join('\n'));
+
+  const { onSave } = props;
+
+  const handleSave = React.useCallback(() => {
+    // one term per line - trimmed, deduped (case-insensitive), never empty; capped at 100 terms of 100 utf-8 bytes each
+    const utf8 = new TextEncoder();
+    const seen = new Set<string>();
+    const terms: string[] = [];
+    for (const line of text.split('\n')) {
+      const term = line.trim();
+      if (!term || seen.has(term.toLowerCase()) || utf8.encode(term).length > 100) continue;
+      seen.add(term.toLowerCase());
+      terms.push(term);
+      if (terms.length >= 100) break;
+    }
+    onSave(terms);
+  }, [onSave, text]);
+
+  return (
+    <GoodModal
+      open
+      title='Personal Dictionary'
+      hideBottomClose
+      onClose={props.onClose}
+    >
+      <Typography level='body-sm'>
+        One term per line, up to 100 terms. These are sent with every transcription to boost names, brands and jargon the engine keeps mis-hearing.
+      </Typography>
+      <Textarea
+        autoFocus
+        minRows={6}
+        maxRows={16}
+        placeholder={'Big-AGI\nBeam\n...'}
+        value={text}
+        onChange={event => setText(event.target.value)}
+      />
+      <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+        <Button variant='plain' color='neutral' onClick={props.onClose}>Cancel</Button>
+        <Button onClick={handleSave} sx={{ minWidth: 100 }}>Save</Button>
+      </Box>
+    </GoodModal>
+  );
+}
+
+
+// --- Gemini parameters ---
+
+function GeminiParameters({ engine, onUpdate, isMobile }: {
+  engine: DASRxEngine<'gemini'>;
+  onUpdate: (updates: Partial<DASRxEngineAny>) => void;
+  isMobile: boolean;
+}) {
+
+  const { profile } = engine;
+
+  // advanced starts closed; features off their default stay visible individually below
+  const advanced = useToggleableBoolean();
+
+  const handleProfileUpdate = React.useCallback((patch: Partial<DProfileGemini>) => {
+    onUpdate({ profile: { ...profile, ...patch } });
+  }, [onUpdate, profile]);
+
+  // any parameter off its default (no model picker: gemini-3.5-transcribe is the only batch model)
+  const hasUserParameters = profile.mode === 'verbatim' || !!profile.language;
+
+  const handleResetParameters = React.useCallback(() => {
+    onUpdate({ profile: { ...ASRxVendorGemini.getDefaultProfile(), ...(profile.keywords?.length && { keywords: profile.keywords }) } });
+  }, [onUpdate, profile.keywords]);
+
+  const keywordsCount = profile.keywords?.length ?? 0;
+
+  return <>
+
+    {/* Mode - the model's one big switch: vendor formatting vs literal transcript */}
+    <FormChipControl<Exclude<DProfileGemini['mode'], undefined>>
+      title='Mode'
+      alignEnd
+      options={[
+        { value: 'smart', label: 'Smart', description: 'Formatted', tooltip: 'Punctuation and paragraphs, lightly cleaned up' },
+        { value: 'verbatim', label: 'Verbatim', description: 'Literal', tooltip: 'Word-for-word transcript' },
+      ]}
+      value={profile.mode ?? 'smart'}
+      onChange={value => handleProfileUpdate({ mode: value })}
+    />
+
+    {/* Language(s) */}
+    <FormTextField
+      autoCompleteId='asrx-gemini-language'
+      title='Language'
+      description={isMobile ? undefined : `'en-US' or 'en,it' - blank = auto`}
+      placeholder='(auto-detect)'
+      value={profile.language ?? ''}
+      onChange={text => handleProfileUpdate({ language: text || undefined })}
+      inputSx={{ maxWidth: 210 }}
+    />
+
+    <PersonalDictionaryRow
+      show={advanced.on || keywordsCount > 0}
+      terms={profile.keywords ?? []}
+      onSave={terms => handleProfileUpdate({ keywords: terms.length ? terms : undefined })}
+    />
+
+    <PanelFooter advanced={advanced} showReset={hasUserParameters} onReset={handleResetParameters} />
+
+  </>;
+}
+
+
+// --- OpenAI parameters ---
+
+// hourly audio rates on hover, from the OpenAI pricing page (2026-07) - the API bills per minute of audio
+// (the diarize model, swapped in by Label Speakers, matches gpt-4o-transcribe at $0.36/h)
+const _OPENAI_MODEL_LABELS: FormChipModelLabels<typeof ASRX_MODELS.openai[number]> = {
+  'gpt-transcribe': { label: 'GPT Transcribe', description: 'Latest', tooltip: '$0.27 per hour' },
+  'gpt-4o-transcribe': { label: 'GPT-4o', description: 'Proven', tooltip: '$0.36 per hour' },
+  'gpt-4o-mini-transcribe': { label: 'GPT-4o mini', description: 'Cheap', tooltip: '$0.18 per hour' },
+  'whisper-1': { label: 'Whisper', description: 'Legacy', tooltip: '$0.36 per hour' },
+};
+
+function OpenAIParameters({ engine, onUpdate, isMobile }: {
+  engine: DASRxEngine<'openai'>;
+  onUpdate: (updates: Partial<DASRxEngineAny>) => void;
+  isMobile: boolean;
+}) {
+
+  const { profile } = engine;
+  // model-dependent options follow the model that will run: the pick, or what Auto resolves to
+  const asrModel = modelPickOrAuto(profile.asrModel, ASRX_MODELS.openai) ?? ASRX_DEFAULTS.OPENAI_MODEL;
+  const isWhisper = asrModel === 'whisper-1';
+  // keywords reach the wire only for gpt-transcribe (keywords[]) and whisper-1 (prompt fold) - see the batch adapter
+  const keywordsApply = !profile.diarize && (isWhisper || asrModel === 'gpt-transcribe');
+
+  // advanced starts closed; features off their default stay visible individually below
+  const advanced = useToggleableBoolean();
+
+  const handleProfileUpdate = React.useCallback((patch: Partial<DProfileOpenAI>) => {
+    onUpdate({ profile: { ...profile, ...patch } });
+  }, [onUpdate, profile]);
+
+  // any parameter off its default (the prompt is data too - reset preserves it)
+  const hasUserParameters =
+    (profile.asrModel !== undefined && profile.asrModel !== ASRX_DEFAULTS.OPENAI_MODEL)
+    || !!profile.language || profile.temperature !== undefined || !!profile.diarize;
+
+  const handleResetParameters = React.useCallback(() => {
+    onUpdate({ profile: { ...ASRxVendorOpenAI.getDefaultProfile(), ...(profile.prompt && { prompt: profile.prompt }), ...(profile.keywords?.length && { keywords: profile.keywords }) } });
+  }, [onUpdate, profile.keywords, profile.prompt]);
+
+  const keywordsCount = profile.keywords?.length ?? 0;
+
+  return <>
+
+    {/* Model */}
+    <FormChipModelControl
+      catalog={ASRX_MODELS.openai}
+      labels={_OPENAI_MODEL_LABELS}
+      autoModel={ASRX_DEFAULTS.OPENAI_MODEL}
+      value={profile.asrModel}
+      onChange={asrModel => handleProfileUpdate({ asrModel })}
+    />
+
+    {/* Language(s) */}
+    <FormTextField
+      autoCompleteId='asrx-openai-language'
+      title='Language'
+      description={isMobile ? undefined : `'en' or 'en,it' - blank = auto`}
+      placeholder='(auto-detect)'
+      value={profile.language ?? ''}
+      onChange={text => handleProfileUpdate({ language: text || undefined })}
+      inputSx={{ maxWidth: 210 }}
+    />
+
+    {/* Prompt */}
+    <FormTextField
+      autoCompleteId='asrx-openai-prompt'
+      title='Prompt'
+      description={isMobile ? undefined : 'Context / style hint'}
+      placeholder='Optional - topic or setting'
+      value={profile.prompt ?? ''}
+      onChange={text => handleProfileUpdate({ prompt: text || undefined })}
+      inputSx={{ maxWidth: 210 }}
+    />
+
+    {/* Temperature (whisper-1 only) */}
+    {isWhisper && (
+      <FormSliderControl
+        title='Temperature'
+        description={`${(profile.temperature ?? 0).toFixed(1)} (whisper-1)`}
+        min={0}
+        max={1}
+        step={0.1}
+        value={profile.temperature ?? 0}
+        onChange={value => handleProfileUpdate({ temperature: value || undefined })}
+        valueLabelDisplay={profile.temperature ? 'on' : 'auto'}
+        sliderSx={{ maxWidth: 220, my: -0.5 }}
+      />
+    )}
+
+    {(advanced.on || !!profile.diarize) && (
+      <FormSwitchControl
+        title='Label Speakers'
+        description='Diarize model; skips Prompt'
+        checked={!!profile.diarize}
+        onChange={checked => handleProfileUpdate({ diarize: checked || undefined })}
+      />
+    )}
+
+    <PersonalDictionaryRow
+      show={advanced.on || keywordsCount > 0}
+      terms={profile.keywords ?? []}
+      description={keywordsApply ? undefined : 'Unused by this model'}
+      onSave={terms => handleProfileUpdate({ keywords: terms.length ? terms : undefined })}
+    />
+
+    <PanelFooter advanced={advanced} showReset={hasUserParameters} onReset={handleResetParameters} />
+
+  </>;
+}

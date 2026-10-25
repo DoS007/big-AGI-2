@@ -18,8 +18,6 @@ import { Release } from '~/common/app.release';
 import { clientUtmSource } from '~/common/util/pwaUtils';
 import { platformAwareKeystrokes } from '~/common/components/KeyStroke';
 
-import { beamBlogUrl } from './beam.data';
-
 
 // Cover Images
 // A capybara created from the intersection of two perfect spheres, creating a unique geometric form. Made of frosted glass with black sunglasses. Sitting on a platform where two squares overlap - their intersection glows softly. The overlapping area contains the word "OPEN" in clean sans-serif. White background with geometric shadows.
@@ -35,6 +33,9 @@ import coverV114 from '../../../public/images/covers/release-cover-v1.14.0.png';
 import coverV113 from '../../../public/images/covers/release-cover-v1.13.0.png';
 // An image of a capybara sculpted entirely from black cotton candy, set against a minimalist backdrop with splashes of bright, contrasting sparkles. The capybara is calling on a 3D origami old-school pink telephone and the camera is zooming on the telephone. Close up photography, bokeh, white background.
 import coverV112 from '../../../public/images/covers/release-cover-v1.12.0.png';
+
+
+const beamBlogUrl = 'https://big-agi.com/blog/beam-multi-model-ai-reasoning/';
 
 
 interface NewsItem {
@@ -71,6 +72,58 @@ export const DevNewsItem: NewsItem = {
 
 // news and feature surfaces
 export const NewsItems: NewsItem[] = [
+  {
+    versionCode: '2.1.2',
+    versionName: 'Render Tree',
+    versionDate: new Date('2026-10-25T12:00:00Z'),
+    items: [
+      { text: <><B>GPT-6</B>, <B>Opus 5.5</B>, <B>Fable 5.1</B>, <B>Sonnet/Haiku 5.5</B>, <B>Gemini 4 Argon</B>, <B>DeepSeek V4.1</B>, Grok 4.7, Kimi K3.1</> },
+      { text: <>New vendor: <B>Meta AI</B> (Muse); BaseTen via Custom OpenAI</> },
+      { text: <>Edit session: reorder blocks, edit documents, add and reorder attachments</> },
+      { text: <>Rendering: adaptive streaming markdown, HTML blocks, task lists, timestamps, user markdown</> },
+      { text: <>Security: server Gemini key fix, Next.js 15.5, Node 24.22 image</> },
+    ],
+  },
+  {
+    versionCode: '2.1.1',
+    versionName: 'Weights Dust',
+    versionDate: new Date('2026-08-27T00:00:00Z'),
+    items: [
+      { text: <>New vendors: <B>Cerebras</B>, <B>NVIDIA NIM</B>, <B>Sakana AI</B>, <B>Cohere</B>, <B>Modular</B>, <B>Nous</B></> },
+      { text: <><B>Fable/Opus/Sonnet 5</B>, <B>GPT-5.6</B>, <B>Gemini 3.7</B>, <B>Grok 4.6</B>, <B>Kimi K3</B>, <B>GLM-5.3</B>, <B>Qwen</B></> },
+      { text: <>Sandboxes and containers: Anthropic standalone, OpenAI and Gemini files</> },
+      { text: <><B>Transcription</B>: multi-vendor speech-to-text with Deepgram and OpenAI</> },
+      { text: <>Reasoning control: GPT-5.6 modes and max effort, OpenRouter on/off</> },
+      { text: <>Settings redesign; OpenRouter image generation; model auto picks</> },
+      { text: <>Cache-clear warning and wider browser support</> },
+      { text: <>Developers: AIX Protocol Lab, protocol eviscerators, per-vendor model-defs refresh</>, dev: true },
+    ],
+  },
+  {
+    versionCode: '2.0.5',
+    versionName: 'Roberto',
+    versionDate: new Date('2026-05-13T12:00:00Z'),
+    items: [
+      { text: <><B>Opus 4.7</B> with 1M context, <B>GPT-5.5</B>, <B>DeepSeek V4</B> Flash & Pro, <B>Gemini 3.1 Flash</B> family, <B>Grok 4.3</B>, <B>Kimi K2.6</B></> },
+      { text: <><B>Anthropic Containers</B>: persistent files, Skills, bash sessions, dynamic filtering across turns</> },
+      { text: <><B>MiniMax</B> and <B>Arcee AI</B> vendors; expanded Ollama, OpenRouter, Chutes catalogs</> },
+      { text: <>Beam: auto-titles, no accidental wipe, no ghost columns, edit fixes, regression fixes</> },
+      { text: <>Fixes: OpenAI Responses tools, encrypted reasoning</> },
+    ],
+  },
+  {
+    versionCode: '2.0.4',
+    versionName: 'Hyper Params',
+    versionDate: new Date('2026-03-25T12:00:00Z'),
+    items: [
+      { text: <><B>Opus 4.6</B> adaptive thinking 1M tokens, <B>Sonnet 4.6</B>, <B>GPT-5.4</B> family, <B>Gemini 3.1 Pro</B>, <B>Nano Banana 2</B>, <B>Grok 4.20</B>, <B>Z.ai</B> models</> },
+      { text: <>Improved parameter accuracy for reasoning effort, verbosity, and temperature</> },
+      { text: <><B issue={965}>AWS Bedrock</B>: native Anthropic, Amazon Nova, and OpenAI-compatible</> },
+      { text: <>Anthropic: <B>Fast mode</B>, <B>continuation</B>, search depth US-inference</> },
+      { text: <><B issue={945}>Attachments on any message</B>, lossless images, focus mode</> },
+      { text: <>Rich text copy, reasoning trace controls, and more fixes</> },
+    ],
+  },
   {
     versionCode: '2.0.3',
     versionName: 'Red Carpet',
@@ -174,10 +227,10 @@ export const NewsItems: NewsItem[] = [
       { text: <>Support for new Mistral-Large models</>, icon: MistralIcon },
       { text: <>Support for Google Gemini 1.5 models and various improvements</>, icon: GoogleIcon as any },
       { text: <>Deeper LocalAI integration including support for <B issue={411}>model galleries</B></>, icon: LocalAIIcon },
-      { text: <>Major <B href='https://twitter.com/enricoros/status/1756553038293303434'>performance optimizations</B>: runs faster, saves power, saves memory</> },
+      { text: <>Major <B href='https://x.com/enricoros/status/1756553038293303434'>performance optimizations</B>: runs faster, saves power, saves memory</> },
       { text: <>Improvements: auto-size charts, search and folder experience</> },
       { text: <>Perfect chat scaling, with rapid keyboard shortcuts</> },
-      { text: <>Also: diagrams auto-resize, open code with StackBlitz and JSFiddle, quick model visibility toggle, open links externally, docs on the web</> },
+      { text: <>Also: diagrams auto-resize, quick model visibility toggle, open links externally, docs on the web</> },
       { text: <>Fixes: standalone LaTeX blocks, close views by dragging, knowledge cutoff dates, crashes on Google translate (thanks dad)</> },
     ],
   },
@@ -319,7 +372,6 @@ export const NewsItems: NewsItem[] = [
       { text: <><B href='https://mermaid.js.org/'>Mermaid</B> Diagramming Rendering</> },
       { text: <><B>OpenAI 1106</B> Chat Models</> },
       { text: <>Cloudflare OpenAI API Gateway</> },
-      { text: <>Helicone for Anthropic</> },
     ],
   },
   {

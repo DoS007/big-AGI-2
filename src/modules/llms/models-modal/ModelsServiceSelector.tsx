@@ -1,12 +1,15 @@
 import * as React from 'react';
 
 import type { SxProps } from '@mui/joy/styles/types';
-import { Badge, Box, Button, IconButton, MenuItem, Option, Select, Tooltip, Typography } from '@mui/joy';
-import AddIcon from '@mui/icons-material/Add';
+import { Badge, Box, IconButton, ListDivider, MenuItem, Option, Select, Typography } from '@mui/joy';
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import RefreshIcon from '@mui/icons-material/Refresh';
 
 import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/llms.service.types';
+import { ButtonServiceAdd } from '~/common/components/ButtonServiceAdd';
 import { CloseablePopup } from '~/common/components/CloseablePopup';
 import { GoodTooltip } from '~/common/components/GoodTooltip';
 import { PhGift } from '~/common/components/icons/phosphor/PhGift';
@@ -18,13 +21,24 @@ import { useIsMobile } from '~/common/components/useMatchMedia';
 
 import type { IModelVendor } from '../vendors/IModelVendor';
 import { LLMVendorIconSprite } from '../components/LLMVendorIconSprite';
-import { findAllModelVendors, findModelVendor } from '../vendors/vendors.registry';
-import { vendorHasBackendCap } from '../vendors/vendor.helpers';
+import { findAllModelVendors, findModelVendor, type ModelVendorId } from '../vendors/vendors.registry';
+import { vendorHasServerConf } from '../vendors/vendor.helpers';
 // import { MODELS_WIZARD_OPTION_ID } from '~/modules/llms/models-modal/ModelsModal';
 
 
 // configuration
 const ENABLE_DELETE_LAST = true; // This will fall the menu back to the 'Quick Setup' mode. was: Release.IsNodeDevBuild;
+
+export const ALL_SERVICES_OPTION_ID = '*'; // pseudo-service in the selector: the Updates screen (never a real service id)
+
+// Cloud priority: editorial, most relevant first (vendors not listed come last). It only picks which vendors show while
+// collapsed: configured ones always, then by priority up to CLOUD_COLLAPSED_COUNT, next to a 'Show more' tile (8 tiles, 4 full
+// rows of the 2-column grid). The section always lists alphabetically, collapsed or expanded, so a vendor is easy to find.
+const CLOUD_PRIORITY: ReadonlyArray<ModelVendorId> = [
+  'deepseek', 'nvidianim', 'groq', 'xai', 'mistral', 'zai', 'bedrock',
+  'azure', 'cohere', 'metaai', 'sakanaai', 'alibaba', 'moonshot', 'modular', 'togetherai', 'perplexity', 'cerebras',
+];
+const CLOUD_COLLAPSED_COUNT = 7;
 
 
 const _styles = {
@@ -34,6 +48,10 @@ const _styles = {
     borderRadius: 'xl',
     boxShadow: '0 8px 48px rgba(0,0,0,0.2)',
     // boxShadow: 'xl',
+
+    // never taller than the viewport (mobile: anchored below the Add button) - scrolls inside
+    maxHeight: { xs: 'calc(100dvh - 8rem)', md: 'calc(100dvh - 4rem)' },
+    overflowY: 'auto',
 
     // display
     display: 'grid',
@@ -47,7 +65,6 @@ const _styles = {
     gridColumn: '1 / -1',
     mt: 2,
     '&:first-of-type': { marginTop: 0 },
-    mb: 0.5,
     px: 1.5,
     py: 0.5,
     borderRadius: 'md',
@@ -80,6 +97,23 @@ const _styles = {
     alignItems: 'center',
     justifyContent: 'center',
   },
+  headerToggle: {
+    minHeight: 'auto',
+    justifyContent: 'space-between',
+    alignItems: 'baseline', // 'Show more' sits on the title's baseline (the expanded chevron re-centers itself)
+  },
+  toggleTileSpacer: {
+    width: '2rem', // = vendorItemIcon: keeps the text in line with the vendor names
+    flexShrink: 0,
+  },
+  headerToggleHint: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 0.25,
+    fontSize: 'xs',
+    fontWeight: 'md',
+    textTransform: 'uppercase',
+  },
   addSubButton: {
     px: 1,
     py: 0.5,
@@ -94,7 +128,7 @@ const _styles = {
 
 
 /*function locationIcon(vendor?: IModelVendor | null) {
-  if (vendor && vendor.id === 'openai' && vendorHasBackendCap(...))
+  if (vendor && vendor.id === 'openai' && vendorHasServerConf(...))
     return <CloudDoneOutlinedIcon />;
   return !vendor ? null : vendor.location === 'local' ? <ComputerIcon /> : <CloudOutlinedIcon />;
 }*/
@@ -124,6 +158,29 @@ function _renderSectionHeader(title: string, isFirst: boolean = false) {
   );
 }
 
+// a section header that also toggles the section: 'Cloud ... SHOW MORE v' collapsed, 'Cloud ^' expanded
+function _renderSectionHeaderToggle(title: string, expanded: boolean, onToggle: () => void) {
+  return (
+    <MenuItem key={`header-${title}`} variant='plain' aria-expanded={expanded} onClick={onToggle} sx={{ ..._styles.header, ..._styles.headerToggle }}>
+      {title}
+      <Box sx={expanded ? { ..._styles.headerToggleHint, alignSelf: 'center' } : _styles.headerToggleHint}>
+        {!expanded && 'Show more'}
+        {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+      </Box>
+    </MenuItem>
+  );
+}
+
+// the last tile of a collapsed section: a plain text link, no icon or background (expanded, the header collapses it)
+function _renderShowMoreTile(onExpand: () => void) {
+  return (
+    <MenuItem key='show-more-tile' variant='plain' color='neutral' aria-expanded={false} onClick={onExpand} sx={{ ..._styles.vendorItem, fontSize: 'sm' }}>
+      <Box sx={_styles.toggleTileSpacer} />
+      Show more…
+    </MenuItem>
+  );
+}
+
 function _renderVendorItem({ vendor, canAdd, vendorInstancesCount }: VendorItemData, isMobile: boolean, onAddServiceForVendor: (vendor: IModelVendor, forceAdd?: boolean) => void) {
 
   const isMultiInstance = (vendor.instanceLimit ?? 1) > 1;
@@ -140,19 +197,19 @@ function _renderVendorItem({ vendor, canAdd, vendorInstancesCount }: VendorItemD
     >
       {/*<ListItemDecorator>*/}
       {/*  /!*<Box sx={{ display: 'flex', aspectRatio: 1, borderRadius: 'xl', backgroundColor: 'background.popup', boxShadow: 'none', width: '32px', m: -1, p: 0.75 }}>*!/*/}
-      {/*  {vendorIconWithMark(vendor, !vendorInstancesCount && vendorHasBackendCap(vendor))}*/}
+      {/*  {vendorIconWithMark(vendor, !vendorInstancesCount && vendorHasServerConf(vendor))}*/}
       {/*  /!*</Box>*!/*/}
       {/*</ListItemDecorator>*/}
 
       <Box sx={_styles.vendorItemIcon}>
         {/*<Box >*/}
-        {vendorInstancesCount ? <CheckRoundedIcon /> : vendorIconWithMark(vendor, !Release.IsNodeDevBuild && !vendorInstancesCount && vendorHasBackendCap(vendor))}
+        {vendorInstancesCount ? <CheckRoundedIcon /> : vendorIconWithMark(vendor, !Release.IsNodeDevBuild && !vendorInstancesCount && vendorHasServerConf(vendor))}
         {/*</Box>*/}
       </Box>
 
       {/*<Box sx={{ borderRadius: '1rem', backgroundColor: 'background.popup', boxShadow: 'none', height: '2rem', width: '2rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>*/}
       {/*<Box >*/}
-      {/*{vendorIconWithMark(vendor, !vendorInstancesCount && vendorHasBackendCap(vendor))}*/}
+      {/*{vendorIconWithMark(vendor, !vendorInstancesCount && vendorHasServerConf(vendor))}*/}
       {/*</Box>*/}
       {/*</Box>*/}
 
@@ -172,7 +229,7 @@ function _renderVendorItem({ vendor, canAdd, vendorInstancesCount }: VendorItemD
 
       {/* Free tier badge */}
       {vendor.hasFreeModels && canAdd && (
-        <PhGift sx={{ color: 'success.solidBg', fontSize: 'lg' }} />
+        <PhGift sx={{ color: 'primary.softColor', fontSize: 'lg' }} />
       )}
       {/*{vendor.hasFreeModels && (*/}
       {/*  <Chip*/}
@@ -230,10 +287,12 @@ export function ModelsServiceSelector(props: {
   setSelectedServiceId: (serviceId: DModelsServiceId | null) => void,
   onDeleteService: (serviceId: DModelsServiceId, skipConfirmation: boolean) => void,
   onSwitchToWizard: () => void,
+  allServicesControl?: React.ReactNode, // shown in place of the delete button while 'All services' is selected
 }) {
 
   // state
   const [vendorsMenuAnchor, setVendorsMenuAnchor] = React.useState<HTMLElement | null>(null);
+  const [showMoreVendors, setShowMoreVendors] = React.useState(false);
 
   // external state
   const isMobile = useIsMobile();
@@ -273,7 +332,8 @@ export function ModelsServiceSelector(props: {
     setSelectedServiceId(modelsService.id);
   }, [setSelectedServiceId, modelsServices]);
 
-  const enableDeleteButton = !!props.selectedServiceId && (ENABLE_DELETE_LAST || modelsServices.length > 1);
+  const isAllServices = props.selectedServiceId === ALL_SERVICES_OPTION_ID;
+  const enableDeleteButton = !!props.selectedServiceId && !isAllServices && (ENABLE_DELETE_LAST || modelsServices.length > 1);
 
 
   // memo popup 'vendor' items
@@ -291,6 +351,18 @@ export function ModelsServiceSelector(props: {
         };
       });
 
+    // cloud vendors, alphabetical; collapsed: the configured ones, then by priority, an odd count so that with the toggle tile
+    // the rows are full; collapsible only when it hides at least 2 (the toggle tile takes a slot)
+    const _byName = (a: VendorItemData, b: VendorItemData) => a.vendor.name.localeCompare(b.vendor.name);
+    const _cloudRank = (id: ModelVendorId) => { const i = CLOUD_PRIORITY.indexOf(id); return i === -1 ? CLOUD_PRIORITY.length : i; };
+    const cloudItems = vendorItems.filter(v => v.vendor.displayGroup === 'cloud').sort(_byName);
+    const collapsedIds = new Set(cloudItems.filter(v => v.vendorInstancesCount > 0).map(v => v.vendor.id));
+    const collapsedTarget = Math.max(CLOUD_COLLAPSED_COUNT, collapsedIds.size) | 1;
+    for (const v of [...cloudItems].sort((a, b) => _cloudRank(a.vendor.id) - _cloudRank(b.vendor.id) || _byName(a, b)))
+      if (collapsedIds.size < collapsedTarget) collapsedIds.add(v.vendor.id);
+    const cloudCollapsible = cloudItems.length - collapsedIds.size >= 2;
+    const toggleCloud = () => setShowMoreVendors(show => !show);
+
     // rendered components split by display groups
     const components: React.ReactNode[] = [
 
@@ -301,11 +373,14 @@ export function ModelsServiceSelector(props: {
         // .sort((a, b) => a.vendor.displayRank - b.vendor.displayRank)
         .map(item => _renderVendorItem(item, isMobile, handleAddServiceForVendor)),
 
-      _renderSectionHeader('Cloud'),
-      ...vendorItems
-        .filter(v => v.vendor.displayGroup === 'cloud')
-        .sort((a, b) => a.vendor.name.localeCompare(b.vendor.name))
-        .map(item => _renderVendorItem(item, isMobile, handleAddServiceForVendor)),
+      ...(!cloudCollapsible ? [
+        _renderSectionHeader('Cloud'),
+        ...cloudItems.map(item => _renderVendorItem(item, isMobile, handleAddServiceForVendor)),
+      ] : [
+        _renderSectionHeaderToggle('Cloud', showMoreVendors, toggleCloud),
+        ...(showMoreVendors ? cloudItems : cloudItems.filter(v => collapsedIds.has(v.vendor.id))).map(item => _renderVendorItem(item, isMobile, handleAddServiceForVendor)),
+        ...(!showMoreVendors ? [_renderShowMoreTile(toggleCloud)] : []),
+      ]),
 
       _renderSectionHeader('Local'),
       ...vendorItems
@@ -319,7 +394,7 @@ export function ModelsServiceSelector(props: {
         .map(item => _renderVendorItem(item, isMobile, handleAddServiceForVendor)),
     ];
     return components;
-  }, [handleAddServiceForVendor, modelsServices, isMobile]);
+  }, [handleAddServiceForVendor, modelsServices, isMobile, showMoreVendors]);
 
 
   // memo deployed services items
@@ -358,12 +433,16 @@ export function ModelsServiceSelector(props: {
         value={props.selectedServiceId}
         disabled={noServices}
         onChange={(_event, value) => value && props.setSelectedServiceId(value)}
-        startDecorator={selectedServiceItem?.icon}
+        startDecorator={isAllServices ? <RefreshIcon /> : selectedServiceItem?.icon}
         slotProps={{
           root: { sx: { minWidth: 180 } },
           indicator: { sx: { opacity: 0.5 } },
         }}
       >
+        {/* the Updates screen, as a pseudo-service */}
+        {!noServices && <Option value={ALL_SERVICES_OPTION_ID}>All services</Option>}
+        {!noServices && <ListDivider role='none' />}
+
         {serviceItems.map(item => item.component)}
 
         {/* Add Service button */}
@@ -378,17 +457,15 @@ export function ModelsServiceSelector(props: {
         {/*</ListItem>*/}
       </Select>
 
-      {(isMobile && !noServices) ? (
-        <IconButton variant={noServices ? 'solid' : 'outlined'} color='primary' onClick={handleShowVendors} disabled={!!vendorsMenuAnchor} sx={{ borderColor: 'neutral.outlinedBorder' }}>
-          <AddIcon />
-        </IconButton>
-      ) : (
-        <Tooltip open={noServices && !vendorsMenuAnchor} variant='outlined' color='primary' size='md' placement={isMobile ? 'bottom-end' : 'top-start'} arrow title='Add your first AI service'>
-          <Button variant={noServices ? 'solid' : 'outlined'} onClick={handleShowVendors} disabled={!!vendorsMenuAnchor} startDecorator={<AddIcon />} sx={{ borderColor: 'neutral.outlinedBorder' }}>
-            Add
-          </Button>
-        </Tooltip>
-      )}
+      <ButtonServiceAdd
+        isMobile={isMobile}
+        isEmpty={noServices}
+        emptyHint='Add your first AI service'
+        menuOpen={!!vendorsMenuAnchor}
+        onClick={handleShowVendors}
+      />
+
+      {isAllServices && props.allServicesControl}
 
       {enableDeleteButton && (
         <TooltipOutlined title={`Remove ${selectedServiceItem?.service.label || 'Service'}`}>
@@ -411,6 +488,10 @@ export function ModelsServiceSelector(props: {
         sx={_styles.popup}
       >
         {vendorComponents}
+        {/* the one question a user has before picking a provider; spans the popup's 2-column grid */}
+        {/*<Box sx={{ gridColumn: '1 / -1', px: 1.5, py: 1 }}>*/}
+        {/*  <ExternalDocsLink level='body-sm' docPage='connect-models'>Which provider should I use?</ExternalDocsLink>*/}
+        {/*</Box>*/}
       </CloseablePopup>
 
     </Box>

@@ -10,12 +10,37 @@
  * Bedrock model IDs directly.
  */
 
+// [Bedrock, 2026-08-17] Live-verified in us-east-1 with a long-term Bearer key (all three listings 200):
+// 65 on-demand foundation models, 69 SYSTEM_DEFINED inference profiles, 55 Mantle ids.
+// - Anthropic coverage is complete: every served 'anthropic.*' id resolves through llmBedrockFindAnthropicModel
+//   (fable-5, opus-5/4-8/4-7/4-6, sonnet-5/4-6, opus-4-5, sonnet-4-5, haiku-4-5, opus-4-1, sonnet-4, haiku-3).
+//   The one exception is claude-3-sonnet-20240229 (0-day path, hidden). Mythos 5 is not listed (AWS card: Mantle Messages only, not wired).
+//   [2026-09-01] +fable-5-1 (foundation model + us./global. profiles, ACTIVE; invoke 403 on this account). Mythos 5.1 not listed (AWS card: gated preview).
+//   [2026-10-07] +haiku-5-5 beside opus-5-5 / sonnet-5-5 (foundation model + us./global. profiles, ACTIVE; haiku-5-5 invoke
+//   'not available for this account').
+// - Mantle also lists 6 undated 'anthropic.*' aliases, but they answer NEITHER OpenAI route ("does not support
+//   the '/v1/chat/completions' API", same for '/v1/responses') - Anthropic on Bedrock is invoke-only.
+// - Mantle accepts OpenAI tools on every id probed except writer.palmyra-vision-7b (see SKIP_MANTLE_TOOLS_IDS):
+//   zai.glm-4.7, openai.gpt-oss-120b, qwen.qwen3-coder-next and mistral.mistral-large-3-675b-instruct all
+//   returned finish_reason 'tool_calls'.
+// - Listed but not callable: google.gemma-4-{31b,26b-a4b,e2b} and xai.grok-4.3 400 on both Mantle routes
+//   ("isn't supported on this route"). openai.gpt-5.4/5.5 (+ dated ids), gpt-5.6-{sol,terra,luna} and gpt-6-{astra,sol,luna}
+//   are account-gated (401 access_denied, "contact AWS Sales"; re-checked 2026-09-22) - curated
+//   anyway via #1167 (author live-verified on an access-enabled account): the 401 is self-explanatory for
+//   accounts without the enablement.
+// - Docs-only findings awaiting a live re-check (no AWS creds here): AWS documents an Anthropic-native 'Messages' API on
+//   bedrock-mantle for the Claude 5 / Opus 4.7-4.8 / Haiku 4.5 family (not wired here); qwen.qwen3-235b-a22b-2507 now has a
+//   bedrock-runtime '-v1:0' id, so it (and maybe other KNOWN_MANTLE_ONLY qwen3/deepseek/kimi ids) may be FM-promoted like
+//   qwen3-coder-next was; the gpt-oss cards say 16K max output vs the live-probed out:128000 kept below; GLM 4.6 is off
+//   the Z.AI model-cards page (Legacy vs removed unclear).
+// - Model list: https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html (models-supported.html is now a stub)
+
 import * as z from 'zod/v4';
 
 import type { ModelDescriptionSchema } from '../llm.server.types';
 
-import { anthropicInjectVariants, llmBedrockFindAnthropicModel, llmBedrockStripAnthropicMDS } from '../anthropic/anthropic.models';
-import { LLM_IF_ANT_PromptCaching, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Reasoning, LLM_IF_OAI_Vision, LLM_IF_Outputs_Audio, LLM_IF_Outputs_Image } from '~/common/stores/llms/llms.types';
+import { llmsAntInjectVariants, llmBedrockFindAnthropicModel, llmBedrockStripAnthropicMDS } from '../anthropic/anthropic.models';
+import { LLM_IF_ANT_PromptCaching, LLM_IF_HOTFIX_NoTemperature, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Reasoning, LLM_IF_OAI_Vision, LLM_IF_Outputs_Audio, LLM_IF_Outputs_Image } from '~/common/stores/llms/llms.types';
 import { DModelParameterSpecAny } from '~/common/stores/llms/llms.parameters';
 
 
@@ -23,26 +48,75 @@ import { DModelParameterSpecAny } from '~/common/stores/llms/llms.parameters';
 
 const SKIP_FM_ID_CONTAINS = ['rerank'];
 const SKIP_IP_ID_STARTSWITH = ['stability.'];
+const SKIP_MANTLE_TOOLS_IDS = ['writer.palmyra-vision-7b']; // 400s: '"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set' (probed 2026-08-17)
 
-// Known Mantle-only models (no matching foundation model) - override heuristics with accurate metadata
-const KNOWN_MANTLE_ONLY: Record<string, { label: string; ctx: number; out: number; vision?: true; reasoning?: true }> = {
-  'deepseek.v3.1': { label: 'DeepSeek V3.1', ctx: 131072, out: 16384 },
-  'moonshotai.kimi-k2-thinking': { label: 'Kimi K2 Thinking', ctx: 131072, out: 16384 },
-  'openai.gpt-oss-20b': { label: 'GPT-OSS 20B', ctx: 131072, out: 16384 },
-  'openai.gpt-oss-120b': { label: 'GPT-OSS 120B', ctx: 131072, out: 16384 },
+// Known Mantle-only models (no matching foundation model) - override heuristics with accurate metadata.
+// All 11 answered /v1/chat/completions on 2026-08-17; 'qwen.qwen3-coder-next' dropped - AWS promoted it to a
+// foundation model, so it is now described from FM metadata. Corrected sizes are the creators' published specs,
+// except the gpt-oss output cap, which is Bedrock's own (converse.maxTokensMaximum on openai.gpt-oss-*-1:0).
+// `api: 'responses'`: model only implements the OpenAI Responses API (on the '/openai/v1/responses' path) and rejects
+// Chat Completions with a 400 - see https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html
+// GPT-5.x ctx is 1M per the AWS model cards (272K is only the short/long pricing-tier boundary); out stays 128000 (cards say
+// "N/A"); GPT-6 1,050,000 / 128,000 per the Astra card; GPT-6.1 Sol 1M per its card (out: card 131,072, OpenAI 128,000). deepseek.v3.1 out 8192 and kimi-k2-thinking out 16384 per their cards' "Max output tokens".
+// Entries with `api: 'responses'` win over the foundation-model listing: AWS also lists GPT-5.6 and GPT-6 as foundation models
+// (2026-09), which described them as 131K Chat Completions models without reasoning. Their us./global. profiles keep the fused
+// path: per the AWS card Mantle serves no geo/global ids, so those likely need bedrock-runtime (not wired, unverified here).
+const KNOWN_MANTLE_ONLY: Record<string, { label: string; ctx: number; out: number; vision?: true; reasoning?: true; api?: 'responses' }> = {
+  'deepseek.v3.1': { label: 'DeepSeek V3.1', ctx: 131072, out: 8192 },
+  'moonshotai.kimi-k2-thinking': { label: 'Kimi K2 Thinking', ctx: 262144, out: 16384, reasoning: true },
+  'openai.gpt-5.4': { label: 'GPT-5.4', ctx: 1000000, out: 128000, vision: true, reasoning: true, api: 'responses' },
+  'openai.gpt-5.5': { label: 'GPT-5.5', ctx: 1000000, out: 128000, vision: true, reasoning: true, api: 'responses' },
+  'openai.gpt-5.6-luna': { label: 'GPT-5.6 Luna', ctx: 1000000, out: 128000, vision: true, reasoning: true, api: 'responses' },
+  'openai.gpt-5.6-sol': { label: 'GPT-5.6 Sol', ctx: 1000000, out: 128000, vision: true, reasoning: true, api: 'responses' },
+  'openai.gpt-5.6-terra': { label: 'GPT-5.6 Terra', ctx: 1000000, out: 128000, vision: true, reasoning: true, api: 'responses' },
+  'openai.gpt-6-astra': { label: 'GPT-6 Astra', ctx: 1050000, out: 128000, vision: true, reasoning: true, api: 'responses' },
+  'openai.gpt-6-luna': { label: 'GPT-6 Luna', ctx: 1050000, out: 128000, vision: true, reasoning: true, api: 'responses' },
+  'openai.gpt-6-sol': { label: 'GPT-6 Sol', ctx: 1050000, out: 128000, vision: true, reasoning: true, api: 'responses' },
+  'openai.gpt-6.1-sol': { label: 'GPT-6.1 Sol', ctx: 1000000, out: 128000, vision: true, reasoning: true, api: 'responses' },
+  'openai.gpt-oss-20b': { label: 'GPT-OSS 20B', ctx: 131072, out: 128000 },
+  'openai.gpt-oss-120b': { label: 'GPT-OSS 120B', ctx: 131072, out: 128000 },
   'qwen.qwen3-32b': { label: 'Qwen3 32B', ctx: 131072, out: 16384 },
   'qwen.qwen3-235b-a22b-2507': { label: 'Qwen3 235B A22B', ctx: 131072, out: 16384 },
   'qwen.qwen3-coder-30b-a3b-instruct': { label: 'Qwen3 Coder 30B', ctx: 131072, out: 16384 },
   'qwen.qwen3-coder-480b-a35b-instruct': { label: 'Qwen3 Coder 480B', ctx: 131072, out: 16384 },
-  'qwen.qwen3-coder-next': { label: 'Qwen3 Coder Next', ctx: 131072, out: 16384 },
   'qwen.qwen3-next-80b-a3b-instruct': { label: 'Qwen3 Next 80B', ctx: 131072, out: 16384 },
   'qwen.qwen3-vl-235b-a22b-instruct': { label: 'Qwen3 VL 235B', ctx: 131072, out: 16384, vision: true },
-  'zai.glm-4.6': { label: 'GLM 4.6', ctx: 131072, out: 16384 },
+  'zai.glm-4.6': { label: 'GLM 4.6', ctx: 204800, out: 131072 },
 } as const;
 
 
 // --- Bedrock API Wire Types ---
 
+/**
+ * pubDate reliability on Bedrock (empirically verified 2026-07-04, us-east-1, live API pull).
+ *
+ * AWS exposes several date fields across the three listing APIs, but NONE is a trustworthy `pubDate`
+ * (= earliest public availability of the model by any channel) for third-party models. They all track
+ * when AWS ONBOARDED the model to Bedrock - the host-add date - which for hosted models is systematically
+ * later than the creator's real release, exactly the case pubDate resolution rule #5 says not to use.
+ * Concretely, from a live pull:
+ *
+ *   - ListFoundationModels -> modelLifecycle.startOfLifeTime (populated on all 66 FMs, NOT captured below):
+ *       bulk-clustered onboarding timestamps. 18 unrelated models shared 2025-12-02T00:00:00Z (a re:Invent
+ *       drop): Gemma 3 (real release Mar 2025), Kimi-K2-Thinking (Nov 2025), Qwen3-VL, gpt-oss-safeguard...
+ *       6 more shared 2026-02-06T18:00:00Z (DeepSeek V3.2, GLM-4.7, Kimi-K2.5...); Mixtral-8x7B -> 2024-03-01
+ *       (real Dec 2023). ACCURATE ONLY for AWS-first-party (amazon.nova* -> 2024-12-03, amazon.titan*) and
+ *       day-1 co-launch partners (openai.gpt-oss -> 2025-08-06), where onboarding == release because AWS is
+ *       the launch channel. (Sibling fields publicExtendedAccessTime/legacyTime/endOfLifeTime are lifecycle
+ *       exit markers, not release dates.)
+ *   - ListInferenceProfiles -> createdAt/updatedAt (NOT captured below): profile-provisioning date,
+ *       region-dependent for the SAME model (claude-sonnet-4 us=2025-05-20 vs global=2025-08-25); updatedAt
+ *       is recent housekeeping. Moot for Anthropic anyway - those inherit pubDate from our editorial table.
+ *   - Mantle /v1/models -> created (parsed below, intentionally NOT consumed): worst of the three. ~22 models
+ *       clustered at 2025-11-30; contradicts the model's own id suffix (openai.gpt-5.4-2026-03-05 -> created
+ *       2026-04-30) and disagrees with startOfLifeTime for the same model (zai.glm-5: 2026-03-18 vs 2026-02-22).
+ *   - description.releaseDate exists but only on 2/66 models (nova-pro, cohere-embed-v4) - too sparse to use.
+ *
+ * DECISION: do not fabricate pubDate from any AWS date for non-Anthropic models (would mislabel old models as
+ * "new"); Anthropic-on-Bedrock keeps its editorial pubDate (see llmBedrockFindAnthropicModel). The one safe
+ * source, if a "new" badge for AWS-first-party models is ever wanted, is startOfLifeTime gated to
+ * providerName === 'Amazon' - accurate there because AWS is the model's creator and launch channel.
+ */
 export namespace BedrockWire_API_Models_List {
 
   // ListFoundationModels response
@@ -50,16 +124,26 @@ export namespace BedrockWire_API_Models_List {
   const _FoundationModel_schema = z.object({
     modelId: z.string(),
     modelName: z.string(),
-    providerName: z.enum(['Amazon', 'Anthropic', 'Cohere', 'DeepSeek', 'Google', 'Luma AI', 'Meta', 'MiniMax', 'Mistral AI', 'Moonshot AI', 'NVIDIA', 'OpenAI', 'Qwen', 'Stability AI', 'Z.AI']).or(z.string()),
+    providerName: z.enum(['AI21 Labs', 'Amazon', 'Anthropic', 'Cohere', 'DeepSeek', 'Google', 'Luma AI', 'Meta', 'MiniMax', 'Mistral AI', 'Moonshot AI', 'NVIDIA', 'OpenAI', 'Qwen', 'Stability AI', 'TwelveLabs', 'Writer', 'Z.AI']).or(z.string()),
     inputModalities: z.array(z.enum(['TEXT', 'IMAGE', 'EMBEDDING', 'VIDEO', 'SPEECH']).or(z.string())),
     outputModalities: z.array(z.enum(['TEXT', 'IMAGE', 'EMBEDDING', 'VIDEO', 'SPEECH']).or(z.string())),
     responseStreamingSupported: z.boolean().nullable().optional(),
     inferenceTypesSupported: z.array(z.enum(['ON_DEMAND', 'INFERENCE_PROFILE', 'PROVISIONED']).or(z.string())).optional(),
     modelLifecycle: z.object({
+      // NOTE: AWS also sends startOfLifeTime (+ publicExtendedAccessTime/legacyTime/endOfLifeTime), but we
+      // only consume `status` - startOfLifeTime is a host-onboarding date, not a release date (see pubDate note above).
       status: z.enum(['ACTIVE', 'LEGACY']).or(z.string()),
     }).optional(),
     // Converse API metadata (present on newer models, null on legacy)
     converse: z.object({
+      // two meanings, one field - the serving stack decides which (probed 2026-08-17, us-east-1):
+      //  - Amazon first-party: ceiling of the `maxTokens` inference param, i.e. max OUTPUT tokens. nova-pro
+      //    reports 10000; maxTokens=10001 is rejected ("exceeds the model limit of 10000") while a 62,223-token
+      //    prompt is accepted (context is 300K).
+      //  - third-party (vLLM-served) fleet: the CONTEXT window, input+output counted against it. Requesting
+      //    maxTokens == this value 400s with "This model's maximum context length is <same number> tokens"
+      //    (voxtral-mini 32768, gemma-3 131072, glm-4.7 202752, palmyra-vision 4096, qwen3-coder-next 262144).
+      //    Not always exact either: minimax-m2 publishes 409600 but the backend caps output at 196608.
       maxTokensMaximum: z.number().nullable().optional(),
       reasoningSupported: z.object({
         embedded: z.boolean(),
@@ -97,7 +181,7 @@ export namespace BedrockWire_API_Models_List {
     data: z.array(z.object({
       id: z.string(),
       object: z.string().optional(),
-      created: z.number().optional(),
+      created: z.number().optional(), // parsed but intentionally unused - Bedrock-onboarding date, not a release date (see pubDate note above)
       owned_by: z.string().optional(),
     })),
   });
@@ -107,7 +191,7 @@ export namespace BedrockWire_API_Models_List {
 
 // --- Model ID Helpers ---
 
-const _REGION_PREFIX_RE = /^(us|eu|global|jp|apac)\./;
+const _REGION_PREFIX_RE = /^(us|eu|global|jp|apac|au|in|ca|us-gov)\./;
 
 /** Strip region prefix (us., global., etc.) from a Bedrock model ID, returning a bedrockBaseId */
 function _stripRegionPrefix(bedrockModelId: string): string {
@@ -160,15 +244,22 @@ export function bedrockModelsToDescriptions(
   }>();
 
   // Foundation Models
+  const excludedFMIds = new Set<string>(); // non-chat FMs, so we can drop their inference profiles too
   for (const fm of foundationModels.modelSummaries) {
     const baseId = fm.modelId; // e.g. 'google.gemma-3-4b-it', 'moonshotai.kimi-k2.5'
     const hasMantle = mantleModelIds.has(baseId);
 
     // exclusion by pattern
-    if (SKIP_FM_ID_CONTAINS.some(s => baseId.includes(s))) continue;
+    if (SKIP_FM_ID_CONTAINS.some(s => baseId.includes(s))) {
+      excludedFMIds.add(baseId);
+      continue;
+    }
 
     // excludes non text->text, such as embedding, image gen, video gen, speech-only
-    if (!fm.inputModalities?.includes('TEXT') || !fm.outputModalities?.includes('TEXT')) continue;
+    if (!fm.inputModalities?.includes('TEXT') || !fm.outputModalities?.includes('TEXT')) {
+      excludedFMIds.add(baseId);
+      continue;
+    }
 
     modelMap.set(baseId, {
       id: baseId,
@@ -185,8 +276,8 @@ export function bedrockModelsToDescriptions(
       outputImage: fm.outputModalities?.includes('IMAGE') ?? false,
     });
 
-    // mark as used in mantle
-    if (hasMantle)
+    // mark as used in mantle - except curated Responses models, described by the Mantle-only pass below
+    if (hasMantle && !_isKnownMantleResponses(baseId))
       remainingMantleModelIds.delete(baseId);
   }
 
@@ -198,6 +289,10 @@ export function bedrockModelsToDescriptions(
     // denylist 'start..'
     const baseId = _stripRegionPrefix(ip.inferenceProfileId);
     if (SKIP_IP_ID_STARTSWITH.some(s => baseId.startsWith(s))) continue;
+
+    // profiles carry no modalities of their own: inherit the FM's exclusion (e.g. cohere.embed-v4:0, twelvelabs.marengo-embed-*)
+    if (excludedFMIds.has(baseId)) continue;
+
     const hasMantle = mantleModelIds.has(baseId);
 
     // check if there's a matching foundation model (not anthropic, we map them differently)
@@ -218,8 +313,8 @@ export function bedrockModelsToDescriptions(
       outputImage: foundationMeta?.outputImage ?? false,
     });
 
-    // mark as used in mantle
-    if (hasMantle)
+    // mark as used in mantle (same curated exception as above)
+    if (hasMantle && !_isKnownMantleResponses(baseId))
       remainingMantleModelIds.delete(baseId);
   }
 
@@ -234,6 +329,7 @@ export function bedrockModelsToDescriptions(
   const bedrockAPIAnthropic = { paramId: 'llmVndBedrockAPI', initialValue: 'invoke-anthropic' } as const satisfies DModelParameterSpecAny;
   const bedrockAPIConverse = { paramId: 'llmVndBedrockAPI', initialValue: 'converse' } as const satisfies DModelParameterSpecAny;
   const bedrockAPIMantle = { paramId: 'llmVndBedrockAPI', initialValue: 'mantle' } as const satisfies DModelParameterSpecAny;
+  const bedrockAPIMantleResponses = { paramId: 'llmVndBedrockAPI', initialValue: 'mantle-responses' } as const satisfies DModelParameterSpecAny;
   for (const [modelId, modelMeta] of modelMap) {
     if (_seemsAnthropicBedrockModel(modelId)) {
 
@@ -242,7 +338,7 @@ export function bedrockModelsToDescriptions(
 
       // Known Anthropic: enrich with hardcoded definitions + inject thinking variants
       if (antModel) {
-        for (const variant of anthropicInjectVariants([], antModel))
+        for (const variant of llmsAntInjectVariants([], antModel))
           descriptions.push(llmBedrockStripAnthropicMDS({ // Filter to the subset of Anthropic params supported
             ...variant,
             id: modelId,
@@ -268,22 +364,34 @@ export function bedrockModelsToDescriptions(
 
     } else {
 
+      // curated Responses models served by Mantle: described by the Mantle-only pass below (profiles stay here)
+      if (!modelMeta.isProfile && modelMeta.hasMantle && _isKnownMantleResponses(modelId)) continue;
+
       // Non-Anthropic models - may call them via mantle (if hasMantle) or converse (if not legacy)
       const isMantle = modelMeta.hasMantle;
       const isConverseCapable = !modelMeta.isLegacy;
       const interfaces = [LLM_IF_OAI_Chat];
       if (modelMeta.reasoning) interfaces.push(LLM_IF_OAI_Reasoning);
       if (modelMeta.inputImage) interfaces.push(LLM_IF_OAI_Vision);
-      if (isConverseCapable && !isMantle) interfaces.push(LLM_IF_OAI_Fn); // Converse models support toolConfig
+      if (isMantle ? !SKIP_MANTLE_TOOLS_IDS.includes(_stripRegionPrefix(modelId)) : isConverseCapable) interfaces.push(LLM_IF_OAI_Fn); // Converse: toolConfig; Mantle: OpenAI tools (both live-probed 2026-08-17)
       if (modelMeta.outputAudio) interfaces.push(LLM_IF_Outputs_Audio);
       if (modelMeta.outputImage) interfaces.push(LLM_IF_Outputs_Image);
-      let label = modelMeta.isProfile ? _labelFromProfile(modelMeta.label, modelId) : modelMeta.label;
+      const label = modelMeta.isProfile ? _labelFromProfile(modelMeta.label, modelId) : modelMeta.label;
+      const labelRepeatsProvider = label.toLowerCase().startsWith(modelMeta.provider.toLowerCase()); // case-insensitive: 'Openai' vs 'OpenAI GPT-5.6 Sol'
       const apiLabel = isMantle ? 'OpenAI-Compatible' : isConverseCapable ? 'Converse' : 'Unsupported';
+      // no `pubDate`: AWS only offers host-onboarding dates for these third-party models (see pubDate note atop the wire types)
       descriptions.push({
         id: modelId,
-        label: `${isMantle || isConverseCapable ? symbolMantle : '🚧 '}${label.startsWith(modelMeta.provider) ? '' : (modelMeta.provider + ' ')}${label}`,
+        label: `${isMantle || isConverseCapable ? symbolMantle : '🚧 '}${labelRepeatsProvider ? '' : (modelMeta.provider + ' ')}${label}`,
         description: `${modelMeta.provider} model via ${apiLabel} API${modelMeta.isProfile ? ' (Bedrock Inference Profile)' : ' (Bedrock Foundation Model)'}`,
-        contextWindow: modelMeta.converseMaxTokens ?? null,
+        // [2026-08-17 probes] converse.maxTokensMaximum means different things per serving stack: on the
+        // vLLM-served third-party fleet the backend calls it "this model's maximum context length" and counts
+        // input+output against it (voxtral-mini 32768, gemma-3 131072, glm-4.7 202752, palmyra-vision 4096 all
+        // 400 when maxTokens == that value); on Amazon first-party it IS the output cap (nova-pro reports 10000
+        // yet accepts a 62,223-token prompt; AWS docs: 300K context / 10K max output).
+        ...(modelMeta.provider === 'Amazon'
+          ? { contextWindow: null, ...(modelMeta.converseMaxTokens ? { maxCompletionTokens: modelMeta.converseMaxTokens } : {}) }
+          : { contextWindow: modelMeta.converseMaxTokens ?? null }),
         interfaces,
         parameterSpecs: [isMantle ? bedrockAPIMantle : bedrockAPIConverse],
         hidden: !(isMantle || isConverseCapable), // show if mantle or converse-capable
@@ -294,20 +402,25 @@ export function bedrockModelsToDescriptions(
 
   // -> Add remaining Mantle-only models (not matched to any FM/IP)
   for (const mantleId of remainingMantleModelIds) {
-    const known = KNOWN_MANTLE_ONLY[mantleId];
+    // Anthropic aliases are listed by Mantle but rejected by both OpenAI routes (invoke-only) - and already described above
+    if (_seemsAnthropicBedrockModel(mantleId)) continue;
+    const known = _findKnownMantleModel(mantleId);
+    const isResponsesOnly = known?.api === 'responses';
     const provider = _extractMantleProvider(mantleId);
     const interfaces = [LLM_IF_OAI_Chat];
+    if (!SKIP_MANTLE_TOOLS_IDS.includes(_stripRegionPrefix(mantleId))) interfaces.push(LLM_IF_OAI_Fn); // same no-tools rule as the fused loop above (probed 2026-08-17)
     if (known?.vision) interfaces.push(LLM_IF_OAI_Vision);
     if (known?.reasoning) interfaces.push(LLM_IF_OAI_Reasoning);
+    if (isResponsesOnly) interfaces.push(LLM_IF_HOTFIX_NoTemperature); // GPT-5.x frontier reasoning models reject temperature ('Unsupported parameter') - same as on the OpenAI vendor
     descriptions.push({
       id: mantleId,
       label: `${symbolMantle}${known?.label ?? labelForMantle(mantleId, provider)}${known ? '' : ' [?]'}`,
-      description: `${provider} model via OpenAI-Compatible API on AWS Bedrock Mantle`,
+      description: `${provider} model via OpenAI-Compatible ${isResponsesOnly ? 'Responses ' : ''}API on AWS Bedrock Mantle`,
       contextWindow: known?.ctx ?? 131072,
       maxCompletionTokens: known?.out ?? 16384,
       interfaces,
-      parameterSpecs: [bedrockAPIMantle],
-      hidden: true, // we know it can run, but we don't have models details
+      parameterSpecs: [isResponsesOnly ? bedrockAPIMantleResponses : bedrockAPIMantle],
+      hidden: !isResponsesOnly, // show models with a curated API assignment; hide the rest (listed by Mantle, but unverified: some ids 400 with "isn't supported on this route", others are account-gated)
     });
   }
 
@@ -316,6 +429,15 @@ export function bedrockModelsToDescriptions(
 
 
 // --- Helpers ---
+
+/** Find a KNOWN_MANTLE_ONLY entry: exact ID first, then with a trailing '-YYYY-MM-DD' snapshot suffix stripped (e.g. 'openai.gpt-5.4-2026-03-05' -> 'openai.gpt-5.4') */
+function _findKnownMantleModel(mantleId: string): typeof KNOWN_MANTLE_ONLY[string] | undefined {
+  return KNOWN_MANTLE_ONLY[mantleId] ?? KNOWN_MANTLE_ONLY[mantleId.replace(/-\d{4}-\d{2}-\d{2}$/, '')];
+}
+
+function _isKnownMantleResponses(modelId: string): boolean {
+  return _findKnownMantleModel(modelId)?.api === 'responses';
+}
 
 // Extract provider name from Mantle model ID (e.g., 'mistral.model-name' -> 'Mistral')
 function _extractMantleProvider(modelId: string): string {
@@ -368,10 +490,15 @@ function _bedrockModelSort(a: ModelDescriptionSchema, b: ModelDescriptionSchema)
       || a.label.localeCompare(b.label);
 
   // --- Anthropic: family > class > variant > region ---
-  const familyPrecedence = ['-4-7-', '-4-6', '-4-5-', '-4-1-', '-4-', '-3-7-', '-3-5-', '-3-'];
-  const classPrecedence = ['-opus-', '-sonnet-', '-haiku-'];
+  const familyPrecedence: string[][] = [
+    ['-fable-5-5', '-mythos-5-5', '-opus-5-5', '-sonnet-5-5', '-haiku-5-5'], // Claude 5.5 gen
+    ['-fable-5-1', '-mythos-5-1', '-opus-5-1', '-sonnet-5-1', '-haiku-5-1'], // Claude 5.1 gen
+    ['-fable-5', '-mythos-5', '-opus-5', '-sonnet-5', '-haiku-5'], // Claude 5 gen
+    ['-4-8'], ['-4-7'], ['-4-6'], ['-4-5-'], ['-4-1-'], ['-4-'], ['-3-7-'], ['-3-5-'], ['-3-'],
+  ];
+  const classPrecedence = ['-fable-', '-mythos-', '-opus-', '-sonnet-', '-haiku-'];
 
-  const getFamilyIdx = (id: string) => familyPrecedence.findIndex(f => id.includes(f));
+  const getFamilyIdx = (id: string) => familyPrecedence.findIndex(fam => fam.some(f => id.includes(f)));
   const getClassIdx = (id: string) => classPrecedence.findIndex(c => id.includes(c));
 
   const familyA = getFamilyIdx(aId);
@@ -388,7 +515,7 @@ function _bedrockModelSort(a: ModelDescriptionSchema, b: ModelDescriptionSchema)
   if (aIsVariant !== bIsVariant) return aIsVariant ? -1 : 1;
 
   // Prefer global > us > eu > regional
-  const prefixOrder = ['global', 'us', 'eu', 'jp', 'apac'];
+  const prefixOrder = ['global', 'us', 'eu', 'jp', 'apac', 'au', 'in', 'ca', 'us-gov'];
   const getPrefixIdx = (id: string) => {
     const prefix = _extractRegionPrefix(id);
     return prefix ? prefixOrder.indexOf(prefix) : 999;

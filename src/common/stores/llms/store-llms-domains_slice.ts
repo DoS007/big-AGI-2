@@ -3,27 +3,31 @@ import type { StateCreator } from 'zustand/vanilla';
 import type { ModelVendorId } from '~/modules/llms/vendors/vendors.registry';
 
 import type { DModelDomainId } from './model.domains.types';
+import type { DModelParameterValues } from './llms.parameters';
 import { DLLM, DLLMId, isLLMHidden, isLLMVisible } from './llms.types';
 import { LlmsRootState, useModelsStore } from './store-llms';
 import { ModelDomainsList, ModelDomainsRegistry } from './model.domains.registry';
 import { createDModelConfiguration, DModelConfiguration } from './modelconfiguration.types';
+import { llmsEditorialPickForDomain } from './model.domains.editorial';
 import { type DPricingChatGenerate, getLlmCostForTokens, llmChatPricing_adjusted } from './llms.pricing';
 
 
 /// LLMs Assignments Slice
 
+type _LlmsAssignments = Record<DModelDomainId, DModelConfiguration>;
+type _PartialLlmsAssignments = Partial<_LlmsAssignments>;
+
 export interface LlmsAssignmentsState {
 
-  modelAssignments: Partial<Record<DModelDomainId, DModelConfiguration>>;
+  modelAssignments: _PartialLlmsAssignments;
 
 }
 
 export interface LlmsAssignmentsActions {
 
-  assignDomainModelConfiguration: (config: DModelConfiguration) => void;
-  assignDomainModelId: (domainId: DModelDomainId, llmId: DLLMId | null) => void;
-
-  autoReassignDomainModel: (domainId: DModelDomainId, ifNotPresent: boolean, ifNotVisible: boolean) => void;
+  assignDomainModelAuto: (domainId: DModelDomainId) => void;
+  assignDomainModelAutoIfStale: (domainId: DModelDomainId, alsoWhenInvisible: boolean) => void; // maintenance operation, at sync
+  assignDomainModelId: (domainId: DModelDomainId, llmId: undefined /* -> Auto */ | (DLLMId | null /* DEPRECATE null, shall at best use undefined here */)) => void;
 
 }
 
@@ -36,68 +40,47 @@ export const createLlmsAssignmentsSlice: StateCreator<LlmsRootState & LlmsAssign
   modelAssignments: {},
 
   // actions
-  assignDomainModelConfiguration: (config) =>
+
+  assignDomainModelAuto: (domainId) =>
+    _set(state => {
+      if (!(domainId in state.modelAssignments)) return state; // no change
+
+      // remove the assignment
+      const { [domainId]: _removed, ...rest } = state.modelAssignments;
+      return { modelAssignments: rest };
+    }),
+
+  // similar to `llmsAssignmentsPruneStale`
+  assignDomainModelAutoIfStale: (domainId, alsoWhenInvisible) => {
+    const { llms, modelAssignments } = _get();
+
+    // absent = Auto, keep absent
+    const existing = modelAssignments[domainId];
+    if (!existing) return;
+
+    // explicit no-model
+    const llmId = existing.modelId;
+    if (llmId === null) return;
+
+    const llm = llms.find(({ id }) => id === llmId);
+    if (llm && (!alsoWhenInvisible || isLLMVisible(llm))) return; // already assigned to a visible model
+
+    // else: invalid pin, or invisible model
+    _get().assignDomainModelAuto(domainId);
+  },
+
+  assignDomainModelId: (domainId, llmId: undefined | (DLLMId | null)) => {
+    // NOTE: for historical reasons (callers having 'null' as the 'auto' option), we treat all nullish values as auto here (shall only be 'undefined' going forward)
+    if (!llmId)
+      return _get().assignDomainModelAuto(domainId);
+
+    // explicit pin
     _set(state => ({
       modelAssignments: {
         ...state.modelAssignments,
-        [config.domainId]: config,
+        [domainId]: createDModelConfiguration(domainId, llmId, undefined),
       },
-    })),
-
-  assignDomainModelId: (domainId, llmId) =>
-    _set(state => {
-
-      // auto-assign if null, to prevent a domain from being left without a model
-      if (!llmId) {
-        const autoModelConfiguration = _autoModelConfiguration(domainId, state.llms);
-        if (autoModelConfiguration)
-          return {
-            modelAssignments: {
-              ...state.modelAssignments,
-              [domainId]: autoModelConfiguration,
-            },
-          };
-        // if no auto-assign, fall through, which will set the model to null
-      }
-
-      return {
-        modelAssignments: {
-          ...state.modelAssignments,
-          [domainId]: createDModelConfiguration(domainId, llmId, undefined),
-        },
-      };
-    }),
-
-  autoReassignDomainModel: (domainId, ifNotPresent, ifNotVisible) => {
-    const { llms, modelAssignments } = _get();
-
-    // do not perform reassignment under certain conditions
-    const domainAssignment = modelAssignments[domainId] ?? undefined;
-    if (domainAssignment) {
-      const llmId = domainAssignment.modelId;
-      if (llmId) {
-        if (!ifNotPresent)
-          return; // assigned and maybe present: nothing to do
-        // check if present
-        const llm = llms.find(({ id }) => id === llmId);
-        if (llm) {
-          if (!ifNotVisible)
-            return; // present and maybe visible: nothing to do
-          if (isLLMVisible(llm))
-            return; // present and visible: nothing to do
-        }
-      }
-    }
-
-    // re-assign
-    const autoModelConfiguration = _autoModelConfiguration(domainId, llms);
-    if (autoModelConfiguration)
-      _set(state => ({
-        modelAssignments: {
-          ...state.modelAssignments,
-          [domainId]: autoModelConfiguration,
-        },
-      }));
+    }));
   },
 
 });
@@ -124,7 +107,7 @@ type PreferredRankedVendors = RankedVendorLLMs[];
  * @param requireElo if true, only LLMs with elo are returned
  * @param fallback the LLM to use if there are not enough LLMs
  */
-export function llmsHeuristicGetTopDiverseLlmIds(count: number, requireElo: boolean, fallback: DLLMId | null): DLLMId[] {
+export function llmsHeuristicGetTopDiverseLlmIds(count: number, requireElo: boolean, fallback?: DLLMId): DLLMId[] {
   const llmIDs: DLLMId[] = [];
 
   // iterate through the groups, and top to bottom
@@ -159,71 +142,135 @@ export function llmsHeuristicGetTopDiverseLlmIds(count: number, requireElo: bool
 
 
 /**
- * Heuristic to update the assignments (either missing or invalid due to removed models).
+ * Heuristics to return fast/low-cost LLMs from different vendors,
+ * using the same strategy as utility models (topVendorLowestCost).
+ * Round-robin picks the lowest-cost model from each vendor.
  */
-export function llmsHeuristicUpdateAssignments(allLlms: ReadonlyArray<DLLM>, existingAssignments: Partial<Record<DModelDomainId, DModelConfiguration>>): LlmsAssignmentsState['modelAssignments'] {
-  return ModelDomainsList.reduce((acc, domainId: DModelDomainId) => {
+export function llmsHeuristicGetTopFastLlmIds(count: number): DLLMId[] {
+  const llmIDs: DLLMId[] = [];
 
-    // reuse the existing assignment, if present
-    const existingAssignment = existingAssignments[domainId] ?? undefined;
-    if (existingAssignment && (
-      existingAssignment.modelId === null || // we allow for "don't have a model", which is the null option
-      allLlms.find(({ id }) => id === existingAssignment.modelId) // otherwise we must have a valid model
-    )) {
-      acc[domainId] = existingAssignment;
-      return acc;
+  const { llms } = useModelsStore.getState();
+  const groupedLlms = _groupLlmsByVendorRankedByElo(llms);
+
+  // For each vendor, sort by cost (lowest first, excluding free/0-cost)
+  const vendorsByCost = groupedLlms.map(vendor => ({
+    vendorId: vendor.vendorId,
+    llmsByCost: [...vendor.llmsByElo].sort((a, b) => {
+      if (!a.costRank && !b.costRank) return 0;
+      if (!a.costRank) return 1; // push 0-cost to end
+      if (!b.costRank) return -1;
+      return a.costRank - b.costRank;
+    }),
+  }));
+
+  // Round-robin pick lowest-cost models from each vendor
+  let costLevel = 0;
+  while (llmIDs.length < count) {
+    let added = false;
+
+    for (const vendor of vendorsByCost) {
+      if (costLevel < vendor.llmsByCost.length) {
+        const llmEntry = vendor.llmsByCost[costLevel];
+        if (!llmEntry.id) continue;
+        llmIDs.push(llmEntry.id);
+        added = true;
+        if (llmIDs.length === count) break; // fast exit
+      }
     }
 
-    // apply the spec strategy for the domain
-    const autoModelConfiguration = _autoModelConfiguration(domainId, allLlms);
-    if (autoModelConfiguration)
-      acc[domainId] = autoModelConfiguration;
+    if (!added) break;
+    costLevel++;
+  }
 
-    return acc;
-  }, {} as LlmsAssignmentsState['modelAssignments']);
+  return llmIDs;
+}
+
+/**
+ * Heuristic to return starred LLMs from all vendors.
+ */
+export function llmsHeuristicGetStarredLlmIds(): DLLMId[] {
+  const { llms } = useModelsStore.getState();
+  const starredLlms = llms.filter(llm => llm.userStarred && llm.id);
+  return starredLlms.map(llm => llm.id);
 }
 
 
-// Private - Strategies
+/**
+ * Prune-only reconciliation: drop explicit assignments that reference to a no longer existing LLM.
+ * Dropped or missing entities mean 'Auto' and are resolved read-time.
+ *
+ * Called by LLM global list (universe) mutation and initial store rehydration.
+ */
+export function llmsAssignmentsPruneStale(universe: ReadonlyArray<DLLM>, existingAssignments: _PartialLlmsAssignments): _PartialLlmsAssignments {
+  const result: _PartialLlmsAssignments = {};
+  for (const domainId of ModelDomainsList) {
 
-function _autoModelConfiguration(domainId: DModelDomainId, llms: ReadonlyArray<DLLM>): DModelConfiguration | undefined {
-  const domainSpec = ModelDomainsRegistry[domainId] ?? undefined;
+    // absent = Auto, keep absent
+    const existing = existingAssignments[domainId];
+    if (!existing) continue;
 
-  // Filter LLMs based on required interfaces, but relax the filter if none matches
-  let filteredLlms = llms;
-  if (domainSpec.requiredInterfaces?.length) {
-    const reqIfs = domainSpec.requiredInterfaces;
-    const subset = llms.filter(llm => reqIfs.every(reqIf => llm.interfaces.includes(reqIf)));
-    // only apply filter if we have at least one matching model
-    if (subset.length > 0)
-      filteredLlms = subset;
+    // valid pin or explicit 'no model'
+    if (existing.modelId === null || universe.find(({ id }) => id === existing.modelId))
+      result[domainId] = existing;
+
+    // else: broken pin -> drop the entry (degrades to Auto)
   }
+  return result;
+}
 
-  // Now group the final chosen set
-  const vendors = _groupLlmsByVendorRankedByElo(filteredLlms);
 
-  // Students: The rest is the existing strategy logic
+// Public - Auto Model Selection
+
+export function createDModelConfigurationAuto(domainId: DModelDomainId, modelParameters: DModelParameterValues | undefined): DModelConfiguration | undefined {
+  const { llms } = useModelsStore.getState();
+  const autoLLMId = llmsAssignmentsAutoModelId(domainId, llms);
+  return !autoLLMId ? undefined : createDModelConfiguration(domainId, autoLLMId, modelParameters);
+}
+
+
+// Public - Strategies
+
+function _allowedDomainLlms(domainSpec: typeof ModelDomainsRegistry[DModelDomainId], universe: ReadonlyArray<DLLM>): ReadonlyArray<DLLM> {
+  if (domainSpec?.requiredInterfaces?.length) {
+    const reqIfs = domainSpec.requiredInterfaces;
+    const subset = universe.filter(llm => reqIfs.every(reqIf => llm.interfaces.includes(reqIf)));
+    // only apply filter if we have at least one matching model
+    if (subset.length > 0 && subset.length < universe.length)
+      return subset;
+  }
+  return universe;
+}
+
+export function llmsAssignmentsAutoModelId(domainId: DModelDomainId, universe: ReadonlyArray<DLLM>): DLLMId | undefined {
+
+  // Narrow LLMs based on required interfaces, but relax the filter if none matches
+  const domainSpec = ModelDomainsRegistry[domainId];
+  const allowedLlms = _allowedDomainLlms(domainSpec, universe);
+
+  // Grouped ELO ranking
+  const vendors = _groupLlmsByVendorRankedByElo(allowedLlms);
+
+  // Editorial layer: prefer hand-curated favorites first (precedence is editorial-defined, see model.domains.editorial.ts)
+  const editorialPick = llmsEditorialPickForDomain(domainId, allowedLlms, domainSpec?.editorialFallbackDomain);
+  if (editorialPick) return editorialPick;
+
+  // Apply the domain selection strategy
   switch (domainSpec?.autoStrategy) {
 
     case 'topVendorTopLlm':
-      const topRankedLLMId = _strategyTopQuality(vendors);
-      if (topRankedLLMId)
-        return createDModelConfiguration(domainId, topRankedLLMId, undefined);
-      break;
+      return _strategyTopQuality(vendors);
 
     case 'topVendorLowestCost':
-      const lowCostLLMId = _strategyTopVendorLowestCost(vendors);
-      if (lowCostLLMId)
-        return createDModelConfiguration(domainId, lowCostLLMId, undefined);
-      break;
+      return _strategyTopVendorLowestCost(vendors);
 
     default:
       console.log('[DEV] unknown strategy for LLM domain', domainId);
   }
 
-  // console.log('[DEV] cannot auto-assign for domain', domainId, llms.length, filteredLlms.length);
+  // console.log('[DEV] cannot auto-assign for domain', domainId, universe.length, allowedLlms.length);
   return undefined;
 }
+
 
 function _strategyTopQuality(vendors: PreferredRankedVendors): DLLMId | undefined {
   // return the 1st vendor, 1st model -- great if ranked, but if not, at least return one model
@@ -241,7 +288,7 @@ function _strategyTopVendorLowestCost(vendors: PreferredRankedVendors, requireEl
   for (const vendor of vendors) {
 
     // sort by increasing cost, with 0 ('free' at the end, to exclude experimental models)
-    const sorted = vendor.llmsByElo.toSorted((a, b) => {
+    const sorted = [...vendor.llmsByElo].sort((a, b) => {
       if (!a.costRank && !b.costRank)
         return 0;
       if (!a.costRank)

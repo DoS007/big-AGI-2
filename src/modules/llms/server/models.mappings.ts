@@ -6,6 +6,34 @@ import { LLM_IF_Outputs_Image, LLM_IF_Tools_WebSearch } from '~/common/stores/ll
 import type { ModelDescriptionSchema } from './llm.server.types';
 
 
+// -- Uncurated-model label marker --
+
+/**
+ * '[?] ' label prefix - "the list API does not establish what this model IS".
+ * Not an "uncatalogued" badge: API-characterized 0-day arrivals stay unmarked.
+ *
+ * Mark:    type-blind catalogs (ids only), where a video/TTS/embedding id could masquerade as
+ *          chat - nvidianim, modular, sakanaai, metaai, moonshot, groq, deepseek, alibaba - plus the
+ *          'super' resolution below (unknown variant of a known family).
+ * Don't:   a type/modality filter proves chat - gemini, xai, together, novita, chutesai, cerebras.
+ *
+ * Readers: llm-registry-sync (marked + null contextWindow = held off the publication push),
+ *          listModels.test, the website (strips brackets, sinks pubDate; own regex, keep in sync).
+ *
+ * Legacy, not unified: bedrock ' [?]' suffix; openai-compat hosts keep a lenient bare '?'
+ * (unknown is the norm there, marking would blank whole services from publication).
+ */
+const LLM_LABEL_UNCURATED = '[?]';
+
+export function llmsLabelUncurated(label: string): string {
+  return `${LLM_LABEL_UNCURATED} ${label}`;
+}
+
+export function llmsIsLabelUncurated(label: string): boolean {
+  return label.startsWith(LLM_LABEL_UNCURATED);
+}
+
+
 // -- Auto-inject implied model interfaces from parameterSpecs --
 
 const _paramIdToInterface: { paramIds: DModelParameterId[], iface: DModelInterfaceV1 }[] = [
@@ -16,8 +44,10 @@ const _paramIdToInterface: { paramIds: DModelParameterId[], iface: DModelInterfa
       'llmVndAntWebFetch',
       'llmVndAntWebSearch',
       'llmVndGeminiGoogleSearch',
+      'llmVndGeminiUrlContext',
       'llmVndMoonshotWebSearch',
       'llmVndOaiWebSearchContext',
+      'llmVndOrtWebFetch',
       'llmVndOrtWebSearch',
       'llmVndPerplexitySearchMode',
       'llmVndXaiWebSearch',
@@ -51,6 +81,18 @@ export function llmsAutoImplyInterfaces(model: ModelDescriptionSchema): ModelDes
 }
 
 
+/**
+ * Wire compatibility for clients built before the one-shape cache pricing (2026-09): they switch on `cache.cType`
+ * and throw on an unknown tag. 'ant-bp' when writes are priced, else 'oai-ac'; current clients drop the tag on ingest.
+ * TODO: delete after 2026-12-03, with the schema field and the client strip.
+ */
+export function llmsWireCompatCacheTag(model: ModelDescriptionSchema): ModelDescriptionSchema {
+  const cache = model.chatPrice?.cache;
+  if (!cache || cache.cType) return model;
+  return { ...model, chatPrice: { ...model.chatPrice, cache: { ...cache, cType: cache.write !== undefined ? 'ant-bp' : 'oai-ac' } } };
+}
+
+
 // -- Dev model definitions check --
 
 /**
@@ -61,13 +103,14 @@ export function llmsAutoImplyInterfaces(model: ModelDescriptionSchema): ModelDes
  * @param vendor - Vendor name for logging
  * @param apiIds - Model IDs from the API
  * @param knownIds - Model IDs defined locally
- * @param options - Optional: { checkUnknown: boolean, apiFilter: (id) => boolean }
+ * @param options - Optional: { checkUnknown: boolean, apiFilter: (id) => boolean, ignoreStale: string[] }
  */
-export function llmDevCheckModels_DEV(vendor: string, apiIds: string[], knownIds: string[], options?: { checkUnknown?: boolean; apiFilter?: (id: string) => boolean }): void {
-  const { checkUnknown = true, apiFilter } = options || {};
+export function llmDevCheckModels_DEV(vendor: string, apiIds: string[], knownIds: string[], options?: { checkUnknown?: boolean; apiFilter?: (id: string) => boolean; ignoreStale?: string[] }): void {
+  const { checkUnknown = true, apiFilter, ignoreStale } = options || {};
 
-  // Stale: known but not in API
-  const stale = knownIds.filter(k => !apiIds.includes(k));
+  // Stale: known but not in API - minus the deliberately dormant defs (docs-official aliases that generate
+  // fine but never list, delisted-but-pinned ids), which are stale by construction and would fire forever
+  const stale = knownIds.filter(k => !apiIds.includes(k) && !ignoreStale?.includes(k));
   if (stale.length)
     console.log(`[DEV] ${vendor}: stale model defs (remove): [ ${stale.join(', ')} ]`);
 
@@ -111,9 +154,40 @@ export function llmDevValidateParameterSpecs_DEV(model: ModelDescriptionSchema):
 }
 
 
+// -- pubDate helpers --
+
+/**
+ * Format an epoch / Date / nothing as 'YYYYMMDD'.
+ * Accepts either a Unix epoch (seconds), a Date, or undefined (-> today).
+ */
+export function formatPubDate(input?: number | Date): string {
+  let date: Date;
+  if (input instanceof Date && Number.isFinite(input.getTime()))
+    date = input;
+  else if (typeof input === 'number' && Number.isFinite(input) && input > 0) {
+    const candidate = new Date(input * 1000);
+    date = Number.isFinite(candidate.getTime()) ? candidate : new Date();
+  } else
+    date = new Date();
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}${m}${d}`;
+}
+
+
 // -- Manual model mappings: types and helper --
 
 export type ManualMappings = (KnownModel | KnownLink)[];
+
+/** Defines a const-tracked array of models so editorial code can derive id unions via `typeof <result>[number]['<idField>']`. Curried for TElem-explicit + T-inferred. Empty arrays fall back to TElem (avoiding the `never` degeneration of `TElem & never`). */
+export function llmsDefineModels<TElem extends object>() {
+  return <const T extends readonly TElem[]>(models: T): ReadonlyArray<T extends readonly [] ? TElem : TElem & T[number]> => models as any;
+}
+
+/** Pre-instantiated `llmsDefineModels` for OpenAI-style ManualMappings vendors. */
+export const llmsDefineManualMappings = llmsDefineModels<ManualMappings[number]>();
+
 
 /**
  * Server-side default model description to complement the APIs usually just returning the model ID
@@ -127,7 +201,7 @@ export type KnownModel = {
 /**
  * Symlink -> KnownModel; all properties except overrides are inherited from the target model.
  */
-type KnownLink = {
+export type KnownLink = {
   idPrefix: string;
   label: string;        // Forcing the label, otherwise we'll just use the target's, which is wrong
   symLink: string;      // -> KnownModel.idPrefix
@@ -138,7 +212,7 @@ type KnownLink = {
  * Converts a KnownModel to ModelDescriptionSchema. Used by OpenAI-style vendors.
  * NOTE: Keep optional fields in sync with geminiModelToModelDescription (gemini.models.ts)
  */
-export function fromManualMapping(mappings: (KnownModel | KnownLink)[], upstreamModelId: string, created: undefined | number, updated: undefined | number, fallback: KnownModel, disableSymlinkLooks?: boolean): ModelDescriptionSchema {
+export function fromManualMapping(mappings: ReadonlyArray<KnownModel | KnownLink>, upstreamModelId: string, created: undefined | number, updated: undefined | number, fallback: KnownModel, disableSymlinkLooks?: boolean): ModelDescriptionSchema {
 
   // model resolution outputs
   let m: KnownModel;
@@ -199,12 +273,15 @@ export function fromManualMapping(mappings: (KnownModel | KnownLink)[], upstream
   let description = m.description || '';
   if (variant)
     label += ` [${variant}]`;
+  // an unknown variant of a curated base is shown as uncurated, while the base keeps its own `hidden`:
+  // never mutate `m`, it is the shared table entry (a `delete m.hidden` here un-hid the base for every later listing of the process)
+  let hidden = m.hidden;
   if (resolution === 'super') {
-    label = `[?] ${label}`;
-    delete m.hidden;
+    label = llmsLabelUncurated(label);
+    hidden = undefined;
   } else if (!disableSymlinkLooks && symlinkTarget) {
     // add a symlink icon to the label
-    label = `🔗 ${label} → ${symlinkTarget/*.replace(known.idPrefix, '')*/}`;
+    label = `🔗 ${label} -> ${symlinkTarget/*.replace(known.idPrefix, '')*/}`;
 
     // add an automated 'points to...' to the description, lifted from the base model
     if (!description.includes('Points to '))
@@ -224,11 +301,12 @@ export function fromManualMapping(mappings: (KnownModel | KnownLink)[], upstream
   };
 
   // apply optional fields
+  if (m.pubDate) md.pubDate = m.pubDate;
   if (m.parameterSpecs) md.parameterSpecs = m.parameterSpecs;
   if (m.maxCompletionTokens) md.maxCompletionTokens = m.maxCompletionTokens;
   if (m.benchmark) md.benchmark = m.benchmark;
   if (m.chatPrice) md.chatPrice = m.chatPrice;
-  if (m.hidden) md.hidden = true;
+  if (hidden) md.hidden = true;
   if (m.initialTemperature !== undefined) md.initialTemperature = m.initialTemperature;
 
   return md;

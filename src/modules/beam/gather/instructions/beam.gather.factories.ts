@@ -15,6 +15,8 @@ export interface FusionFactorySpec {
   shortLabel: string; // used in the button group selector
   addLabel: string;   // used in the add card
   cardTitle: string;   // used as the title
+  cardTitleNext?: string; // counted title while there is something to merge, '{n}' = the replies the next run merges; omit to keep cardTitle
+  cardTitleDone?: string; // counted title after a run, '{n}' = the replies it merged
   Icon?: typeof SvgIcon;
   description: string;
   createInstructions: () => Instruction[];
@@ -25,6 +27,19 @@ export function findFusionFactory(factoryId?: FFactoryId | null): FusionFactoryS
   return FUSION_FACTORIES.find(f => f.factoryId === factoryId) ?? null;
 }
 
+/**
+ * The card title: the factory's, or its counted form - the next run's while there is something to merge
+ * ('Combine 4 Responses'), the last run's once it ran ('Combined 3 Responses'). Factories without counted
+ * forms keep their title.
+ */
+export function fusionCardTitle(factory: FusionFactorySpec, nextCount: number, doneCount: number | undefined): string {
+  if (doneCount !== undefined)
+    return factory.cardTitleDone?.replace('{n}', String(doneCount)) ?? factory.cardTitle;
+  if (nextCount >= 2)
+    return factory.cardTitleNext?.replace('{n}', String(nextCount)) ?? factory.cardTitle;
+  return factory.cardTitle;
+}
+
 export const FUSION_FACTORY_DEFAULT = 'fuse';
 
 export const FUSION_FACTORIES: FusionFactorySpec[] = [
@@ -33,23 +48,25 @@ export const FUSION_FACTORIES: FusionFactorySpec[] = [
     shortLabel: 'Fuse',
     addLabel: 'Add Fusion',
     cardTitle: 'Combined Response',
+    cardTitleNext: 'Fuse {n} Responses',
+    cardTitleDone: 'Fused {n} Responses',
     Icon: MediationOutlinedIcon as typeof SvgIcon,
-    description: 'AI combines conversation details and ideas into one clear, comprehensive answer.',
+    description: 'AI combines conversation details and ideas into one clear answer.',
     createInstructions: () => [
       {
         type: 'gather',
         label: 'Synthesizing Fusion',
         method: 's-s0-h0-u0-aN-u',
         systemPrompt: `
-You are an expert AI text synthesizer, your task is to analyze the following inputs and generate a single, comprehensive response that addresses the core objectives or questions.
+You are an expert AI text synthesizer, your task is to analyze the following inputs and generate a single response that addresses the core objectives or questions.
 
 Consider the conversation history, the last user message, and the diverse perspectives presented in the {{N}} response alternatives.
 
-Your response should integrate the most relevant insights from these inputs into a cohesive and actionable answer.
+Your response should integrate the most relevant insights from these inputs into a coherent and actionable answer.
 
 Synthesize the perfect response that merges the key insights and provides clear guidance or answers based on the collective intelligence of the alternatives.`.trim(),
         userPrompt: `
-Synthesize the perfect cohesive response to my last message that merges the collective intelligence of the {{N}} alternatives above.`.trim(),
+Synthesize the perfect coherent response to my last message that merges the collective intelligence of the {{N}} alternatives above.`.trim(),
         // evalPrompt: `Evaluate the synthesized response provided by the AI synthesizer. Consider its relevance to the original query, the coherence of the integration of different perspectives, and its completeness in addressing the objectives or questions raised throughout the conversation.`.trim(),
       },
     ],
@@ -59,6 +76,8 @@ Synthesize the perfect cohesive response to my last message that merges the coll
     shortLabel: 'Guided',
     addLabel: 'Add Checklist',
     cardTitle: 'Guided Response',
+    cardTitleNext: 'Guide {n} Responses',
+    cardTitleDone: 'Guided {n} Responses',
     Icon: CheckBoxOutlinedIcon as typeof SvgIcon,
     description: 'Choose between options extracted by AI from the replies, and the model will combine your selections into a single answer.',
     // description: 'This approach employs a two-stage, interactive process where an AI first generates a checklist of insights from a conversation for user selection, then synthesizes those selections into a tailored, comprehensive response, integrating user preferences with AI analysis and creativity.',
@@ -103,11 +122,11 @@ The user did NOT select:
         method: 's-s0-h0-u0-aN-u',
         systemPrompt: `
 You are a master synthesizer, equipped with specific directions selected by the user from a checklist you previously helped generate.
-Your task is to combine the {{N}} response alternatives into a single cohesive response, following the preferences of the user. 
+Your task is to combine the {{N}} response alternatives into a single coherent response, following the preferences of the user. 
 This synthesis should address the user's original query comprehensively, incorporating the {{N}} response alternatives following the user's chosen options.
 Aim for clarity and coherence in your final output.`.trim(),
         userPrompt: `
-Given the user preferences below, synthesize the {{N}} response alternatives above into a single, cohesive, comprehensive response that follows the user query and the preferences below:
+Given the user preferences below, synthesize the {{N}} response alternatives above into a single, coherent, response that follows the user query and the preferences below:
 
 {{PrevStepOutput}}
 
@@ -121,8 +140,10 @@ The final output should reflect a deep understanding of the user's preferences a
     shortLabel: 'Compare',
     addLabel: 'Add Breakdown',
     cardTitle: 'Evaluation Table',
+    cardTitleNext: 'Compare {n} Responses',
+    cardTitleDone: 'Compared {n} Responses',
     Icon: TableViewRoundedIcon as typeof SvgIcon,
-    description: 'Analyzes and compares AI responses, offering a structured framework to support your response choice.',
+    description: 'Analyzes and compares replies, with a structured framework to support your choice.',
     createInstructions: () => [
       {
         type: 'gather',
@@ -168,6 +189,8 @@ Only work with the provided {{N}} responses. Begin with listing the criteria.`.t
     shortLabel: 'Custom',
     addLabel: 'Add Custom',
     cardTitle: 'User Defined',
+    cardTitleNext: 'Merge {n} Responses',
+    cardTitleDone: 'Merged {n} Responses',
     Icon: BuildRoundedIcon as typeof SvgIcon,
     description: 'Define your own fusion prompt.',
     createInstructions: () => [
@@ -176,10 +199,10 @@ Only work with the provided {{N}} responses. Begin with listing the criteria.`.t
         label: 'Executing Your Merge',
         method: 's-s0-h0-u0-aN-u',
         systemPrompt: `
-Your task is to synthesize a cohesive and relevant response based on the following messages: the original system message, the full conversation history up to the user query, the user query, and a set of {{N}} answers generated independently.
+Your task is to synthesize a coherent and relevant response based on the following messages: the original system message, the full conversation history up to the user query, the user query, and a set of {{N}} answers generated independently.
 These alternatives explore different solutions and perspectives and are presented in random order. Your output should integrate insights from these alternatives, aligned with the conversation's context and objectives, into a single, coherent response that addresses the user's needs and questions as expressed throughout the conversation.`.trim(),
         userPrompt: `
-Based on the {{N}} alternatives provided, synthesize a single, comprehensive response.`.trim(),
+Based on the {{N}} alternatives provided, synthesize a single coherent response.`.trim(),
         // userPrompt: 'Answer again using the best elements from the {{N}} answers above. Be truthful, honest, reliable.',
         // userPrompt: 'Based on the {{N}} alternatives provided, synthesize a single, comprehensive response that effectively addresses the query or problem at hand.',
       },

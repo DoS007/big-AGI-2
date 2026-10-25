@@ -15,7 +15,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import type { AixAPI_Access, AixAPI_Model, AixAPIChatGenerate_Request, AixWire_Particles } from '~/modules/aix/server/api/aix.wiretypes';
+import type { AixAPI_Access, AixAPI_Model, AixAPIChatGenerate_Request, AixTools_ToolDefinition, AixTools_ToolsPolicy, AixWire_Particles } from '~/modules/aix/server/api/aix.wiretypes';
 import type { IParticleTransmitter, ParticleCGDialectEndReason, ParticleServerLogLevel } from '~/modules/aix/server/dispatch/chatGenerate/parsers/IParticleTransmitter';
 import type { ModelDescriptionSchema } from '~/modules/llms/server/llm.server.types';
 import { ChatGenerateDispatch, createChatGenerateDispatch } from '~/modules/aix/server/dispatch/chatGenerate/chatGenerate.dispatch';
@@ -61,9 +61,24 @@ const SWEEP_DEFINITIONS = [
     description: 'OpenAI reasoning_effort values',
     applicability: { type: 'dialects', dialects: ['openai', 'azure', 'openrouter'] },
     applyToModel: (value) => ({ reasoningEffort: value }),
-    values: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh' /*, 'max'*/ /* OpenRouter-only? */] satisfies AixAPI_Model['reasoningEffort'][],
+    values: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max' /* [2026-07-09] GPT-5.6+ */] satisfies AixAPI_Model['reasoningEffort'][],
     neuteredValues: ['medium'], // medium is the default, so only-medium means no real support
     mode: 'enumerate',
+  }),
+
+  // OpenAI: reasoning mode (Responses API, GPT-5.6+)
+  defineSweep({
+    name: 'oai-reasoning-mode',
+    description: 'OpenAI reasoning.mode values (Responses API + OpenRouter tunnel, GPT-5.6+)',
+    applicability: { type: 'dialects', dialects: ['openai', 'openrouter'] },
+    applyToModel: (value) => ({ vndOaiReasoningMode: value }),
+    values: ['standard', 'pro'] satisfies AixAPI_Model['vndOaiReasoningMode'][],
+    neuteredValues: ['standard'], // standard is the default, so only-standard means no real support
+    mode: 'enumerate',
+    // [2026-07-10] reasoning.mode only exists on the Responses API: the Chat Completions adapter does not carry it,
+    // so a CC-dispatched probe would 200 without the API ever seeing the param (false pass on gpt-4o/4.1/3.5 etc.)
+    preflightFail: (body, value) => body?.reasoning?.mode === value ? null
+      : `not carried on wire: reasoning.mode=${body?.reasoning?.mode ?? '(unset)'} (Responses-only param)`,
   }),
 
   // OpenAI: verbosity (Responses API)
@@ -104,7 +119,7 @@ const SWEEP_DEFINITIONS = [
     description: 'Anthropic output_config.effort values',
     applicability: { type: 'dialects', dialects: ['anthropic'] },
     applyToModel: (value) => ({ reasoningEffort: value }),
-    values: ['low', 'medium', 'high', 'max'] satisfies AixAPI_Model['reasoningEffort'][],
+    values: ['low', 'medium', 'high', 'xhigh', 'max'] satisfies AixAPI_Model['reasoningEffort'][],
     mode: 'enumerate',
   }),
 
@@ -119,6 +134,11 @@ const SWEEP_DEFINITIONS = [
     }),
     values: [1024, 8192, 16384, 32768, 65536],
     mode: 'enumerate',
+    // [2026-06-09] The adapter coerces thinking to 'adaptive' on adaptive-only models (Fable/Mythos 5):
+    // the coerced request would 200 and record a false pass for a budget the raw API rejects (and ignores).
+    // Only the mode is checked, not the value: budget clamping to max_tokens-1 is accepted adapter behavior.
+    preflightFail: (body) => body?.thinking?.type === 'enabled' ? null
+      : `coerced on wire: thinking.type=${body?.thinking?.type ?? '(unset)'} (expected 'enabled')`,
   }),
 
 
@@ -152,12 +172,14 @@ const SWEEP_DEFINITIONS = [
 
 
   // xAI: reasoning effort (Responses API)
+  // grok-4.3: none/low/medium/high (default 'low')
+  // grok-4.20-multi-agent: low/medium/high/xhigh (4 vs 16 agents)
   defineSweep({
     name: 'xai-reasoning-effort',
     description: 'xAI reasoning.effort values',
     applicability: { type: 'dialects', dialects: ['xai'] },
     applyToModel: (value) => ({ reasoningEffort: value }),
-    values: ['low', 'medium', 'high'] satisfies AixAPI_Model['reasoningEffort'][],
+    values: ['none', 'low', 'medium', 'high', 'xhigh'] satisfies AixAPI_Model['reasoningEffort'][],
     mode: 'enumerate',
   }),
 
@@ -171,7 +193,143 @@ const SWEEP_DEFINITIONS = [
     mode: 'enumerate',
   }),
 
+  // Meta AI: reasoning effort (Responses API)
+  // Muse Spark / Wonder: minimal/low/medium/high/xhigh, plus 'max' on muse-wonder-1.0, muse-spark-1.3 and 1.3-contributor
+  // (served since 2026-10). 'none' 400s on every model.
+  defineSweep({
+    name: 'metaai-reasoning-effort',
+    description: 'Meta reasoning.effort values',
+    applicability: { type: 'dialects', dialects: ['metaai'] },
+    applyToModel: (value) => ({ reasoningEffort: value }),
+    values: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] satisfies AixAPI_Model['reasoningEffort'][],
+    mode: 'enumerate',
+  }),
+
+  // Meta AI: web search context (the OpenAI-shaped hosted web_search tool; $2.50 / 1K queries)
+  defineSweep({
+    name: 'metaai-web-search',
+    description: 'Meta web_search search_context_size values',
+    applicability: { type: 'dialects', dialects: ['metaai'] },
+    applyToModel: (value) => ({ vndOaiWebSearchContext: value }),
+    values: ['low', 'medium', 'high'] satisfies AixAPI_Model['vndOaiWebSearchContext'][],
+    mode: 'enumerate',
+  }),
+
 ] as const satisfies SweepDefinition<any>[];
+
+
+// --- TOOL PROBE DEFINITIONS ---
+
+/**
+ * Tool probes verify real function-calling support by invoking a tool and inspecting the response.
+ * Distinct from sweeps (which vary AixAPI_Model parameters): a probe sets request-level `tools` + `toolsPolicy`
+ * and a user prompt, then classifies pass/fail from the parser's function-call events.
+ *
+ * Output: passing probes are written to the dialect JSON under `probe.outputKey` as a list of `probe.passValue`
+ * entries (e.g. `"fn": ["auto"]`). Absence of the key means the probe did not pass for that model.
+ */
+interface ToolProbeDefinition {
+  /** Probe name, shown in logs. Also used as the output JSON key (e.g. 'fn'). */
+  name: string;
+  /** Human-readable description for --help */
+  description: string;
+  applicability:
+    | { type: 'all' }
+    | { type: 'dialects'; dialects: AixAPI_Access['dialect'][] };
+  userPrompt: string;
+  tools: AixTools_ToolDefinition[];
+  toolsPolicy: AixTools_ToolsPolicy;
+  /** Function name that must be called for the probe to pass. */
+  expectedFunctionName: string;
+  /** Value listed under the output key when the probe passes (e.g. 'auto'). */
+  passValue: string;
+  /** Optional additional validation on the parsed args object (must return true). */
+  validateArgs?: (args: any) => boolean;
+  /**
+   * If set, after the model emits a valid tool call we inject a canned tool_response and re-dispatch.
+   * Pass then additionally requires: turn 2 emits text (no loop, no empty), and that text contains
+   * at least one of `signalTokens` (case-insensitive substring) - proving the model actually consumed
+   * the tool result rather than ignoring it.
+   */
+  roundtrip?: {
+    /** Serialized tool result (typically a JSON-stringified object). Must be a JSON object string per validation upstream. */
+    cannedResult: string;
+    /** At least one of these substrings must appear (case-insensitive) in turn 2's text. */
+    signalTokens: string[];
+  };
+  /**
+   * Wire-fidelity check: return an error string when the built request body does NOT carry the probed
+   * semantics - adapter hotfixes may silently coerce (e.g. Fable/Mythos 5: tool_choice 'any' -> 'auto' + hint).
+   * Probes record raw API capability, not adapter-compatibility behavior. Return null when faithful or not applicable.
+   */
+  preflightFail?: (body: any, dialect: AixAPI_Access['dialect']) => string | null;
+}
+
+const _getWeatherTool: AixTools_ToolDefinition = {
+  type: 'function_call',
+  function_call: {
+    name: 'get_current_weather',
+    description: 'Look up the current weather for a given city. Call this whenever the user asks about current weather conditions.',
+    input_schema: {
+      properties: {
+        location: { type: 'string', description: 'The city and optional region/country, e.g. "Tokyo, Japan".' },
+        unit: { type: 'string', description: 'Temperature unit.', enum: ['celsius', 'fahrenheit'] },
+      },
+      required: ['location'],
+    },
+  },
+};
+
+const TOOL_PROBE_DEFINITIONS: ToolProbeDefinition[] = [
+  {
+    name: 'fn',
+    description: 'Basic function-calling (single tool, policy=auto). Pass = real tool call with valid args.',
+    applicability: { type: 'all' },
+    userPrompt: 'What is the current weather in Tokyo? Use the provided tool to find out.',
+    tools: [_getWeatherTool],
+    toolsPolicy: { type: 'auto' },
+    expectedFunctionName: 'get_current_weather',
+    passValue: 'auto',
+    validateArgs: (args) => typeof args?.location === 'string' && args.location.length > 0,
+  },
+  {
+    name: 'fn',
+    description: 'Forced tool call (single tool, policy=any). Pass = tool call is emitted with valid args.',
+    applicability: { type: 'all' },
+    userPrompt: 'What is the current weather in Tokyo? You must call the available tool.',
+    tools: [_getWeatherTool],
+    toolsPolicy: { type: 'any' },
+    expectedFunctionName: 'get_current_weather',
+    passValue: 'required',
+    validateArgs: (args) => typeof args?.location === 'string' && args.location.length > 0,
+    // [2026-06-09] 'required' must reflect raw API support for forced tool use: on adaptive-only Anthropic
+    // models (Fable/Mythos 5) the adapter downgrades 'any' -> 'auto' + system hint, which would pass here.
+    // [2026-09-02] same for Meta (tool_choice accepts only 'auto', the Responses adapter degrades). Judged only when
+    // the body carries a `tool_choice` (Anthropic object / OpenAI-family string); Gemini's tool_config is not inspected.
+    preflightFail: (body) => {
+      const tc = body?.tool_choice;
+      if (tc === undefined || tc === null) return null;
+      const forced = tc?.type === 'any' || tc?.type === 'function' || tc === 'required';
+      return forced ? null : `coerced on wire: tool_choice=${JSON.stringify(tc)} (expected a forced tool choice)`;
+    },
+  },
+  {
+    name: 'fn',
+    description: 'Round-trip: tool call then canned response, verify model produces coherent text (2 API calls).',
+    applicability: { type: 'all' },
+    userPrompt: 'What is the current weather in Tokyo? Use the provided tool to find out.',
+    tools: [_getWeatherTool],
+    toolsPolicy: { type: 'auto' },
+    expectedFunctionName: 'get_current_weather',
+    passValue: 'roundtrip',
+    validateArgs: (args) => typeof args?.location === 'string' && args.location.length > 0,
+    roundtrip: {
+      cannedResult: JSON.stringify({ temperature_c: 18, condition: 'cloudy', wind_kph: 12 }),
+      // 'cloudy' is the strongest signal (unambiguous, lowercase-stable); '18' also works.
+      signalTokens: ['cloudy', '18'],
+    },
+  },
+];
 
 
 interface SweepDefinition<TValue> {
@@ -187,6 +345,12 @@ interface SweepDefinition<TValue> {
   bisectPrecision?: number;
   /** If ALL passing values are in this set, the parameter is considered neutered (default-only, not truly supported) */
   neuteredValues?: TValue[];
+  /**
+   * Wire-fidelity check: return an error string when the built request body does NOT faithfully carry
+   * the swept value - adapter hotfixes may silently coerce parameters (recorded as 'fail', no API call made).
+   * Return null when faithful.
+   */
+  preflightFail?: (body: any, value: TValue) => string | null;
 }
 
 type SweepValue = string | number | boolean | null;
@@ -194,6 +358,16 @@ type SweepValue = string | number | boolean | null;
 function defineSweep<const TValue>(definition: SweepDefinition<TValue>) {
   return definition;
 }
+
+/**
+ * [2026-07-11] Default per-dialect model filters, applied when NEITHER the vendor config nor the CLI provides one.
+ * Keeps ad-hoc scans fast and focused on current-gen models (prefixes: gpt-6 included for forward-compat; the
+ * gpt-4/gpt-3.5 era is excluded). Any explicit config `modelFilter` or CLI `--model-filter` takes precedence.
+ */
+const DEFAULT_VENDOR_MODEL_FILTERS: Record<string, string[]> = {
+  openai: ['gpt-5', 'gpt-6', 'o'],
+  openrouter: ['anthropic/claude', 'openai/gpt-5', 'google/gemini'],
+};
 
 /** Check if passing values are neutered (only default/no-op values passed) */
 function isSweepNeutered(sweepName: string, passingValues: SweepValue[]): boolean {
@@ -206,16 +380,21 @@ function isSweepNeutered(sweepName: string, passingValues: SweepValue[]): boolea
 // Types
 // ============================================================================
 
+// ANSI only on a terminal: piped or captured logs stay plain text
+const _ansi = (code: string) => process.stdout.isTTY ? `\x1b[${code}m` : '';
 const COLORS = {
-  reset: '\x1b[0m',
-  bright: '\x1b[1m',
-  dim: '\x1b[2m',
-  red: '\x1b[31m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  cyan: '\x1b[36m',
-  magenta: '\x1b[35m',
+  reset: _ansi('0'),
+  bright: _ansi('1'),
+  dim: _ansi('2'),
+  red: _ansi('31'),
+  green: _ansi('32'),
+  yellow: _ansi('33'),
+  cyan: _ansi('36'),
+  magenta: _ansi('35'),
 } as const;
+
+// Non-streaming reasoning calls can take minutes; past this a request is 'blocked' (no verdict), never a hang
+const REQUEST_TIMEOUT_MS = 240_000;
 
 interface CliOptions {
   config?: string;
@@ -299,8 +478,19 @@ class SweepCollectorTransmitter implements IParticleTransmitter {
   tokenStopReason: AixWire_Particles.GCTokenStopReason | null = null;
   endReason: string | null = null;
 
+  // Function-call capture (for tool probes)
+  fnInvocationCount: number = 0;
+  firstFnId: string | null = null;
+  firstFnName: string | null = null;
+  firstFnArgs: string = '';
+  private _firstArgsCompleteFromStart: boolean = false;
+
+  // Vendor state capture (for round-trip continuity - e.g. Gemini 3 requires echoing thoughtSignature on functionCall parts)
+  geminiThoughtSignature: string | null = null;
+
   get hasText(): boolean { return this.text.length > 0; }
   get hasError(): boolean { return this.dialectIssue !== null; }
+  get hasFnInvocation(): boolean { return this.fnInvocationCount > 0; }
 
   // Parser-initiated Control
   setDialectEnded(reason: ParticleCGDialectEndReason): void {
@@ -324,21 +514,43 @@ class SweepCollectorTransmitter implements IParticleTransmitter {
   appendAutoText_weak(textChunk: string): void { this.text += textChunk; }
   appendAudioInline(_mimeType: string, _base64Data: string, _label: string, _generator: string, _durationMs: number): void { /* no-op */ }
   appendImageInline(_mimeType: string, _base64Data: string, _label: string, _generator: string, _prompt: string): void { /* no-op */ }
-  startFunctionCallInvocation(_id: string | null, _functionName: string, _expectedArgsFmt: 'incr_str' | 'json_object', _args: string | object | null): void { /* no-op */ }
-  appendFunctionCallInvocationArgs(_id: string | null, _argsJsonChunk: string): void { /* no-op */ }
+  appendVideoInline(_mimeType: string, _base64Data: string, _label: string, _generator: string): void { /* no-op */ }
+  appendHostedResource(_hres: any): void { /* no-op */ }
+  appendVoidNotice(_vnt: any): void { /* no-op */ }
+  startFunctionCallInvocation(id: string | null, functionName: string, _expectedArgsFmt: 'incr_str' | 'json_object', args: string | object | null): void {
+    this.fnInvocationCount++;
+    if (this.firstFnName === null) {
+      this.firstFnName = functionName;
+      this.firstFnId = id;
+      if (args != null) {
+        this.firstFnArgs = typeof args === 'string' ? args : JSON.stringify(args);
+        this._firstArgsCompleteFromStart = true;
+      }
+    }
+  }
+
+  appendFunctionCallInvocationArgs(_id: string | null, argsJsonChunk: string): void {
+    // Only accumulate chunks for the first invocation, and only if `start` did not already deliver complete args.
+    if (this.fnInvocationCount === 1 && !this._firstArgsCompleteFromStart)
+      this.firstFnArgs += argsJsonChunk;
+  }
   addCodeExecutionInvocation(_id: string | null, _language: string, _code: string, _author: 'gemini_auto_inline' | 'code_interpreter'): void { /* no-op */ }
   addCodeExecutionResponse(_id: string | null, _error: boolean | string, _result: string, _executor: 'gemini_auto_inline' | 'code_interpreter', _environment: 'upstream'): void { /* no-op */ }
   appendUrlCitation(_title: string, _url: string, _citationNumber?: number, _startIndex?: number, _endIndex?: number, _textSnippet?: string, _pubTs?: number): void { /* no-op */ }
 
   // Special
-  sendControl(_cgCOp: AixWire_Particles.ChatControlOp, _flushQueue?: boolean): void { /* no-op */ }
-  sendVoidPlaceholder(_mot: 'search-web' | 'gen-image' | 'code-exec', _text: string): void { /* no-op */ }
-  sendSetVendorState(_vendor: string, _state: unknown): void { /* no-op */ }
+  sendCGControl(_cgCOp: AixWire_Particles.ChatControlOp, _flushQueue?: boolean): void { /* no-op */ }
+  sendOperationState(_mot: 'search-web' | 'gen-image' | 'code-exec', _text: string, _opts?: any): void { /* no-op */ }
+  sendSetVendorState(svs: any): void {
+    // Capture Gemini thoughtSignature for round-trip tool continuity (see parser: sendSetVendorState({p:'svs', vendor:'gemini', state:{thoughtSignature}}))
+    if (svs?.vendor === 'gemini' && typeof svs?.state?.thoughtSignature === 'string' && !this.geminiThoughtSignature)
+      this.geminiThoughtSignature = svs.state.thoughtSignature;
+  }
 
   // Non-parts data
   setModelName(_modelName: string): void { /* no-op */ }
   setProviderInfraLabel(_label: string): void { /* no-op */ }
-  setUpstreamHandle(_handle: string, _type: 'oai-responses'): void { /* no-op */ }
+  setUpstreamHandle(_handle: string, _type: string): void { /* no-op */ }
   setTokenStopReason(reason: AixWire_Particles.GCTokenStopReason): void { this.tokenStopReason = reason; }
   updateMetrics(_update: Partial<AixWire_Particles.CGSelectMetrics>): void { /* no-op */ }
 }
@@ -428,8 +640,8 @@ async function testParameterValue(
   // Build vendor-specific HTTP request via the AIX dispatch system
   let dispatch: ChatGenerateDispatch | undefined;
 
-  // Capture request body for --debug output
-  const debugRequestBody = dispatch && 'body' in dispatch.request ? JSON.stringify(dispatch.request.body) /*, null, 2)*/ : undefined;
+  // Captured request body for --debug output - only known after dispatch creation
+  let debugRequestBody: string | undefined;
 
   // Helper to build result with common fields
   const makeResult = (fields: Omit<TestResult, 'sweepName' | 'paramValue' | 'debugRequestBody'>): TestResult => ({
@@ -448,6 +660,7 @@ async function testParameterValue(
       model,
       chatGenerate,
       false, // streaming = false
+      undefined, // sessionAffinityId = none
       false, // enableResumability = false
     );
   } catch (error: any) {
@@ -461,12 +674,25 @@ async function testParameterValue(
     });
   }
 
+  const requestBody = 'body' in dispatch.request ? dispatch.request.body : undefined;
+  debugRequestBody = requestBody !== undefined ? JSON.stringify(requestBody) : undefined;
 
+  // Wire-fidelity check: classify as fail (without spending an API call) when an adapter hotfix
+  // silently coerced the swept parameter - a coerced request would otherwise record a false pass
+  if (sweepDef.preflightFail) {
+    const failReason = sweepDef.preflightFail(requestBody, value);
+    if (failReason)
+      return makeResult({ outcome: 'fail', errorCategory: 'dialect', errorMessage: failReason, verboseLogs: [failReason], durationMs: Date.now() - startTime });
+  }
+
+
+  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   try {
     // Execute the request
     const response = await fetchResponseOrTRPCThrow({
       ...dispatch.request,
       name: `Sweep-${sweepDef.name}`,
+      signal: timeoutSignal,
       throwWithoutName: true,
     });
 
@@ -503,7 +729,7 @@ async function testParameterValue(
 
     // Check tokenStopReason for non-ok outcomes
     const stopReason = collector.tokenStopReason;
-    const isValidStop = !stopReason || stopReason === 'ok' || stopReason === 'ok-tool_invocations' || stopReason === 'ok-pause_continue';
+    const isValidStop = !stopReason || stopReason === 'ok' || stopReason === 'ok-tool_invocations';
     const isTruncated = stopReason === 'out-of-tokens';
 
     const preview = collector.hasText
@@ -548,6 +774,9 @@ async function testParameterValue(
   } catch (error: any) {
     const durationMs = Date.now() - startTime;
 
+    if (timeoutSignal.aborted)
+      return makeResult({ outcome: 'blocked', errorCategory: 'abort', errorMessage: `timeout ${REQUEST_TIMEOUT_MS / 1000}s`, verboseLogs: [`[timeout ${REQUEST_TIMEOUT_MS / 1000}s]`], durationMs });
+
     // Structured HTTP/connection error from fetchResponseOrTRPCThrow
     if (error instanceof TRPCFetcherError) {
       const errorMessage = (error.message || '').slice(0, 300);
@@ -574,6 +803,306 @@ async function testParameterValue(
       durationMs,
     });
   }
+}
+
+
+// ============================================================================
+// Tool Probe Execution
+// ============================================================================
+
+/**
+ * Result of a single dispatch+parse cycle. `fatalResult` is set when the dispatch itself failed or
+ * produced a non-ok stop reason, meaning the caller should immediately return a classified TestResult
+ * (the collector's function-call state is not reliable in that case).
+ */
+interface _DispatchResult {
+  collector: SweepCollectorTransmitter;
+  verboseLogs: string[];
+  debugRequestBody: string | undefined;
+  fatalResult?: Pick<TestResult, 'outcome' | 'errorMessage' | 'errorCategory' | 'httpStatus' | 'verboseLogs'>;
+}
+
+/**
+ * Build the vendor HTTP request, fetch, parse the response into a collector, and classify top-level outcomes
+ * that are independent of probe semantics (dispatch errors, dialect issues, stop reasons, HTTP failures).
+ */
+async function _dispatchAndCollect(
+  access: AixAPI_Access,
+  model: AixAPI_Model,
+  chatGenerate: AixAPIChatGenerate_Request,
+  probeLabel: string,
+  preflightFail?: (body: any) => string | null,
+): Promise<_DispatchResult> {
+  const collector = new SweepCollectorTransmitter();
+  const verboseLogs: string[] = [];
+  let dispatch: ChatGenerateDispatch | undefined;
+
+  try {
+    dispatch = await createChatGenerateDispatch(access, model, chatGenerate, false, undefined /* sessionAffinityId */, false);
+  } catch (error: any) {
+    const errorMessage = error?.message ? String(error.message).slice(0, 300) : String(error).slice(0, 300);
+    return {
+      collector, verboseLogs,
+      debugRequestBody: undefined,
+      fatalResult: {
+        outcome: 'fail', errorCategory: 'dialect', errorMessage,
+        verboseLogs: [`Exception creating request: ${error?.message || String(error)}`],
+      },
+    };
+  }
+
+  const requestBody = 'body' in dispatch.request ? dispatch.request.body : undefined;
+  const debugRequestBody = requestBody !== undefined ? JSON.stringify(requestBody) : undefined;
+
+  // Wire-fidelity check: fail (without spending an API call) when an adapter hotfix coerced the probed semantics
+  if (preflightFail) {
+    const failReason = preflightFail(requestBody);
+    if (failReason)
+      return {
+        collector, verboseLogs, debugRequestBody,
+        fatalResult: { outcome: 'fail', errorCategory: 'dialect', errorMessage: failReason, verboseLogs: [failReason] },
+      };
+  }
+
+  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetchResponseOrTRPCThrow({
+      ...dispatch.request,
+      name: probeLabel,
+      signal: timeoutSignal,
+      throwWithoutName: true,
+    });
+    const body = await response.text();
+
+    try { dispatch.chatGenerateParse(collector, body); }
+    catch (error) { verboseLogs.push(`Parse error: ${(error instanceof Error ? error.message : String(error)).slice(0, 100)}`); }
+
+    if (collector.hasError) {
+      const errorMessage = collector.dialectIssue || 'Unknown dialect issue';
+      verboseLogs.push(`Dialect issue: ${errorMessage}`);
+      return {
+        collector, verboseLogs, debugRequestBody,
+        fatalResult: { outcome: 'fail', errorCategory: 'dialect', errorMessage, verboseLogs },
+      };
+    }
+
+    const stopReason = collector.tokenStopReason;
+    const isValidStop = !stopReason || stopReason === 'ok' || stopReason === 'ok-tool_invocations';
+    if (stopReason === 'out-of-tokens') {
+      return {
+        collector, verboseLogs, debugRequestBody,
+        fatalResult: { outcome: 'truncated', errorMessage: 'out-of-tokens', verboseLogs },
+      };
+    }
+    if (!isValidStop) {
+      return {
+        collector, verboseLogs, debugRequestBody,
+        fatalResult: { outcome: 'fail', errorCategory: 'dialect', errorMessage: `Unexpected stop reason: ${stopReason}`, verboseLogs },
+      };
+    }
+
+    return { collector, verboseLogs, debugRequestBody };
+
+  } catch (error: any) {
+    if (timeoutSignal.aborted)
+      return {
+        collector, verboseLogs, debugRequestBody,
+        fatalResult: { outcome: 'blocked', errorCategory: 'abort', errorMessage: `timeout ${REQUEST_TIMEOUT_MS / 1000}s`, verboseLogs: [`[timeout ${REQUEST_TIMEOUT_MS / 1000}s]`] },
+      };
+    if (error instanceof TRPCFetcherError) {
+      const errorMessage = (error.message || '').slice(0, 300);
+      const isTransient = error.httpStatus === 503 || error.httpStatus === 429;
+      return {
+        collector, verboseLogs, debugRequestBody,
+        fatalResult: {
+          outcome: isTransient ? 'blocked' : 'fail',
+          httpStatus: error.httpStatus, errorCategory: error.category, errorMessage,
+          verboseLogs: [`[${error.category}${error.httpStatus ? ` ${error.httpStatus}` : ''}] ${errorMessage}`],
+        },
+      };
+    }
+    const errorMessage = (error?.message || String(error)).slice(0, 300);
+    return {
+      collector, verboseLogs, debugRequestBody,
+      fatalResult: {
+        outcome: 'error', errorCategory: 'exception', errorMessage,
+        verboseLogs: [`Exception: ${errorMessage}`],
+      },
+    };
+  }
+}
+
+/**
+ * Check whether the collector captured a valid function call matching the probe's expectations.
+ * Pushes a descriptive line into `verboseLogs` on success (for consistent output) or on failure.
+ */
+function _checkFunctionCall(
+  collector: SweepCollectorTransmitter,
+  probe: ToolProbeDefinition,
+  verboseLogs: string[],
+): Pick<TestResult, 'outcome' | 'errorMessage'> {
+  if (!collector.hasFnInvocation) {
+    const preview = collector.hasText
+      ? (collector.text.length > 120 ? collector.text.slice(0, 120) + '...' : collector.text)
+      : '(no text)';
+    verboseLogs.push(`No function call; text: "${preview}"`);
+    return { outcome: 'fail', errorMessage: 'no function call emitted' };
+  }
+  if (collector.firstFnName !== probe.expectedFunctionName) {
+    verboseLogs.push(`Wrong function name: "${collector.firstFnName}" (expected "${probe.expectedFunctionName}")`);
+    return { outcome: 'fail', errorMessage: `wrong function name: ${collector.firstFnName}` };
+  }
+  let parsedArgs: any;
+  try {
+    parsedArgs = JSON.parse(collector.firstFnArgs || '{}');
+  } catch {
+    verboseLogs.push(`Unparseable args: ${collector.firstFnArgs.slice(0, 120)}`);
+    return { outcome: 'fail', errorMessage: 'unparseable function args' };
+  }
+  if (probe.validateArgs && !probe.validateArgs(parsedArgs)) {
+    verboseLogs.push(`Args validation failed: ${JSON.stringify(parsedArgs).slice(0, 120)}`);
+    return { outcome: 'fail', errorMessage: 'args failed validation' };
+  }
+  verboseLogs.push(`-> ${probe.expectedFunctionName}(${JSON.stringify(parsedArgs).slice(0, 120)})`);
+  return { outcome: 'pass', errorMessage: null };
+}
+
+/**
+ * Probe a model by invoking it with a function-call tool and classifying the response.
+ * For plain probes (no `roundtrip`): pass requires a valid tool call from turn 1.
+ * For round-trip probes: also injects a canned tool_response and runs turn 2, requiring coherent text that
+ * contains at least one of `signalTokens` (proving the model consumed the injected tool result).
+ */
+async function testToolProbe(
+  access: AixAPI_Access,
+  modelId: string,
+  probe: ToolProbeDefinition,
+  maxTokens: number,
+  baseModelOverrides: Partial<AixAPI_Model> | undefined,
+): Promise<TestResult> {
+  const startTime = Date.now();
+  const baseModel = createBaseModel(modelId, maxTokens);
+  const model: AixAPI_Model = { ...baseModel, ...baseModelOverrides };
+  const debugRequestAixModel = JSON.stringify(model);
+
+  // Turn 1 request
+  const turn1Request: AixAPIChatGenerate_Request = {
+    systemMessage: null,
+    chatSequence: [{ role: 'user' as const, parts: [{ pt: 'text' as const, text: probe.userPrompt }] }],
+    tools: probe.tools,
+    toolsPolicy: probe.toolsPolicy,
+  };
+
+  const turn1 = await _dispatchAndCollect(access, model, turn1Request, `ToolProbe-${probe.name}-${probe.passValue}-t1`,
+    probe.preflightFail ? (body) => probe.preflightFail!(body, access.dialect) : undefined);
+
+  const makeResult = (fields: Omit<TestResult, 'sweepName' | 'paramValue' | 'debugRequestAixModel' | 'debugRequestBody'>, debugBody?: string): TestResult => ({
+    sweepName: probe.name,
+    paramValue: probe.passValue,
+    debugRequestAixModel,
+    debugRequestBody: debugBody ?? turn1.debugRequestBody,
+    ...fields,
+  });
+
+  if (turn1.fatalResult) {
+    return makeResult({ ...turn1.fatalResult, durationMs: Date.now() - startTime });
+  }
+
+  // Turn 1 function-call classification
+  const fcCheck = _checkFunctionCall(turn1.collector, probe, turn1.verboseLogs);
+  if (fcCheck.outcome !== 'pass') {
+    return makeResult({ ...fcCheck, verboseLogs: turn1.verboseLogs, durationMs: Date.now() - startTime });
+  }
+
+  // Single-turn probe: done
+  if (!probe.roundtrip) {
+    return makeResult({
+      outcome: 'pass',
+      errorMessage: null,
+      verboseLogs: turn1.verboseLogs,
+      durationMs: Date.now() - startTime,
+    });
+  }
+
+  // Round-trip: build turn 2 with the assistant's call + an injected tool_response (both in one model message)
+  const toolCallId = turn1.collector.firstFnId || 'probe_call_1';
+  const fnName = turn1.collector.firstFnName!;
+  const fnArgs = turn1.collector.firstFnArgs || '{}';
+
+  // Gemini 3+ requires a real thought_signature on echoed-back functionCall parts (error: MISSING_THOUGHT_SIGNATURE).
+  // We ONLY echo a signature we actually captured from turn 1 - never a fabricated/bypass value - so failures
+  // reflect real provider behavior. Non-Gemini dialects ignore _vnd.gemini, so this is harmless cross-vendor.
+  const toolInvocationPart = {
+    pt: 'tool_invocation' as const,
+    id: toolCallId,
+    invocation: { type: 'function_call' as const, name: fnName, args: fnArgs },
+    ...(turn1.collector.geminiThoughtSignature ? { _vnd: { gemini: { thoughtSignature: turn1.collector.geminiThoughtSignature } } } : {}),
+  };
+
+  const turn2Request: AixAPIChatGenerate_Request = {
+    systemMessage: null,
+    chatSequence: [
+      { role: 'user' as const, parts: [{ pt: 'text' as const, text: probe.userPrompt }] },
+      {
+        role: 'model' as const,
+        parts: [
+          toolInvocationPart,
+          { pt: 'tool_response' as const, id: toolCallId, response: { type: 'function_call' as const, name: fnName, result: probe.roundtrip.cannedResult } },
+        ],
+      },
+    ],
+    tools: probe.tools,
+    toolsPolicy: probe.toolsPolicy,
+  };
+
+  const turn2 = await _dispatchAndCollect(access, model, turn2Request, `ToolProbe-${probe.name}-${probe.passValue}-t2`);
+  const combinedLogs = [...turn1.verboseLogs, ...turn2.verboseLogs];
+
+  if (turn2.fatalResult) {
+    return makeResult(
+      { ...turn2.fatalResult, verboseLogs: combinedLogs, durationMs: Date.now() - startTime },
+      turn2.debugRequestBody,
+    );
+  }
+
+  // Turn 2 classification: must produce coherent text that uses the tool result
+  if (turn2.collector.hasFnInvocation) {
+    combinedLogs.push('Turn 2 re-emitted a function call (loop, not answering)');
+    return makeResult({
+      outcome: 'fail',
+      errorMessage: 'loop: re-emitted fn call in turn 2',
+      verboseLogs: combinedLogs,
+      durationMs: Date.now() - startTime,
+    }, turn2.debugRequestBody);
+  }
+  if (!turn2.collector.hasText) {
+    combinedLogs.push('Turn 2 emitted no text');
+    return makeResult({
+      outcome: 'fail',
+      errorMessage: 'no text in turn 2',
+      verboseLogs: combinedLogs,
+      durationMs: Date.now() - startTime,
+    }, turn2.debugRequestBody);
+  }
+  const lowerText = turn2.collector.text.toLowerCase();
+  const hasSignal = probe.roundtrip.signalTokens.some(tok => lowerText.includes(tok.toLowerCase()));
+  if (!hasSignal) {
+    combinedLogs.push(`Turn 2 missing signals [${probe.roundtrip.signalTokens.join(',')}]: "${turn2.collector.text.slice(0, 120)}"`);
+    return makeResult({
+      outcome: 'fail',
+      errorMessage: `turn 2 text missing tool-response signals (${probe.roundtrip.signalTokens.join('|')})`,
+      verboseLogs: combinedLogs,
+      durationMs: Date.now() - startTime,
+    }, turn2.debugRequestBody);
+  }
+
+  combinedLogs.push(`Turn 2: "${turn2.collector.text.slice(0, 120)}"`);
+  return makeResult({
+    outcome: 'pass',
+    errorMessage: null,
+    verboseLogs: combinedLogs,
+    durationMs: Date.now() - startTime,
+  }, turn2.debugRequestBody);
 }
 
 
@@ -744,8 +1273,15 @@ function loadExistingDialectResults(filePath: string): DialectReultsByModel | nu
   }
 }
 
-function saveDialectResults(dialect: string, dialectResults: DialectReultsByModel, evaluatedSweeps: string[], modelFilter?: string, mergeModels?: boolean): void {
+function saveDialectResults(dialect: string, dialectResults: DialectReultsByModel, evaluatedSweeps: string[], modelFilter?: string, mergeModels?: boolean, partialSweeps?: boolean): void {
   const filePath = getResultsFilePath(dialect);
+
+  // [2026-07-11] Filtered scans never overwrite: a partial model set would clobber the full results file - and the
+  // default vendor filters make every standalone scan partial. Overwrite remains for full unfiltered scans only.
+  if (!mergeModels && modelFilter && fs.existsSync(filePath)) {
+    console.log(`${COLORS.yellow}Filtered scan over an existing results file -> auto-enabling --merge-models (run unfiltered to rebuild from scratch)${COLORS.reset}`);
+    mergeModels = true;
+  }
 
   // When --merge-models, shallow-merge new model entries into existing file
   if (mergeModels) {
@@ -755,9 +1291,12 @@ function saveDialectResults(dialect: string, dialectResults: DialectReultsByMode
       const updatedCount = newModelIds.filter(id => id in existing).length;
       const addedCount = newModelIds.length - updatedCount;
       // Merge preserving scan order: new models first (in scan order), then remaining old models
+      // [2026-07-11] Sweep-filtered scans DEEP-merge per model (keys knowingly partial: replacing the whole entry
+      // silently dropped keys the run didn't probe - how 'fn' data was lost); full-sweep scans replace the whole
+      // entry, so capabilities a model genuinely lost don't linger as stale keys.
       const merged: DialectReultsByModel = {};
       for (const id of newModelIds)
-        merged[id] = dialectResults[id];
+        merged[id] = partialSweeps ? { ...existing[id], ...dialectResults[id] } : dialectResults[id];
       for (const id of Object.keys(existing)) {
         if (!(id in merged))
           merged[id] = existing[id];
@@ -818,8 +1357,12 @@ function vendorResultToDialectResults(vendorResult: VendorSweepResult): DialectR
 
     // Extract passing values for each sweep (skip if none passed)
     for (const [sweepName, sweepResults] of bySweep) {
+      // [2026-07-10] For value sweeps, 'truncated' (out-of-tokens) counts as acceptance: the API took the value and
+      // generated past our token cap - excluding it punched fake holes in ranges (e.g. temperature [0,0.5,2] missing
+      // 1/1.5). Capability probes (fn) are excluded: a truncated roundtrip is genuinely inconclusive.
+      const truncatedIsPass = SWEEP_DEFINITIONS.some(s => s.name === sweepName);
       const passingValues = sweepResults
-        .filter(r => r.outcome === 'pass')
+        .filter(r => r.outcome === 'pass' || (truncatedIsPass && r.outcome === 'truncated'))
         .map(r => r.paramValue);
       if (passingValues.length === 0)
         continue;
@@ -873,7 +1416,7 @@ function vendorResultToDialectResults(vendorResult: VendorSweepResult): DialectR
   return dialectResults;
 }
 
-function saveAllResults(allResults: VendorSweepResult[], mergeModels?: boolean): void {
+function saveAllResults(allResults: VendorSweepResult[], mergeModels?: boolean, partialSweeps?: boolean): void {
   for (const vendorResult of allResults) {
     if (vendorResult.models.length === 0) continue;
     // Collect all evaluated sweep names for this dialect
@@ -884,7 +1427,7 @@ function saveAllResults(allResults: VendorSweepResult[], mergeModels?: boolean):
       }
     }
     const dialectResults = vendorResultToDialectResults(vendorResult);
-    saveDialectResults(vendorResult.dialect, dialectResults, [...evaluatedSweeps], vendorResult.modelFilter, mergeModels);
+    saveDialectResults(vendorResult.dialect, dialectResults, [...evaluatedSweeps], vendorResult.modelFilter, mergeModels, partialSweeps);
   }
 }
 
@@ -931,9 +1474,9 @@ function createSingleVendorConfig(dialect: string, key: string, host?: string): 
     case 'groq':
     case 'lmstudio':
     case 'localai':
+    case 'metaai':
     case 'mistral':
     case 'moonshot':
-    case 'openpipe':
     case 'openrouter':
     case 'perplexity':
     case 'togetherai':
@@ -943,7 +1486,6 @@ function createSingleVendorConfig(dialect: string, key: string, host?: string): 
         oaiKey: key,
         oaiOrg: '',
         oaiHost: host || '',
-        heliKey: '',
       } as any;
       break;
 
@@ -952,7 +1494,6 @@ function createSingleVendorConfig(dialect: string, key: string, host?: string): 
         dialect: 'anthropic',
         anthropicKey: key,
         anthropicHost: host || null,
-        heliconeKey: null,
       } as any;
       break;
 
@@ -1017,7 +1558,7 @@ ${COLORS.bright}Config file format (SweepConfig):${COLORS.reset}
     "maxTokens": 128,
     "vendors": {
       "openai": {
-        "access": { "dialect": "openai", "oaiKey": "sk-...", "oaiOrg": "", "oaiHost": "", "heliKey": "" },
+        "access": { "dialect": "openai", "oaiKey": "sk-...", "oaiOrg": "", "oaiHost": "" },
         "sweeps": ["temperature", "oai-reasoning-effort", "oai-verbosity"],
         "modelFilter": "gpt-4o",
         "baseModelOverrides": {}
@@ -1035,6 +1576,15 @@ ${SWEEP_DEFINITIONS.map(s => {
       : s.applicability.dialects.map(d => `${COLORS.magenta}${d}${COLORS.reset}`).join(', ');
     return `  ${COLORS.cyan}${s.name.padEnd(26)}${COLORS.reset} ${s.description} [${dialects}]`;
   }).join('\n')}
+
+${COLORS.bright}Available tool probes:${COLORS.reset}
+${TOOL_PROBE_DEFINITIONS.map(p => {
+    const dialects = p.applicability.type === 'all'
+      ? `${COLORS.green}all${COLORS.reset}`
+      : p.applicability.dialects.map(d => `${COLORS.magenta}${d}${COLORS.reset}`).join(', ');
+    return `  ${COLORS.cyan}${p.name.padEnd(26)}${COLORS.reset} ${p.description} [${dialects}]`;
+  }).join('\n')}
+  ${COLORS.dim}Probes share the --sweep-filter namespace. e.g. --sweep-filter fn runs only the fn probe.${COLORS.reset}
 
 ${COLORS.bright}Examples:${COLORS.reset}
   # Test temperature on a single OpenAI model
@@ -1159,7 +1709,9 @@ async function runSweep(
   options: CliOptions,
 ): Promise<VendorSweepResult[]> {
   const allResults: VendorSweepResult[] = [];
-  const maxTokens = sweepConfig.maxTokens ?? 128;
+  // [2026-07-11] fallback raised 128 -> 1024: reasoning models burned a 128-token budget before completing probes,
+  // truncating fn (capability lost on merge). For fn-grade scans prefer the config's per-vendor baseModelOverrides (4096).
+  const maxTokens = sweepConfig.maxTokens ?? 1024;
   const globalDelay = sweepConfig.delayMs ?? options.delay;
 
   for (const [vendorName, vendorConfig] of Object.entries(sweepConfig.vendors)) {
@@ -1215,7 +1767,9 @@ async function runSweep(
     }
 
     // 3. Filter models by: vendor config modelFilter (prefix match), then CLI --model-filter (regex)
-    const vendorModelFilter = vendorConfig.modelFilter;
+    // No config filter AND no CLI filter -> per-dialect default (e.g. openai: current-gen only, no gpt-4/3.5 era)
+    const vendorModelFilter = vendorConfig.modelFilter
+      ?? (!options.modelFilter ? DEFAULT_VENDOR_MODEL_FILTERS[access.dialect] : undefined);
     if (vendorModelFilter) {
       const prefixes = Array.isArray(vendorModelFilter) ? vendorModelFilter : [vendorModelFilter];
       models = models.filter(m => prefixes.some(p => m.id.startsWith(p)));
@@ -1243,7 +1797,7 @@ async function runSweep(
         const sweep = SWEEP_DEFINITIONS.find(s => s.name === sweepName);
         if (sweep)
           applicableSweeps.push(sweep);
-        else
+        else if (!TOOL_PROBE_DEFINITIONS.find(p => p.name === sweepName)) // probe names are valid, handled separately
           console.warn(`  ${COLORS.yellow}Warning: Unknown sweep "${sweepName}" - skipping${COLORS.reset}`);
       }
     } else {
@@ -1260,11 +1814,24 @@ async function runSweep(
       applicableSweeps = applicableSweeps.filter(s => allowed.includes(s.name));
     }
 
-    if (applicableSweeps.length === 0) {
-      console.log(`  ${COLORS.yellow}No applicable sweeps for dialect: ${access.dialect}${COLORS.reset}`);
+    // 5b. Determine applicable tool probes
+    // Probes are ADDITIVE: they run by dialect applicability regardless of vendorConfig.sweeps
+    // (which only controls parameter sweeps). Users opt out via --sweep-filter.
+    let applicableProbes: ToolProbeDefinition[] = TOOL_PROBE_DEFINITIONS.filter(p =>
+      p.applicability.type === 'all' || p.applicability.dialects.includes(access.dialect),
+    );
+    if (options.sweepFilter) {
+      const allowed = options.sweepFilter.split(',').map(x => x.trim());
+      applicableProbes = applicableProbes.filter(p => allowed.includes(p.name));
+    }
+
+    if (applicableSweeps.length === 0 && applicableProbes.length === 0) {
+      console.log(`  ${COLORS.yellow}No applicable sweeps or probes for dialect: ${access.dialect}${COLORS.reset}`);
       continue;
     }
-    console.log(`  Applicable sweeps: ${applicableSweeps.map(s => COLORS.magenta + s.name + COLORS.reset).join(', ')}`);
+    const sweepLabels = applicableSweeps.map(s => COLORS.magenta + s.name + COLORS.reset);
+    const probeLabels = applicableProbes.map(p => COLORS.cyan + p.name + COLORS.reset);
+    console.log(`  Applicable: ${[...sweepLabels, ...probeLabels].join(', ')}`);
 
     // Build effective model filter string for JSON output
     const effectiveFilters: string[] = [];
@@ -1379,6 +1946,37 @@ async function runSweep(
 
       }
 
+      // 6b. For each applicable tool probe (runs after parameter sweeps for this model)
+      for (const probe of applicableProbes) {
+        process.stdout.write(`    ${probe.name.padEnd(26)} `);
+
+        if (options.dryRun) {
+          process.stdout.write(`${COLORS.dim}[probe:${probe.passValue}]${COLORS.reset}`);
+          console.log('');
+          continue;
+        }
+
+        const result = await testToolProbe(access, modelDesc.id, probe, maxTokens, mergedOverrides);
+        modelResult.results.push(result);
+        printProbeResultInline(result);
+        if (globalDelay > 0)
+          await sleep(globalDelay);
+        console.log('');
+
+        // Debug/Verbose output, same convention as sweeps
+        if (options.debug || options.verbose) {
+          const printRequest = options.debug && result.debugRequestBody;
+          const printLogs = options.verbose && result.verboseLogs.length > 0;
+          const mayDim = result.outcome === 'pass' ? COLORS.dim : '';
+          if (printRequest || printLogs) {
+            process.stdout.write(`      ${mayDim}(${String(result.paramValue)})`);
+            if (printRequest || (result.outcome !== 'pass' && result.debugRequestBody))
+              process.stdout.write(` -> ${result.debugRequestBody}${COLORS.reset}\n      ${mayDim}    `);
+            process.stdout.write(`${COLORS.cyan}${result.verboseLogs.join(' · ').trim()}${COLORS.reset}\n`);
+          }
+        }
+      }
+
       vendorResult.models.push(modelResult);
     }
 
@@ -1435,7 +2033,7 @@ async function main(): Promise<void> {
   // Summary and save results
   if (!options.dryRun && results.some(v => v.models.length > 0)) {
     printSweepSummary(results);
-    saveAllResults(results, options.mergeModels);
+    saveAllResults(results, options.mergeModels, !!options.sweepFilter);
   }
 
   console.log(`${COLORS.dim}Done.${COLORS.reset}`);

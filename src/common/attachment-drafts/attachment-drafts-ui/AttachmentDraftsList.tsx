@@ -3,12 +3,16 @@ import * as React from 'react';
 import { Box, IconButton, ListDivider, ListItemDecorator, MenuItem } from '@mui/joy';
 import ClearIcon from '@mui/icons-material/Clear';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import VerticalAlignBottomIcon from '@mui/icons-material/VerticalAlignBottom';
 
 import type { DMessageDocPart, DMessageImageRefPart } from '~/common/stores/chat/chat.fragments';
 import { CloseablePopup } from '~/common/components/CloseablePopup';
 import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
+import { ViewDocPartModal } from '~/common/components/modals/ViewDocPartModal';
+import { ViewImageRefPartModal } from '~/common/components/modals/ViewImageRefPartModal';
+import { richMenuCompactSx, richMenuSx } from '~/common/components/RichMenu';
+import { useIsMobile } from '~/common/components/useMatchMedia';
 import { useOverlayComponents } from '~/common/layout/overlays/useOverlayComponents';
 
 import type { AttachmentDraft, AttachmentDraftId, AttachmentDraftsAction } from '../attachment.types';
@@ -22,12 +26,16 @@ import { AttachmentDraftMenu } from './AttachmentDraftMenu';
 const _style = {
 
   bar: {
-    position: 'relative',
+    display: 'flex',
+    alignItems: 'center',
+    minWidth: 0,
   } as const,
 
   barScrollX: {
-    height: '100%',
-    pr: 5,
+    flex: 1,
+    minWidth: 0,
+    py: 0.25,
+    pr: 1,
     overflowX: 'auto',
     display: 'flex',
     alignItems: 'center',
@@ -35,6 +43,9 @@ const _style = {
   } as const,
 
   barWraps: {
+    pr: 1,
+    flex: 1,
+    minWidth: 0,
     display: 'flex',
     flexWrap: 'wrap',
     alignItems: 'center',
@@ -42,10 +53,10 @@ const _style = {
   } as const,
 
   barMenuButton: {
-    // borderRadius: 'sm',
-    borderRadius: 0,
-    position: 'absolute', right: 0, top: 0,
-    backgroundColor: 'neutral.softDisabledBg',
+    // alignSelf: 'center',
+    // my: 0.25,
+    minHeight: 40, // from ATTACHMENT_MIN_STYLE
+    aspectRatio: 1,
   } as const,
 
 } as const;
@@ -61,15 +72,15 @@ export function AttachmentDraftsList(props: {
   enrichment?: IAttachmentEnrichment,
   enrichmentSummary?: AttachmentEnrichmentSummary,
   buttonsCanWrap?: boolean,
+  showWhenEmpty?: boolean, // e.g. live images are managed outside the draft store
   onAttachmentDraftsAction?: (attachmentDraftId: AttachmentDraftId | null, actionId: AttachmentDraftsAction) => void,
   // optional rendering props
   startDecorator?: React.ReactNode,
-  renderDocViewer?: (docPart: DMessageDocPart, onClose: () => void) => React.ReactNode,
-  renderImageViewer?: (imageRefPart: DMessageImageRefPart, onClose: () => void) => React.ReactNode,
-  renderOverallMenuExtra?: () => React.ReactNode,
+  renderOverallMenuExtra?: () => React.ReactNode, // rendered at the top of the overall menu, before the built-in items
 }) {
 
   // state
+  const isMobile = useIsMobile();
   const { showPromisedOverlay } = useOverlayComponents();
   const [draftMenu, setDraftMenu] = React.useState<{ anchor: HTMLAnchorElement, attachmentDraftId: AttachmentDraftId } | null>(null);
   const [overallMenuAnchor, setOverallMenuAnchor] = React.useState<HTMLAnchorElement | null>(null);
@@ -146,25 +157,13 @@ export function AttachmentDraftsList(props: {
     onAttachmentDraftsAction?.(attachmentDraftId, actionId);
   }, [handleDraftMenuHide, onAttachmentDraftsAction]);
 
-  const handleViewImageRefPart = React.useCallback((imageRefPart: DMessageImageRefPart) => {
-    setViewerImageRefPart(imageRefPart);
-  }, []);
+  const handleCloseImageViewer = React.useCallback(() => setViewerImageRefPart(null), []);
 
-  const handleCloseImageViewer = React.useCallback(() => {
-    setViewerImageRefPart(null);
-  }, []);
-
-  const handleViewDocPart = React.useCallback((docPart: DMessageDocPart) => {
-    setViewerDocPart(docPart);
-  }, []);
-
-  const handleCloseDocPartViewer = React.useCallback(() => {
-    setViewerDocPart(null);
-  }, []);
+  const handleCloseDocPartViewer = React.useCallback(() => setViewerDocPart(null), []);
 
 
   // no components without attachments
-  if (!hasAttachments)
+  if (!hasAttachments && !props.showWhenEmpty)
     return null;
 
   return <>
@@ -186,7 +185,7 @@ export function AttachmentDraftsList(props: {
             enrichment={props.enrichment}
             menuShown={draft.id === itemMenuAttachmentDraftId}
             onToggleMenu={handleDraftMenuToggle}
-            onViewImageRefPart={!props.renderImageViewer ? undefined : handleViewImageRefPart}
+            onViewImageRefPart={setViewerImageRefPart}
           />,
         )}
 
@@ -195,22 +194,25 @@ export function AttachmentDraftsList(props: {
       {/* Overall Menu button */}
       {!props.buttonsCanWrap && (
         <IconButton
+          aria-label='Attachment options'
+          aria-haspopup='menu'
+          aria-expanded={!!overallMenuAnchor}
+          title='Attachment options'
+          variant={overallMenuAnchor ? 'soft' : undefined}
           onClick={handleOverallMenuToggle}
           onContextMenu={handleOverallMenuToggle}
           sx={_style.barMenuButton}
         >
-          <ExpandLessIcon />
+          <MoreVertIcon sx={{ fontSize: 'xl' }} />
         </IconButton>
       )}
 
     </Box>
 
 
-    {/* Image Viewer Modal - when opening attachment images */}
-    {!!viewerImageRefPart && props.renderImageViewer?.(viewerImageRefPart, handleCloseImageViewer)}
-
-    {/* Text Viewer Modal */}
-    {!!viewerDocPart && props.renderDocViewer?.(viewerDocPart, handleCloseDocPartViewer)}
+    {/* Viewers */}
+    {!!viewerImageRefPart && <ViewImageRefPartModal imageRefPart={viewerImageRefPart} onClose={handleCloseImageViewer} />}
+    {!!viewerDocPart && <ViewDocPartModal docPart={viewerDocPart} onClose={handleCloseDocPartViewer} />}
 
 
     {/* Single Attachment Draft Menu */}
@@ -224,8 +226,8 @@ export function AttachmentDraftsList(props: {
         isPositionLast={itemMenuIndex === attachmentDrafts.length - 1}
         onClose={handleDraftMenuHide}
         onDraftAction={!onAttachmentDraftsAction ? undefined : handleDraftAction}
-        onViewDocPart={!props.renderDocViewer ? undefined : handleViewDocPart}
-        onViewImageRefPart={!props.renderImageViewer ? undefined : handleViewImageRefPart}
+        onViewDocPart={setViewerDocPart}
+        onViewImageRefPart={setViewerImageRefPart}
       />
     )}
 
@@ -235,26 +237,30 @@ export function AttachmentDraftsList(props: {
       <CloseablePopup
         menu anchorEl={overallMenuAnchor} onClose={handleOverallMenuHide}
         dense
-        minWidth={200}
-        placement='top-start'
+        placement='top-end'
+        placementOffset={[16, -5]}
+        darkenBackdrop={isMobile}
+        maxHeightGapPx={32}
+        sx={{ ...(isMobile ? richMenuCompactSx : richMenuSx()), minWidth: 240, maxWidth: 'calc(100vw - 16px)', overflowY: 'auto' }}
       >
+
         {/* Slot: extra overall menu items (e.g. "What can I do?") */}
         {props.renderOverallMenuExtra?.()}
 
-        {!!onAttachmentDraftsAction && <MenuItem onClick={handleOverallInlineText} disabled={!canInlineSomeFragments}>
+        {hasAttachments && !!onAttachmentDraftsAction && <MenuItem onClick={handleOverallInlineText} disabled={!canInlineSomeFragments}>
           <ListItemDecorator><VerticalAlignBottomIcon /></ListItemDecorator>
           Inline all text
         </MenuItem>}
-        {!!onAttachmentDraftsAction && <MenuItem onClick={handleOverallCopyText} disabled={!canInlineSomeFragments}>
+        {hasAttachments && !!onAttachmentDraftsAction && <MenuItem onClick={handleOverallCopyText} disabled={!canInlineSomeFragments}>
           <ListItemDecorator><ContentCopyIcon /></ListItemDecorator>
           Copy all text
         </MenuItem>}
-        {!!onAttachmentDraftsAction && <ListDivider />}
+        {hasAttachments && !!onAttachmentDraftsAction && <ListDivider />}
 
-        <MenuItem onClick={handleOverallClear}>
+        {hasAttachments && <MenuItem onClick={handleOverallClear}>
           <ListItemDecorator><ClearIcon /></ListItemDecorator>
           Remove All{attachmentDrafts.length > 5 ? <span style={{ opacity: 0.5 }}> {attachmentDrafts.length} attachments</span> : null}
-        </MenuItem>
+        </MenuItem>}
       </CloseablePopup>
     )}
 

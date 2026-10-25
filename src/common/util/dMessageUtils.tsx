@@ -12,13 +12,16 @@ import VisibilityOffOutlinedIcon from '@mui/icons-material/VisibilityOffOutlined
 import { SystemPurposeId, SystemPurposes } from '../../data';
 
 import { llmsGetVendorIcon } from '~/modules/llms/components/LLMVendorIcon';
+import { t2iIsPainterName } from '~/modules/t2i/t2i.config';
 
 import type { MetricsChatGenerateCost_Md } from '~/common/stores/metrics/metrics.chatgenerate';
 import type { DMessage, DMessageGenerator, DMessageRole } from '~/common/stores/chat/chat.message';
+import { messageOutcomeLabel } from '~/common/stores/chat/chat.message.outcome';
 import type { UIComplexityMode } from '~/common/app.theme';
 import { PhPaintBrush } from '~/common/components/icons/phosphor/PhPaintBrush';
 import { animationColorRainbow } from '~/common/util/animUtils';
 import { formatModelsCost } from '~/common/util/costUtils';
+import { prettyDuration } from './timeUtils';
 
 
 // configuration
@@ -28,10 +31,11 @@ const ANIM_BUSY_PAINTING = 'https://i.giphy.com/media/5t9ujj9cMisyVjUZ0m/giphy.w
 const ANIM_BUSY_THINKING = 'https://i.giphy.com/media/l44QzsOLXxcrigdgI/giphy.webp';
 
 
+// Set --AGI-Avatar-size on a parent to override (defaults to 36px)
 export const avatarIconSx = {
   borderRadius: 'sm',
-  height: 36,
-  width: 36,
+  height: 'var(--AGI-Avatar-size, 36px)',
+  width: 'var(--AGI-Avatar-size, 36px)',
 } as const;
 
 // const largerAvatarIconsSx = {
@@ -41,8 +45,8 @@ export const avatarIconSx = {
 // };
 
 const aixSkipBoxSx = {
-  height: 36,
-  width: 36,
+  height: 'var(--AGI-Avatar-size, 36px)',
+  width: 'var(--AGI-Avatar-size, 36px)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -70,7 +74,13 @@ const tooltipCreationTimeSx: SxProps = {
   color: 'text.tertiary',
 };
 
-const tooltipMetricsGridSx: SxProps = {
+function _isToday(timestamp: number): boolean {
+  const now = new Date();
+  const date = new Date(timestamp);
+  return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+}
+
+export const tooltipMetricsGridSx: SxProps = {
   // grid of 2 columns, the first fits the labels, the other expends with the values
   display: 'grid',
   gridTemplateColumns: 'auto 1fr',
@@ -79,15 +89,15 @@ const tooltipMetricsGridSx: SxProps = {
 };
 
 
-/** Whole message background color, based on the message role and state */
-export function messageBackground(messageRole: DMessageRole | string, userCommand: 'draw' | 'react' | false, wasEdited: boolean, isAssistantIssue: boolean): string {
+/** Whole message background color, based on the message role and state. assistantColor: the outcome's palette key (messageOutcomeColor), undefined for none */
+export function messageBackground(messageRole: DMessageRole | string, userCommand: 'draw' | 'react' | false, wasEdited: boolean, assistantColor: 'danger' | 'warning' | 'neutral' | undefined): string {
   switch (messageRole) {
     case 'user':
       return userCommand === 'draw' ? 'warning.softActiveBg'
         : userCommand === 'react' ? 'success.softHoverBg'
           : 'primary.plainHoverBg'; // was .background.level1
     case 'assistant':
-      return isAssistantIssue ? 'danger.softBg' : 'background.surface';
+      return assistantColor ? `${assistantColor}.softBg` : 'background.surface';
     case 'system':
       return wasEdited ? 'warning.softHoverBg' : 'neutral.softBg';
     default:
@@ -130,10 +140,7 @@ export function makeMessageAvatarIcon(
 
     case 'assistant':
       const isDownload = messageGeneratorName === 'web';
-      const isTextToImage =
-        messageGeneratorName?.startsWith('GPT Image') // sync this with t2i.client.ts
-        || messageGeneratorName?.startsWith('DALL·E')
-        || messageGeneratorName === 'Prodia';
+      const isTextToImage = t2iIsPainterName(messageGeneratorName);
       const isReact = messageGeneratorName?.startsWith('react-');
 
       // Extra appearance
@@ -181,8 +188,8 @@ export function makeMessageAvatarIcon(
           fontSize: '24px',
           textAlign: 'center',
           width: '100%',
-          minWidth: `${avatarIconSx.width}px`,
-          lineHeight: `${avatarIconSx.height}px`,
+          minWidth: 'var(--AGI-Avatar-size, 36px)',
+          lineHeight: 'var(--AGI-Avatar-size, 36px)',
         }}>
           {symbol}
         </Box>;
@@ -205,11 +212,14 @@ export function useMessageAvatarLabel(
 
   // OPTIMIZATION - THIS COULD BACKFIRE - THE ICON MAY NOT BE UPDATED AS OFTEN AS WE NEED
   // -> we will only trigger updates on: updated, pendingIncomplete changes, name changes
-  // generator will change at every step (due to some structuredClone in AIX); we choose to 'lag' behind it and
+  // generator ref changes during streaming (new ref per update); we 'lag' behind it and
   // refresh this when other variables change
   const laggedGeneratorRef = React.useRef<DMessageGenerator | undefined>(undefined);
   laggedGeneratorRef.current = generator;
   const generatorName = generator?.name ?? '';
+  // metrics ref changes only when token counts update (not every streaming tick), so depending on it
+  // recomputes the memo when preliminary metrics arrive - without losing the per-update lag optimization
+  const generatorMetrics = generator?.metrics;
 
   return React.useMemo(() => {
     if (created === undefined) {
@@ -226,17 +236,20 @@ export function useMessageAvatarLabel(
       };
     }
 
-    // incomplete: just the name
+    // incomplete: name + the "Thinking..." indicator, plus any preliminary metrics that already arrived (e.g. input tokens)
     const prettyName = prettyShortChatModelName(generatorName);
-    if (pendingIncomplete)
+    if (pendingIncomplete) {
+      const liveMetrics = generatorMetrics ? prettyMessageMetrics(generatorMetrics, complexity) : null;
       return {
         label: prettyName,
         tooltip: (!created || complexity === 'minimal') ? null : (
           <Box sx={tooltipSx}>
-            <TimeAgo date={created} formatter={(value: number, unit: string, _suffix: string) => `Thinking for ${value} ${unit}${value > 1 ? 's' : ''}...`} />
+            <TimeAgo date={created} formatter={(value: number, unit: string, _suffix: string) => !value ? 'Thinking...' : `Thinking for ${value} ${unit}${value > 1 ? 's' : ''}...`} />
+            {liveMetrics}
           </Box>
         ),
       };
+    }
 
     // named generator: nothing else to do there
     if (generator.mgt === 'named')
@@ -249,12 +262,21 @@ export function useMessageAvatarLabel(
     const modelId = generator.aix?.mId ?? null;
     const vendorId = generator.aix?.vId ?? null;
     const VendorIcon = (vendorId && complexity !== 'minimal') ? llmsGetVendorIcon(vendorId) : null;
-    const metrics = generator.metrics ? _prettyMetrics(generator.metrics, complexity) : null;
-    const stopReason = generator.tokenStopReason ? _prettyTokenStopReason(generator.tokenStopReason, complexity) : null;
+    const metrics = generator.metrics ? prettyMessageMetrics(generator.metrics, complexity) : null;
+    const stopReason = generator.tokenStopReason ? prettyTokenStopReason(generator.tokenStopReason, complexity) : null;
+
+    // aix label: in Extra mode, the routed infra provider (e.g. OpenRouter routing) shows inline - it explains
+    // per-message cost/speed variance without opening the tooltip
+    const infraLabel = complexity === 'extra' ? generator.providerInfraLabel : undefined;
+    const showStopReason = !!stopReason && complexity !== 'minimal';
 
     // aix tooltip: more details
     return {
-      label: (stopReason && complexity !== 'minimal') ? <>{prettyName} <small>({stopReason})</small></> : prettyName,
+      label: (infraLabel || showStopReason) ? <>
+        {prettyName}
+        {infraLabel && <> <small>· via {infraLabel}</small></>}
+        {showStopReason && <> <small>({stopReason})</small></>}
+      </> : prettyName,
       tooltip: complexity === 'minimal' ? null : (
         <Box sx={tooltipSx}>
           {VendorIcon ? <Box sx={tooltipIconContainerSx}><VendorIcon />{generator.name}</Box> : <div>{generator.name}</div>}
@@ -262,21 +284,42 @@ export function useMessageAvatarLabel(
           {(modelId && complexity === 'extra') && <div>{modelId}</div>}
           {metrics && <div>{metrics}</div>}
           {stopReason && <div>{stopReason}</div>}
-          {complexity === 'extra' && !!created && <Box sx={tooltipCreationTimeSx}>{updated ? 'Updated' : 'Created'} <TimeAgo date={updated || created} />.</Box>}
+          {!!created && <Box sx={tooltipCreationTimeSx}>
+            {(updated && updated !== created) ? 'Updated' : 'Created'}{' '}
+            {_isToday(updated || created) ? <TimeAgo date={updated || created} /> : new Date(updated || created).toLocaleString()}
+          </Box>}
         </Box>
       ),
     };
-  }, [complexity, created, generatorName, pendingIncomplete, updated]);
+  }, [complexity, created, generatorMetrics, generatorName, pendingIncomplete, updated]);
 }
 
-function _prettyMetrics(metrics: DMessageGenerator['metrics'], uiComplexityMode: UIComplexityMode): React.ReactNode {
+/** Renders chat generation metrics as a grid. Exported for reuse in message info popup. */
+export function prettyMessageMetrics(metrics: DMessageGenerator['metrics'], uiComplexityMode: UIComplexityMode): React.ReactNode {
   if (!metrics) return null;
 
   const showWaitingTime = metrics?.dtStart !== undefined && (uiComplexityMode === 'extra' || metrics.dtStart >= 10000);
-  const showSpeedSection = uiComplexityMode !== 'minimal' && (showWaitingTime || metrics?.vTOutInner !== undefined);
-  const showTimeSection = showSpeedSection && !!metrics?.dtAll;
+  // no first-token mark (non-streaming): the end-to-end rate stands in, labeled
+  const vTOutOverall = (metrics.vTOutInner === undefined && metrics.dtStart === undefined && metrics.TOut && metrics.dtAll)
+    ? metrics.TOut / (metrics.dtAll / 1000) : undefined;
+  const showSpeedSection = showWaitingTime || metrics?.vTOutInner !== undefined || vTOutOverall !== undefined;
+  const showTimeSection = !!metrics?.dtAll;
+  // stopped or failed: no vendor-terminated stream, so no dtAll; the client wall clock stands in, labeled
+  const showWallTime = !showTimeSection && metrics?.TsR === 'aborted' && !!metrics?.dtWall;
 
-  const costCode = metrics.$code ? _prettyCostCode(metrics.$code) : null;
+  // the provider-reported (billed) cost is the headline when present; the price-table estimate demotes to a footnote
+  const $cHeadline = metrics.$cReported ?? metrics.$c;
+  const $cEstimated = (metrics.$cReported !== undefined && metrics.$c !== undefined) ? metrics.$c : undefined;
+  const costCode = metrics.$code ? _prettyCostCode(metrics.$code, $cHeadline !== undefined) : null;
+  // cost by class, when cache or tools are in play
+  const showCostByClass = metrics.$cCacheR !== undefined || metrics.$cCacheW !== undefined || metrics.$cTools !== undefined;
+  // hosted tool calls: counts on their own row; priced only where the vendor bills per call (searches)
+  const toolCountsAll: [count: number | undefined, one: string, many: string][] = [
+    [metrics.nWebSearch, 'search', 'searches'],
+    [metrics.nWebFetch, 'fetch', 'fetches'],
+    [metrics.nCodeExec, 'code execution', 'code executions'],
+  ];
+  const toolCounts = toolCountsAll.filter((t): t is [number, string, string] => !!t[0]);
 
   return <Box sx={tooltipMetricsGridSx}>
 
@@ -291,70 +334,92 @@ function _prettyMetrics(metrics: DMessageGenerator['metrics'], uiComplexityMode:
       {/*{metrics.TOutA !== undefined && <> (<b>{metrics.TOutA?.toLocaleString() || ''}</b> for audio)</>}*/}
     </div>}
 
+    {/* Tools */}
+    {toolCounts.length > 0 && <div>Tools:</div>}
+    {toolCounts.length > 0 && <div>
+      {' '}{toolCounts.map(([n, one, many], i) => <React.Fragment key={one}>{i > 0 && ' · '}<b>{n.toLocaleString()}</b> {n === 1 ? one : many}</React.Fragment>)}
+    </div>}
+
     {/* Timings */}
     {showSpeedSection && <div>Speed:</div>}
     {showSpeedSection && <div>
       {!!metrics.vTOutInner && <>~<b>{(Math.round(metrics.vTOutInner * 10) / 10).toLocaleString() || ''}</b> tok/s</>}
+      {/* non-streaming: TOut / dtAll, mutually exclusive with vTOutInner and the wait */}
+      {vTOutOverall !== undefined && <>~<b>{(Math.round(vTOutOverall * 10) / 10).toLocaleString()}</b> tok/s <span style={{ opacity: 0.5 }}>overall</span></>}
       {showWaitingTime && (<span style={{ opacity: 0.5 }}>
         {metrics.vTOutInner !== undefined && ' · '}
-        <span>{(Math.round(metrics.dtStart! / 100) / 10).toLocaleString() || ''}</span>s wait
+        <span>{prettyDuration(metrics.dtStart!, true)}</span> wait
       </span>)}
     </div>}
 
     {/* Costs */}
-    {metrics?.$c !== undefined && <div>Costs:</div>}
-    {metrics?.$c !== undefined && <div>
-      <b>{formatModelsCost(metrics.$c / 100)}</b>
+    {$cHeadline !== undefined && <div>Costs:</div>}
+    {$cHeadline !== undefined && <div>
+      <b>{formatModelsCost($cHeadline / 100)}</b>
       {metrics.$cdCache !== undefined && <>
         {' '}<small>(
         {metrics.$cdCache > 0
           ? <>cache savings: <b>{formatModelsCost(metrics.$cdCache / 100)}</b></>
-          : <>cache costs: <b>{formatModelsCost(-metrics.$cdCache / 100)}</b></>
+          : <>cache surcharge: <b>{formatModelsCost(-metrics.$cdCache / 100)}</b></>
         })</small>
       </>}
+      {metrics.$xPrice !== undefined && metrics.$xPrice !== 1 && <>{' '}<small>at <b>{metrics.$xPrice}x</b> tier</small></>}
     </div>}
-    {/* Add the 'reported' costs underneath, if defined */}
-    {metrics?.$cReported !== undefined && <div>{metrics?.$c !== undefined ? '' : 'Costs:'}</div>}
-    {metrics?.$cReported !== undefined && <div>
-      <small>reported: <b>{formatModelsCost(metrics.$cReported / 100)}</b></small>
+    {showCostByClass && <div></div>}
+    {showCostByClass && <div>
+      <small>
+        {metrics.$cIn !== undefined && <>in {formatModelsCost(metrics.$cIn / 100)}</>}
+        {metrics.$cCacheR !== undefined && <>{' · '}read {formatModelsCost(metrics.$cCacheR / 100)}</>}
+        {metrics.$cCacheW !== undefined && <>{' · '}wrote {formatModelsCost(metrics.$cCacheW / 100)}</>}
+        {metrics.$cOut !== undefined && <>{' · '}out {formatModelsCost(metrics.$cOut / 100)}</>}
+        {metrics.$cTools !== undefined && <>{' · '}tools {formatModelsCost(metrics.$cTools / 100)}</>}
+      </small>
+    </div>}
+    {/* Add the local price-table estimate underneath, when the headline is the billed cost */}
+    {$cEstimated !== undefined && <div></div>}
+    {$cEstimated !== undefined && <div>
+      <small>estimated: {formatModelsCost($cEstimated / 100)}</small>
     </div>}
     {/* Add the cost 'code' underneath, if any */}
-    {costCode && <div>{(metrics?.$c !== undefined || metrics?.$cReported !== undefined) ? '' : 'Costs:'}</div>}
+    {costCode && <div>{$cHeadline !== undefined ? '' : 'Costs:'}</div>}
     {costCode && <div><em>{costCode}</em></div>}
 
     {/* Time */}
     {showTimeSection && <div>Time:</div>}
-    {showTimeSection && <div><b>{(Math.round(metrics.dtAll! / 100) / 10).toLocaleString()}</b> s</div>}
+    {showWallTime && <div>Wall time:</div>}
+    {showTimeSection && <div><b>{prettyDuration(metrics.dtAll!, true)}</b></div>}
+    {showWallTime && <div><b>{prettyDuration(metrics.dtWall!, true)}</b> <span style={{ opacity: 0.5 }}>until stop</span></div>}
   </Box>;
 }
 
-function _prettyCostCode(code: MetricsChatGenerateCost_Md['$code']): string | null {
+function _prettyCostCode(code: MetricsChatGenerateCost_Md['$code'], hasCost: boolean): string | null {
   if (!code) return null;
   switch (code) {
     case 'free':
       return 'Free';
     case 'no-tokens':
-      return 'Missing tokens for pricing';
+      return 'Usage not reported by the provider';
     case 'no-pricing':
       return 'Model pricing not available';
     case 'partial-msg':
-      return 'Incomplete Message - Partial Cost';
+      // stopped or failed: some vendors report usage only at the end, so there may be no cost to show
+      return hasCost ? 'Incomplete Message - Partial Cost' : 'Ended before usage was reported';
     case 'partial-price':
       return 'Model pricing is incomplete';
   }
 }
 
-function _prettyTokenStopReason(reason: DMessageGenerator['tokenStopReason'], complexity: UIComplexityMode): string | null {
+export function prettyTokenStopReason(reason: DMessageGenerator['tokenStopReason'], complexity: UIComplexityMode): string | null {
   if (!reason) return null;
   switch (reason) {
     case 'client-abort':
-      return complexity !== 'minimal' ? 'Stopped' : '';
+      return complexity !== 'minimal' ? messageOutcomeLabel.aborted : '';
     case 'filter':
       return 'Filtered';
     case 'issue':
       return complexity === 'extra' ? 'Error' : '';
     case 'out-of-tokens':
-      return 'Out of Tokens';
+      return messageOutcomeLabel.truncated;
     default:
       const _exhaustiveCheck: never = reason;
       return null;
@@ -362,8 +427,8 @@ function _prettyTokenStopReason(reason: DMessageGenerator['tokenStopReason'], co
 }
 
 
-const oaiORegex = /gpt-[345](?:o|\.\d+)?-|o[1345]-|osb-|chatgpt-[45]o?|gpt-5-chat|computer-use-/;
-const geminiRegex = /gemini-|gemma-|learnlm-/;
+const oaiORegex = /gpt-[3-6](?:o|\.\d+)?-|o[1345]-|osb-|chatgpt-[45]o?|gpt-5-chat|computer-use-/;
+const geminiRegex = /gemini-|gemma-|learnlm-|deep-research-|antigravity-|nano-banana-/;
 
 
 /** Pretty name for a chat model ID - VERY HARDCODED - shall use the Avatar Label-style code instead */
@@ -371,6 +436,19 @@ export function prettyShortChatModelName(model: string | undefined): string {
   if (!model) return '';
 
   // TODO: fully reform this function to be using information from the DLLM, rather than this manual mapping
+
+  // Variant ids ('base::variant', see LLMS_VARIANT_SEPARATOR) - any vendor: prettify the base alone, then re-append the variant
+  const variantIndex = model.indexOf('::');
+  if (variantIndex !== -1) {
+    // const variant = model.slice(variantIndex + 2);
+    return prettyShortChatModelName(model.slice(0, variantIndex));
+    // we decide to not show the variantm, since the model will be overwritten by the real returned model anyways, and so we skip it for this first second..
+    // + (' ' + variant.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' '));
+  }
+
+  // [Gemini / Google] short-circuit canonical 'models/' prefix before OpenAI regex, to avoid substring collisions (e.g. '-computer-use-' in 'models/gemini-2.5-computer-use-...')
+  if (model.startsWith('models/'))
+    return _prettyGeminiModelName(model.slice(7));
 
   // [OpenAI]
   let prefixIndex = model.search(oaiORegex);
@@ -390,11 +468,17 @@ export function prettyShortChatModelName(model: string | undefined): string {
       .replace('-realtime', ' Realtime')
       .replace('-search-preview', ' Search')
       .replace('-search', ' Search')
+      .replace('-deep-research', ' Deep Research')
       .replace('-tts', ' TTS')
       .replace('-turbo', ' Turbo')
       // price variants
       .replace('-pro', ' Pro')
       .replace('-preview', ' (preview)')
+      // GPT-5.6+ capability tiers
+      .replace('-astra', ' Astra')
+      .replace('-sol', ' Sol')
+      .replace('-terra', ' Terra')
+      .replace('-luna', ' Luna')
       // .replace('-latest', ' latest') // covered by catch-all
       // size (covered by catch-all)
       // .replace('-mini', ' mini')
@@ -419,41 +503,10 @@ export function prettyShortChatModelName(model: string | undefined): string {
   // [Anthropic]
   const prettyAnthropic = _prettyAnthropicModelName(model);
   if (prettyAnthropic) return prettyAnthropic;
-  // [Gemini]
+  // [Gemini / Google] fallback regex path (e.g. openrouter 'google/gemini-...' form); canonical 'models/' path is handled earlier
   prefixIndex = model.search(geminiRegex);
-  if (prefixIndex !== -1) {
-    let cutModel = prefixIndex === -1 ? model : model.slice(prefixIndex);
-    // Check for -NN-NN at the end (e.g., -05-15)
-    let datePattern = '';
-    const dateMatch = cutModel.match(/-(\d{2}-\d{2})$/);
-    if (dateMatch) {
-      datePattern = ' ' + dateMatch[1]; // extract '05-15'
-      cutModel = cutModel.slice(0, cutModel.length - dateMatch[0].length); // remove '-05-15'
-    }
-    const geminiName = cutModel
-      // commercial aliases
-      .replace('gemini-3-pro-image', 'Nano Banana Pro')
-      .replace('gemini-2.5-flash-image', 'Nano Banana')
-      // root changes
-      .replace('non-thinking', '') // NOTE: this is our variant, injected in gemini.models.ts
-      .replaceAll('-', ' ')
-      // products
-      .replace('gemini', 'Gemini')
-      .replace('gemma', 'Gemma')
-      .replace('learnlm', 'LearnLM')
-      // price variants
-      .replace('pro', 'Pro')
-      .replace('flash', 'Flash')
-      // feature variants
-      .replace('robotics er', 'Robotics')
-      .replace('generation', 'Gen')
-      .replace('image', 'Image')
-      .replace('thinking', 'Thinking')
-      .replace('preview', '')
-      .replace('experimental', 'exp')
-      .replace('exp', '(exp)');
-    return geminiName + datePattern;
-  }
+  if (prefixIndex !== -1)
+    return _prettyGeminiModelName(model.slice(prefixIndex));
   // [Deepseek]
   if (model.includes('deepseek-')) {
     // start past the last /, if any
@@ -485,7 +538,7 @@ export function prettyShortChatModelName(model: string | undefined): string {
   }
   // [xAI]
   if (model.includes('grok-')) {
-    if (['grok-code', 'grok-4', 'grok-3', 'grok-2'].some(m => model.includes(m))) {
+    if (['grok-code', 'grok-build', 'grok-4', 'grok-3', 'grok-2'].some(m => model.includes(m))) {
       return model
         .replace('xai-', '')
         .replace('-beta', '')
@@ -495,9 +548,18 @@ export function prettyShortChatModelName(model: string | undefined): string {
     if (model.includes('grok-beta')) return 'Grok Beta';
     if (model.includes('grok-vision-beta')) return 'Grok Vision Beta';
   }
-  // [Z.ai]
-  if (model.startsWith('glm-')) {
+  // [OpenAI OSS] gpt-oss family (shared across Cerebras/Groq/etc.) - the OpenAI regex above only matches gpt-[3-6]
+  if (model.includes('gpt-oss')) {
+    return model.slice(model.indexOf('gpt-oss'))
+      .replace('gpt-oss', 'GPT OSS')
+      .replace('-safeguard', ' Safeguard')
+      .replaceAll('-', ' ')
+      .replace(/(\d+)b\b/i, '$1B'); // '120b' -> '120B'
+  }
+  // [Z.ai] GLM family - also handles the 'zai-glm-...' ids exposed by Cerebras
+  if (model.startsWith('glm-') || model.startsWith('zai-glm-')) {
     return model
+      .replace('zai-', '')
       .replace('glm-', 'GLM-')
       .replace('ocr', 'OCR')
       .replace(/(\d)v/, '$1 V')   // vision suffix: 4.6v → 4.6 V
@@ -509,6 +571,37 @@ export function prettyShortChatModelName(model: string | undefined): string {
       .replace(/-x$/, ' X')
       .replace(/-32b.*$/, ' 32B');
   }
+  // [Cohere] Command / Aya / North families - guarded on Cohere-exclusive shapes (command-a/-r, not bare 'command-'
+  // which is a generic word; c4ai/aya/north-mini/tiny-aya are Cohere-only) + the 'cohere/' aggregator form.
+  if (model.startsWith('command-a') || model.startsWith('command-r') || model.startsWith('c4ai-') || model.startsWith('north-mini') || model.startsWith('tiny-aya') || model.startsWith('cohere/') || model.startsWith('cohere-')) {
+    return model
+      .replace(/^cohere[/-]/, '')                // strip aggregator prefix (e.g. openrouter 'cohere/...')
+      .replace(/-\d{2}-20\d{2}$/, '')            // strip -MM-YYYY snapshot date (e.g. -05-2026)
+      .replace('north-mini-code-1-0', 'North Mini Code')
+      .replace('c4ai-', '')                      // Aya research prefix
+      .replace('command-r-plus', 'Command R+')
+      .replace('command-r7b', 'Command R7B')
+      .replace('command-a', 'Command A')
+      .replace('command-r', 'Command R')
+      .replace('aya-expanse', 'Aya Expanse')
+      .replace('aya-vision', 'Aya Vision')
+      .replace('tiny-aya', 'Tiny Aya')
+      .replace(/\b(\d+)b\b/i, '$1B')             // 32b -> 32B
+      .split('-').map(s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s).join(' ')
+      .trim();
+  }
+  // [Sakana.ai] fugu, fugu-ultra, fugu-ultra-v2.0 / -20260615, fugu-max-v1.0 (service prefix already stripped by the auto-label heuristic)
+  if (model === 'fugu' || model.startsWith('fugu-')) {
+    return model
+      .replace(/-20\d{6}$/, '') // strip dated snapshot suffix (e.g. -20260615)
+      .split('-').map(s => /^v\d/.test(s) ? s : s.charAt(0).toUpperCase() + s.slice(1)).join(' '); // keep version tokens as-is (v1.1, not V1.1)
+  }
+  // [Meta AI] muse-spark-1.3, muse-spark-1.3-contributor, muse-image-1.0 (service prefix already stripped by the auto-label heuristic)
+  if (model.startsWith('muse-')) {
+    return model
+      .replace(/-contributor$/, ' (Contributor)')
+      .split('-').map(s => /^\d/.test(s) ? s : s.charAt(0).toUpperCase() + s.slice(1)).join(' '); // keep version tokens as-is (1.3)
+  }
   // [FireworksAI]
   if (model.includes('accounts/')) {
     const index = model.indexOf('accounts/');
@@ -518,35 +611,71 @@ export function prettyShortChatModelName(model: string | undefined): string {
   return model;
 }
 
-function _prettyAnthropicModelName(modelId: string): string | null {
-  if (modelId.indexOf('claude-') === -1) return null; // not a Claude model
-
-  // must match any known prefix
-  let claudeIndex = -1;
-  const claudePrefixes = ['claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4', 'claude-3', 'claude-2'];
-  for (const prefix of claudePrefixes) {
-    const index = modelId.indexOf(prefix);
-    if (index !== -1) {
-      claudeIndex = index;
-      break;
+function _prettyGeminiModelName(cutModel: string): string {
+  // strip stable numeric revision suffix: '-001', '-002', ...
+  cutModel = cutModel.replace(/-00\d$/, '');
+  // date suffix: try '-MM-YYYY$' first (e.g. '-04-2026' -> '(2026-04)'), then '-MM-YY$' (e.g. '-05-15' -> '05-15')
+  let datePattern = '';
+  const longDateMatch = cutModel.match(/-(\d{2})-(\d{4})$/);
+  if (longDateMatch) {
+    datePattern = ` (${longDateMatch[2]}-${longDateMatch[1]})`;
+    cutModel = cutModel.slice(0, -longDateMatch[0].length);
+  } else {
+    const shortDateMatch = cutModel.match(/-(\d{2}-\d{2})$/);
+    if (shortDateMatch) {
+      datePattern = ' ' + shortDateMatch[1];
+      cutModel = cutModel.slice(0, -shortDateMatch[0].length);
     }
   }
+  const geminiName = cutModel
+    // commercial aliases (applied before separator normalization)
+    .replace('gemini-3-pro-image', 'Nano Banana Pro')
+    .replace('gemini-2.5-flash-image', 'Nano Banana')
+    // root changes
+    .replace('non-thinking', '') // NOTE: this is our variant, injected in gemini.models.ts
+    .replaceAll('-', ' ')
+    // products
+    .replace('gemini', 'Gemini')
+    .replace('gemma', 'Gemma')
+    .replace('learnlm', 'LearnLM')
+    .replace('deep research', 'Deep Research')
+    .replace('antigravity', 'Antigravity')
+    .replace('nano banana', 'Nano Banana')
+    // size/price variants
+    .replace('pro', 'Pro')
+    .replace('flash', 'Flash')
+    .replace('max', 'Max')
+    .replace('lite', 'Lite')
+    .replace('argon', 'Argon') // Gemini 4 tier name
+    .replace(/(\d)b\b/g, '$1B') // size token: '31b' -> '31B' (e.g. Gemma 4 31B)
+    // feature variants
+    .replace('robotics er', 'Robotics')
+    .replace('computer use', 'Computer Use')
+    .replace('generation', 'Gen')
+    .replace('image', 'Image')
+    .replace('tts', 'TTS')
+    .replace('thinking', 'Thinking')
+    .replace('preview', '')
+    .replace('experimental', 'exp')
+    .replace('exp', '(exp)')
+    // collapse extra whitespace left by removals
+    .replace(/\s+/g, ' ')
+    .trim();
+  return geminiName + datePattern;
+}
 
-  const subStr = modelId.slice(claudeIndex);
-  const version =
-    subStr.includes('-4-6') ? '4.6'
-      : subStr.includes('-4-5') ? '4.5' // fixes the -5
-        : subStr.includes('-3-5') ? '3.5' // fixes the -5
-          : subStr.includes('-5') ? '5'
-            : subStr.includes('-4-1') ? '4.1'
-              : subStr.includes('-4') ? '4'
-                : subStr.includes('-3-7') ? '3.7'
-                  : subStr.includes('-3') ? '3'
-                    : '?';
+function _prettyAnthropicModelName(modelId: string): string | null {
+  if (!modelId.includes('claude-')) return null;
 
-  if (subStr.includes(`-opus`)) return `Claude Opus ${version}`;
-  if (subStr.includes(`-sonnet`)) return `Claude Sonnet ${version}`;
-  if (subStr.includes(`-haiku`)) return `Claude Haiku ${version}`;
+  // extract version as N.M (e.g. `-4-7` -> 4.7, `-4-` -> 4); `[-.]` also reads OpenRouter's dotted ids (`-5.1`); (?!\d) guards against date digits
+  const m = modelId.match(/-(\d)(?:[-.](\d)(?!\d))?/);
+  const version = m ? (m[2] ? `${m[1]}.${m[2]}` : m[1]) : '?';
+
+  if (modelId.includes('-fable')) return `Claude Fable ${version}`;
+  if (modelId.includes('-mythos')) return modelId.includes('-preview') ? 'Claude Mythos Preview' : `Claude Mythos ${version}`;
+  if (modelId.includes('-opus')) return `Claude Opus ${version}`;
+  if (modelId.includes('-sonnet')) return `Claude Sonnet ${version}`;
+  if (modelId.includes('-haiku')) return `Claude Haiku ${version}`;
 
   return `Claude ${version}`;
 }

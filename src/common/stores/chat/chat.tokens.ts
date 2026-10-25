@@ -6,7 +6,7 @@ import { imageTokensForLLM } from '~/common/tokens/tokens.image';
 import { textTokensForLLM } from '~/common/tokens/tokens.text';
 
 import type { DMessageRole } from './chat.message';
-import { DMessageAttachmentFragment, DMessageFragment, isAttachmentFragment, isContentFragment, isContentOrAttachmentFragment, isDocPart, isVoidFragment } from './chat.fragments';
+import { DMessageAttachmentFragment, DMessageFragment, hostedResourceMutedText, isAttachmentFragment, isContentFragment, isContentOrAttachmentFragment, isDocPart, isVoidFragment } from './chat.fragments';
 
 
 export function estimateTokensForFragments(llm: DLLM, role: DMessageRole, fragments: DMessageFragment[], addTopGlue: boolean, debugFrom: string) {
@@ -89,6 +89,12 @@ function _fragmentTokens(llm: DLLM, role: DMessageRole, fragment: DMessageFragme
         return estimateImageTokens(forcedSize || cPart.width, forcedSize || cPart.height, debugFrom, llm);
       case 'text':
         return estimateTextTokens(cPart.text, llm, debugFrom);
+      case 'hosted_resource':
+        if (cPart.resource.via === 'url')
+          return cPart.muted
+            ? estimateTextTokens(hostedResourceMutedText(cPart.resource), llm, debugFrom) // muted: only the text stub goes over the wire
+            : 0; // URL-referenced media: tokenized provider-side (duration unknown here) - not estimable
+        break; // warn
       case 'tool_invocation':
       case 'tool_response':
         break; // warn
@@ -96,8 +102,8 @@ function _fragmentTokens(llm: DLLM, role: DMessageRole, fragment: DMessageFragme
         const _exhaustiveCheck: never = cPt;
     }
   } else if (isVoidFragment(fragment)) {
-    // all void fragments are ignored by definition and never sent to the llm
-    // NOTE: make sure you collapse/don't account for the containing message as well, if left empty
+    // Reasoning can be replayed, but this preview does not yet estimate its provider-specific token cost.
+    // Annotations and UI placeholders do not contribute to the prompt.
     return 0;
   }
   console.warn(`[DEV] Unhandled token preview for fragment/part: ${fragment.ft}/${fragment.part?.pt}`);

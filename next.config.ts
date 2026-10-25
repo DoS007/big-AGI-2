@@ -1,36 +1,48 @@
 import type { NextConfig } from 'next';
 import type { WebpackConfigContext } from 'next/dist/server/config-shared';
 import { execSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-// Build information: from CI, or git commit hash
+
+// Log only on the first pass (next build evaluates this module twice: build() setup, then the webpack step)
+process.env.__AGI_CONFIG_PASS = String(Number(process.env.__AGI_CONFIG_PASS || '0') + 1);
+const log = process.env.__AGI_CONFIG_PASS === '1' ? (...args: any[]) => console.log(args.length ? ' 🧠 ' : '', ...args) : () => { };
+
+
+// Require build hash: from CI env, git CLI, or .git metadata (let through in docker builds)
 let buildHash = process.env.NEXT_PUBLIC_BUILD_HASH || process.env.GITHUB_SHA || process.env.VERCEL_GIT_COMMIT_SHA; // Docker or custom, GitHub Actions, Vercel
-try {
-  // fallback to local git commit hash
-  if (!buildHash)
-    buildHash = execSync('git rev-parse --short HEAD').toString().trim();
-} catch {
-  // final fallback
-  buildHash = '2-dev';
-}
+if (!buildHash) try { buildHash = execSync('git rev-parse --short HEAD').toString().trim(); } catch { /* no git binary or no repository - .git metadata read below */ }
+if (!buildHash) try { // git-less checkout read, e.g. `docker build`: the context admits only .git/{HEAD,refs,packed-refs} - see .dockerignore
+  const readGit = (path: string) => readFileSync(new URL(`./.git/${path}`, import.meta.url), 'utf8').trim();
+  const head = readGit('HEAD'), ref = head.startsWith('ref: ') ? head.slice(5) : null; // detached HEAD carries the raw sha
+  buildHash = !ref ? head : (() => { try { return readGit(ref); /* loose ref */ } catch { return readGit('packed-refs').split('\n').find((line) => line.endsWith(' ' + ref))?.split(' ')[0]; /* packed ref */ } })();
+} catch { /* sha-less source (e.g. archive download) - throw below */ }
+if (!buildHash) throw new Error('Big-AGI build: missing build identity. Build from a git checkout, or pass NEXT_PUBLIC_BUILD_HASH (docker: --build-arg NEXT_PUBLIC_BUILD_HASH=..sha..).');
+
 // The following are used by/available to Release.buildInfo(...)
-process.env.NEXT_PUBLIC_BUILD_HASH = (buildHash || '').slice(0, 10);
+process.env.NEXT_PUBLIC_BUILD_HASH = buildHash.slice(0, 10);
 process.env.NEXT_PUBLIC_BUILD_PKGVER = JSON.parse('' + readFileSync(new URL('./package.json', import.meta.url))).version;
 process.env.NEXT_PUBLIC_BUILD_TIMESTAMP = new Date().toISOString();
-process.env.NEXT_PUBLIC_DEPLOYMENT_TYPE = process.env.NEXT_PUBLIC_DEPLOYMENT_TYPE || (process.env.VERCEL_ENV ? `vercel-${process.env.VERCEL_ENV}` : 'local'); // Docker or custom, Vercel
-console.log(` 🧠 \x1b[1mbig-AGI\x1b[0m v${process.env.NEXT_PUBLIC_BUILD_PKGVER} (@${process.env.NEXT_PUBLIC_BUILD_HASH})`);
+process.env.NEXT_PUBLIC_DEPLOYMENT_TYPE ||= (process.env.VERCEL_ENV ? `vercel-${process.env.VERCEL_ENV}` : 'local'); // Docker or custom, Vercel
+log(`\x1b[1mBig-AGI\x1b[0m v${process.env.NEXT_PUBLIC_BUILD_PKGVER} (\x1b[2m@\x1b[0m${process.env.NEXT_PUBLIC_BUILD_HASH}, \x1b[2mN:\x1b[0m${process.env.NODE_ENV}${process.env.VERCEL_ENV ? `, \x1b[2mV:\x1b[0m${process.env.VERCEL_ENV}` : ''})`);
 
-// Non-default build types
+
+// Handle non-default build types
 const buildType =
   process.env.BIG_AGI_BUILD === 'standalone' ? 'standalone' as const
     : process.env.BIG_AGI_BUILD === 'static' ? 'export' as const
       : undefined;
+buildType && log(`🛠 building for ${buildType}...\n`);
 
-buildType && console.log(` 🧠 big-AGI: building for ${buildType}...\n`);
 
 /** @type {import('next').NextConfig} */
 let nextConfig: NextConfig = {
   reactStrictMode: !process.env.NO_STRICT_MODE, // default: enabled
+
+  // build-time lint: default ON (a build is the last gate); NO_LINT_BUILD=1 skips the ~15s
+  // typed pass when CI already ran `npm run lint` as its own step
+  eslint: { ignoreDuringBuilds: !!process.env.NO_LINT_BUILD },
 
   // [exports] https://nextjs.org/docs/advanced-features/static-html-export
   ...(buildType && {
@@ -44,11 +56,16 @@ let nextConfig: NextConfig = {
     // trailingSlash: true,
   }),
 
+  // Allow running builds without racing over .next/ - if set takes precedence over the 'dist' above
+  // However note this will cause issues with "include" in tsconfig.json, which assumes 'dist'
+  ...(process.env.AGI_DIST_DIR && { distDir: process.env.AGI_DIST_DIR }),
+
   // [puppeteer] https://github.com/puppeteer/puppeteer/issues/11052
   // NOTE: we may not be needing this anymore, as we use '@cloudflare/puppeteer'
   serverExternalPackages: ['puppeteer-core'],
 
-  webpack: (config: any, { isServer, webpack /*, dev, nextRuntime*/ }: WebpackConfigContext) => {
+  // WEBPACK ONLY: turbopack skips this hook (client mocks, wasm) - never run --turbopack
+  webpack: (config: any, { isServer, dev, webpack /*, nextRuntime*/ }: WebpackConfigContext) => {
     // @mui/joy: anything material gets redirected to Joy
     config.resolve.alias['@mui/material'] = '@mui/joy';
 
@@ -73,11 +90,22 @@ let nextConfig: NextConfig = {
         ...config.plugins,
         ...serverToClientMocks.map(([pattern, replacement]) =>
           new webpack.NormalModuleReplacementPlugin(pattern, (resource: any) => {
-            // console.log(' 🧠 [WEBPACK REPLACEMENT]:', resource.request, '->', resource.request.replace(pattern, replacement));
+            // log('- WEBPACK CLIENT REPLACEMENT:', resource.request, '->', resource.request.replace(pattern, replacement));
             resource.request = resource.request.replace(pattern, replacement);
           }),
         ),
       ];
+
+      // zustand, `next dev` only: app imports of the package resolve to the app's entry point (trace layer). Builds keep the package.
+      if (dev) {
+        const zustandUtils = fileURLToPath(new URL('./src/common/util/zustandUtils.ts', import.meta.url));
+        config.plugins.push(new webpack.NormalModuleReplacementPlugin(/^zustand(\/vanilla)?$/, (resource: any) => {
+          const issuer: string = resource.contextInfo?.issuer || '';
+          if (!issuer || /[\\/]node_modules[\\/]/.test(issuer) || issuer.endsWith('zustandUtils.ts')) return; // the package's own internals and the entry point keep the package
+          // console.log('- WEBPACK ZUSTAND REDIRECT:', resource.request, 'from', issuer); // console.log, not log(): the helper is silent past the first config pass
+          resource.request = zustandUtils;
+        }));
+      }
 
       // cosmetic: fix warnings for (absent!) top-level awaits in the browser (https://github.com/vercel/next.js/issues/64792)
       config.output.environment = { ...config.output.environment, asyncFunction: true };
@@ -97,22 +125,20 @@ let nextConfig: NextConfig = {
   skipTrailingSlashRedirect: true, // required to support PostHog trailing slash API requests
   async rewrites() {
     return [
-      {
-        source: '/a/ph/static/:path*',
-        destination: 'https://us-assets.i.posthog.com/static/:path*',
-      },
-      {
-        source: '/a/ph/:path*',
-        destination: 'https://us.i.posthog.com/:path*',
-      },
-      {
-        source: '/a/ph/decide',
-        destination: 'https://us.i.posthog.com/decide',
-      },
-      {
-        source: '/a/ph/flags',
-        destination: 'https://us.i.posthog.com/flags',
-      },
+      { source: '/a/ph/static/:path*', destination: 'https://us-assets.i.posthog.com/static/:path*' },
+      { source: '/a/ph/array/:path*', destination: 'https://us-assets.i.posthog.com/array/:path*' },
+      { source: '/a/ph/:path*', destination: 'https://us.i.posthog.com/:path*' },
+      // Dev tools hub: unified index at /dev (static page in /public/dev/index.html)
+      { source: '/dev', destination: '/dev/index.html' },
+      // Inspect: standalone static dev tools under /public/dev/inspect/*.html (clean URLs, no .html)
+      // The (\w+) constraint excludes paths with a dot, so '/dev/inspect/storage.html' is still served directly.
+      { source: '/dev/inspect/:tool(\\w+)', destination: '/dev/inspect/:tool.html' },
+    ];
+  },
+  async redirects() {
+    return [
+      // /preview: 2025 dark-launch marketing page (prod-only [PROD] commit) - Google indexed it, keep the 301 to preserve searchers
+      { source: '/preview', destination: 'https://big-agi.com/', permanent: true },
     ];
   },
 
@@ -129,14 +155,34 @@ let nextConfig: NextConfig = {
   // },
 };
 
+
 // Validate environment variables at build time, if required. Server env vars will be actually read and used at runtime (cloud/edge).
 import { env as validateEnv } from '~/server/env.server';
 void validateEnv; // Triggers env validation - throws if required vars are missing
 
+
+// Stale service workers: a build on another branch line may leave a generated (gitignored)
+// public/sw.js behind, which survives branch switches - and .dockerignore admits public/, so a
+// production build would even ship it. This branch never emits a worker: always delete. Note a
+// 404 at /sw.js does NOT unregister an existing worker (w3c/ServiceWorker#204, wontfix) - only
+// unregister(), a replacement no-op worker at the same URL, or DevTools do.
+['./public/sw.js', './public/sw.js.map'].forEach((f) => rmSync(new URL(f, import.meta.url), { force: true }));
+
+
+// conditionally enable the nextjs bundle analyzer
+// ORDER: before PostHog - withBundleAnalyzer Object.assign's onto the config object, while
+//        withPostHogConfig returns a function-form config; wrapping that would keep only
+//        {webpack} and silently drop the rest of the config
+import withBundleAnalyzer from '@next/bundle-analyzer';
+if (process.env.ANALYZE_BUNDLE) {
+  nextConfig = withBundleAnalyzer({ openAnalyzer: true })(nextConfig) as NextConfig;
+}
+
+
 // PostHog error reporting with source maps for production builds
 import { withPostHogConfig } from '@posthog/nextjs-config';
 if (process.env.POSTHOG_API_KEY && process.env.POSTHOG_ENV_ID) {
-  console.log(' 🧠 \x1b[1mbig-AGI\x1b[0m: building with PostHog issue reporting and source maps...');
+  log('- building with PostHog issue reporting...');
   nextConfig = withPostHogConfig(nextConfig, {
     personalApiKey: process.env.POSTHOG_API_KEY,
     envId: process.env.POSTHOG_ENV_ID,
@@ -151,10 +197,6 @@ if (process.env.POSTHOG_API_KEY && process.env.POSTHOG_ENV_ID) {
   });
 }
 
-// conditionally enable the nextjs bundle analyzer
-import withBundleAnalyzer from '@next/bundle-analyzer';
-if (process.env.ANALYZE_BUNDLE) {
-  nextConfig = withBundleAnalyzer({ openAnalyzer: true })(nextConfig) as NextConfig;
-}
 
+log(); // blank line after the sync part of the config runs
 export default nextConfig;

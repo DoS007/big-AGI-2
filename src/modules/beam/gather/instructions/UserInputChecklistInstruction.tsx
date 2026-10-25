@@ -1,5 +1,7 @@
 import { bareBonesPromptMixer } from '~/modules/persona/pmix/pmix';
 
+import { abortWithReason } from '~/common/util/abortUtils';
+
 import type { BaseInstruction, ExecutionInputState } from './beam.gather.execution';
 import { parseTextToChecklist, UserInputChecklistComponent } from './UserInputChecklistComponent';
 
@@ -61,12 +63,16 @@ export async function executeUserInputChecklistInstruction(
 
     const onCancel = () => {
       clearState();
-      inputs.chainAbortController.abort('User cancelled the input.');
+      abortWithReason(inputs.chainAbortController, 'User cancelled the input.');
       reject();
     };
 
     // Remove the placeholder message
     inputs.updateProgressComponent(null);
+
+    // awaiting the user, not a model: no pending timer, and no body (the checklist below is that text, parsed)
+    delete inputs.intermediateDMessage.pendingIncomplete;
+    inputs.publishIntermediateToOutput(true);
 
     // Update the instruction component to render the checklist
     inputs.updateInstructionComponent(

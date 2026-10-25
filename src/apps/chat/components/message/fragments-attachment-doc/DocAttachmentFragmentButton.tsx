@@ -1,18 +1,21 @@
 import * as React from 'react';
 
 import type { SxProps } from '@mui/joy/styles/types';
-import { Box, Button, ColorPaletteProp } from '@mui/joy';
+import { Box, Button, ColorPaletteProp, IconButton, Tooltip } from '@mui/joy';
 import AbcIcon from '@mui/icons-material/Abc';
 import CodeIcon from '@mui/icons-material/Code';
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditRoundedIcon from '@mui/icons-material/EditRounded';
-import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import TextFieldsIcon from '@mui/icons-material/TextFields';
 import TextureIcon from '@mui/icons-material/Texture';
 
 import { ContentScaling, themeScalingMap } from '~/common/app.theme';
-import { DMessageAttachmentFragment, DMessageFragmentId, DVMimeType, isDocPart } from '~/common/stores/chat/chat.fragments';
+import { attachmentFragmentDocTitle, DMessageAttachmentFragment, DMessageFragmentId, DVMimeType, isDocPart } from '~/common/stores/chat/chat.fragments';
 import { LiveFileIcon } from '~/common/livefile/liveFile.icons';
+import { PhImageSquare } from '~/common/components/icons/phosphor/PhImageSquare';
 import { PhVoice } from '~/common/components/icons/phosphor/PhVoice';
 import { TooltipOutlined } from '~/common/components/TooltipOutlined';
 import { ellipsizeMiddle } from '~/common/util/textUtils';
@@ -48,7 +51,7 @@ export function buttonIconForFragment(part: DMessageAttachmentFragment['part']):
               const assetType = part.assetType;
               switch (assetType) {
                 case 'image':
-                  return ImageOutlinedIcon;
+                  return PhImageSquare;
                 case 'audio':
                   return PhVoice;
                 default:
@@ -93,7 +96,7 @@ export function buttonIconForFragment(part: DMessageAttachmentFragment['part']):
 
     // [OLD-style] Image Attachment Fragment
     case 'image_ref':
-      return ImageOutlinedIcon;
+      return PhImageSquare;
 
     case '_pt_sentinel':
       return TextureIcon; // nothing to do here - this is a sentinel type
@@ -105,25 +108,80 @@ export function buttonIconForFragment(part: DMessageAttachmentFragment['part']):
 }
 
 
+function DocAttachmentDeleteButton(props: { fragmentId: DMessageFragmentId, color: ColorPaletteProp, onFragmentDelete: (fragmentId: DMessageFragmentId) => void }) {
+
+  const [deleteArmed, setDeleteArmed] = React.useState(false);
+
+  // [effect] auto-disarm after timeout
+  React.useEffect(() => {
+    if (!deleteArmed) return;
+    const timer = setTimeout(() => setDeleteArmed(false), 5000);
+    return () => clearTimeout(timer);
+  }, [deleteArmed]);
+
+  const handleConfirm = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    setDeleteArmed(false);
+    props.onFragmentDelete(props.fragmentId);
+  };
+
+  const handleToggle = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (!deleteArmed && event.shiftKey) return handleConfirm(event);
+    setDeleteArmed(armed => !armed);
+  };
+
+  return (
+    <Box
+      onKeyDown={event => {
+        if (event.key === 'Escape' && deleteArmed) {
+          event.stopPropagation();
+          setDeleteArmed(false);
+        }
+      }}
+      sx={{ position: 'relative', display: 'flex', alignItems: 'center', px: 0.5, borderLeft: '1px solid', borderColor: `${props.color}.outlinedDisabledBorder`, '& svg': { fontSize: '1.25rem' } }}
+    >
+      {/* Overlay the confirm button to the left so arming never moves the cancel target or wraps the chip. */}
+      {deleteArmed && (
+        <Tooltip title='Confirm Deletion' color='danger' arrow disableInteractive>
+          <IconButton size='sm' variant='outlined' color='danger' aria-label='Confirm Deletion' onClick={handleConfirm} sx={{ position: 'absolute', right: '100%', zIndex: 2, bgcolor: 'background.surface' }}>
+            <DeleteForeverIcon sx={{ color: 'danger.solidBg' }} />
+          </IconButton>
+        </Tooltip>
+      )}
+      <Tooltip title={deleteArmed ? 'Cancel Deletion' : 'Delete Document'} color='warning' arrow disableInteractive>
+        <IconButton size='sm' variant={deleteArmed ? 'solid' : 'plain'} color='warning' aria-label={deleteArmed ? 'Cancel Deletion' : 'Delete Document'} onClick={handleToggle} sx={{ my: -1 }}>
+          {deleteArmed ? <CloseRoundedIcon /> : <DeleteOutlineIcon />}
+        </IconButton>
+      </Tooltip>
+    </Box>
+  );
+}
+
+
 export function DocAttachmentFragmentButton(props: {
   fragment: DMessageAttachmentFragment,
   contentScaling: ContentScaling,
+  color?: ColorPaletteProp, // the unselected look; selected is always DocSelColor
   isSelected: boolean,
   isSelectable: boolean,
-  toggleSelected: (fragmentId: DMessageFragmentId) => void,
+  toggleSelected?: (fragmentId: DMessageFragmentId) => void,
+  dragHandle?: React.ReactNode,
+  onFragmentDelete?: (fragmentId: DMessageFragmentId) => void,
 }) {
 
   // external state
   const liveFileMetadata = useLiveFileMetadata(props.fragment.liveFileId);
 
   // derived state
-  const { fragment, isSelected, toggleSelected } = props;
+  const { fragment, isSelectable, isSelected, toggleSelected } = props;
+  const unselColor = props.color ?? DocUnselColor;
   const hasLiveFile = !!liveFileMetadata;
   const isLiveFilePaired = liveFileMetadata ? liveFileMetadata.isPairingValid || false : false;
 
   // handlers
   const handleSelectFragment = React.useCallback(() => {
-    toggleSelected(fragment.fId);
+    toggleSelected?.(fragment.fId);
   }, [fragment.fId, toggleSelected]);
 
   // memos
@@ -139,17 +197,20 @@ export function DocAttachmentFragmentButton(props: {
     fontSize: themeScalingMap[props.contentScaling]?.fragmentButtonFontSize ?? undefined,
     border: '1px solid',
     borderRadius: 'sm',
-    boxShadow: isSelected ? undefined : `0px 3px 4px -2px rgb(var(--joy-palette-${isSelected ? DocSelColor : DocUnselColor}-darkChannel) / ${isSelected ? 50 : 20}%)`,
+    boxShadow: isSelected ? undefined : `0px 3px 4px -2px rgb(var(--joy-palette-${unselColor}-darkChannel) / 20%)`,
     ...isSelected ? {
       borderColor: `${DocSelColor}.solidBg`,
     } : {
-      borderColor: `${DocUnselColor}.outlinedBorder`,
+      borderColor: `${unselColor}.outlinedBorder`,
       backgroundColor: 'background.popup',
     },
+    ...(!isSelectable && {
+      cursor: 'default', // remove pointer cursor from the button if not selectable
+    }),
 
     // from LLMAttachmentButton
     display: 'flex', flexDirection: 'row',
-  }), [isSelected, props.contentScaling]);
+  }), [isSelectable, isSelected, props.contentScaling, unselColor]);
 
   // only operate on doc fragments
   if (!isDocPart(fragment.part))
@@ -157,7 +218,7 @@ export function DocAttachmentFragmentButton(props: {
 
   const Icon = isSelected ? EditRoundedIcon : buttonIconForFragment(fragment.part);
 
-  const fullTitle = fragment.part.l1Title || fragment.title || 'Document';
+  const fullTitle = attachmentFragmentDocTitle(fragment);
   const buttonText = ellipsizeMiddle(fullTitle, 28 /* totally arbitrary length */);
   const showFilenameTooltip = fullTitle !== buttonText;
 
@@ -165,22 +226,25 @@ export function DocAttachmentFragmentButton(props: {
 
   return (
     <Button
+      role={isSelectable ? 'button' : 'group'}
+      component={(props.dragHandle || props.onFragmentDelete) ? 'div' : 'button' /* avoid nested buttons */}
+      tabIndex={isSelectable ? undefined : -1}
       size={props.contentScaling === 'md' ? 'md' : 'sm'}
       variant={isSelected ? 'solid' : 'soft'}
-      color={isSelected ? DocSelColor : DocUnselColor}
-      disabled={!props.isSelectable}
-      onClick={handleSelectFragment}
+      color={isSelected ? DocSelColor : unselColor}
+      disabled={!(props.dragHandle || props.onFragmentDelete || isSelectable)}
+      onClick={!isSelectable ? undefined : handleSelectFragment}
       sx={buttonSx}
     >
-      {!!Icon && (
+      {(!!props.dragHandle || !!Icon) && (
         <Box sx={{
           height: '80%', // was 100%, but it's neat-o to have the line a bit engraved
-          paddingX: '0.5rem',
+          ...(props.dragHandle ? { pl: 1.75 } : { px: 1 }),
           borderRight: '1px solid',
-          borderRightColor: isSelected ? `${DocSelColor}.solidBg` : `${DocUnselColor}.outlinedDisabledBorder`, // this was outlinedBorder
+          borderRightColor: isSelected ? `${DocSelColor}.solidBg` : `${unselColor}.outlinedDisabledBorder`, // this was outlinedBorder
           display: 'flex', alignItems: 'center',
         }}>
-          <Icon />
+          {props.dragHandle || <Icon />}
         </Box>
       )}
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', paddingX: '0.5rem' }}>
@@ -192,7 +256,7 @@ export function DocAttachmentFragmentButton(props: {
         {/*  {fragment.caption}*/}
         {/*</Box>*/}
       </Box>
-      {hasLiveFile && (
+      {hasLiveFile && isSelectable && (
         <TooltipOutlined
           title={!isLiveFilePaired ? 'LiveFile needs re-pairing.' : 'LiveFile is supported'}
           color={!isLiveFilePaired ? 'danger' : 'success'}
@@ -203,6 +267,9 @@ export function DocAttachmentFragmentButton(props: {
             sx={{ mr: '0.5rem', color: (!isLiveFilePaired && !isSelected) ? 'darkred' : undefined }}
           />
         </TooltipOutlined>
+      )}
+      {!!props.onFragmentDelete && (
+        <DocAttachmentDeleteButton fragmentId={fragment.fId} color={unselColor} onFragmentDelete={props.onFragmentDelete} />
       )}
     </Button>
   );
